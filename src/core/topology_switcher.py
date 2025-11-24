@@ -131,11 +131,15 @@ class TopologySwitcher:
             self.logger.warning(f"VP {vp_idx}: Could not find valid target edge")
             return False
         
+        # Save old state before moving (for logging)
+        old_edge = vp.edge
+        old_lambda = vp.lambda_param
+        
         # 5. Move the variable point
         self._move_variable_point(vp_idx, best_edge, best_lambda)
         
         self.logger.info(f"VP {vp_idx}: Type 1 switch successful")
-        self.logger.info(f"  Old edge: {vp.edge}")
+        self.logger.info(f"  Old edge: {old_edge}, λ = {old_lambda:.3f}")
         self.logger.info(f"  New edge: {best_edge}, λ = {best_lambda:.3f}")
         self.logger.info(f"  Total segment length: {min_distance:.6f}")
         

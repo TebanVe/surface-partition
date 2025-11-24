@@ -299,10 +299,15 @@ def test_triangle_segments_rebuild(partition, mesh, switcher):
         
         if len(boundary_vps) > 0:
             vp_idx = boundary_vps[0]
-            vp_before = partition.variable_points[vp_idx]
+            vp = partition.variable_points[vp_idx]
+            
+            # Save old values BEFORE switch (not references!)
+            old_edge = vp.edge
+            old_lambda = vp.lambda_param
+            
             logger.info("")
             logger.info(f"Testing with VP {vp_idx}:")
-            logger.info(f"  Before: λ = {vp_before.lambda_param:.6f}, edge = {vp_before.edge}")
+            logger.info(f"  Before: λ = {old_lambda:.6f}, edge = {old_edge}")
             
             # Apply Type 1 switch
             logger.info("")
@@ -310,12 +315,15 @@ def test_triangle_segments_rebuild(partition, mesh, switcher):
             success = switcher.apply_type1_switch(vp_idx, tol=0.1)
             
             if success:
-                vp_after = partition.variable_points[vp_idx]
-                logger.info(f"  ✓ Switch successful")
-                logger.info(f"  After: λ = {vp_after.lambda_param:.6f}, edge = {vp_after.edge}")
+                # Get new values after switch
+                new_edge = vp.edge
+                new_lambda = vp.lambda_param
                 
-                if vp_after.edge != vp_before.edge:
-                    logger.info(f"  ✓ VP moved to new edge: {vp_before.edge} → {vp_after.edge}")
+                logger.info(f"  ✓ Switch successful")
+                logger.info(f"  After: λ = {new_lambda:.6f}, edge = {new_edge}")
+                
+                if new_edge != old_edge:
+                    logger.info(f"  ✓ VP moved to new edge: {old_edge} → {new_edge}")
                 else:
                     logger.warning(f"  ⚠ VP stayed on same edge (no switch occurred)")
                 
