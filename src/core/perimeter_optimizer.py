@@ -559,6 +559,7 @@ class PerimeterOptimizer:
         Re-initialize calculators after topology switches.
         
         Must be called after apply_topology_switches() to update:
+        - PartitionContour's triangle_segments (rebuilt based on current VPs)
         - Steiner handler (triple points may be in different triangles)
         - Area calculator (boundary triangles may have changed)
         - Perimeter calculator (fresh state)
@@ -566,6 +567,9 @@ class PerimeterOptimizer:
         This is a helper method for the manual loop in refine_perimeter.py.
         """
         self.logger.info("Re-initializing calculators after topology switches...")
+        
+        # CRITICAL FIX (Issue 1): Rebuild partition.triangle_segments first
+        self.partition.rebuild_triangle_segments_from_current_vps()
         
         # Re-initialize Steiner handler (finds triple points in new triangles)
         self.steiner_handler = SteinerHandler(self.mesh, self.partition)

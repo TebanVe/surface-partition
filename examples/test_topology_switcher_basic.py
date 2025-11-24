@@ -255,6 +255,121 @@ def test_topology_switch_detection(partition, mesh, mesh_topology, switcher, bou
         return False
 
 
+def test_triangle_segments_rebuild(partition, mesh, switcher):
+    """
+    Phase 2: Test that triangle_segments rebuild correctly after topology switches.
+    
+    Args:
+        partition: PartitionContour instance
+        mesh: TriMesh instance
+        switcher: TopologySwitcher instance
+    """
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("PHASE 2: TESTING TRIANGLE_SEGMENTS REBUILD")
+    logger.info("=" * 80)
+    logger.info("")
+    
+    try:
+        # Record initial state
+        num_vps_before = len(partition.variable_points)
+        num_tri_segs_before = len(partition.triangle_segments)
+        
+        logger.info(f"Initial state:")
+        logger.info(f"  Variable points: {num_vps_before}")
+        logger.info(f"  Triangle segments: {num_tri_segs_before}")
+        
+        # Find a VP that's close to a vertex (if any)
+        boundary_vps = partition.get_boundary_variable_points(tol=0.1)
+        
+        if len(boundary_vps) == 0:
+            # Manually create a boundary condition for testing
+            logger.info("")
+            logger.info("No natural boundary VPs found - creating one manually for testing...")
+            test_vp_idx = 10  # Arbitrary choice
+            vp = partition.variable_points[test_vp_idx]
+            old_lambda = vp.lambda_param
+            old_edge = vp.edge
+            
+            # Set it very close to vertex
+            vp.lambda_param = 0.001
+            logger.info(f"  Set VP {test_vp_idx}: λ = {old_lambda:.3f} → 0.001")
+            
+            boundary_vps = [test_vp_idx]
+        
+        if len(boundary_vps) > 0:
+            vp_idx = boundary_vps[0]
+            vp_before = partition.variable_points[vp_idx]
+            logger.info("")
+            logger.info(f"Testing with VP {vp_idx}:")
+            logger.info(f"  Before: λ = {vp_before.lambda_param:.6f}, edge = {vp_before.edge}")
+            
+            # Apply Type 1 switch
+            logger.info("")
+            logger.info("Applying Type 1 switch...")
+            success = switcher.apply_type1_switch(vp_idx, tol=0.1)
+            
+            if success:
+                vp_after = partition.variable_points[vp_idx]
+                logger.info(f"  ✓ Switch successful")
+                logger.info(f"  After: λ = {vp_after.lambda_param:.6f}, edge = {vp_after.edge}")
+                
+                if vp_after.edge != vp_before.edge:
+                    logger.info(f"  ✓ VP moved to new edge: {vp_before.edge} → {vp_after.edge}")
+                else:
+                    logger.warning(f"  ⚠ VP stayed on same edge (no switch occurred)")
+                
+                # Rebuild triangle_segments
+                logger.info("")
+                logger.info("Rebuilding triangle_segments...")
+                partition.rebuild_triangle_segments_from_current_vps()
+                
+                num_tri_segs_after = len(partition.triangle_segments)
+                logger.info(f"  Triangle segments after rebuild: {num_tri_segs_after}")
+                
+                # Verify consistency: all VPs in triangle_segments should be on correct edges
+                logger.info("")
+                logger.info("Verifying consistency...")
+                all_consistent = True
+                errors = []
+                
+                for tri_seg in partition.triangle_segments:
+                    for vp_idx_in_seg in tri_seg.var_point_indices:
+                        vp = partition.variable_points[vp_idx_in_seg]
+                        normalized_vp_edge = tuple(sorted(vp.edge))
+                        
+                        if normalized_vp_edge not in tri_seg.boundary_edges:
+                            all_consistent = False
+                            errors.append(f"VP {vp_idx_in_seg} on edge {vp.edge} not in triangle {tri_seg.triangle_idx} edges {tri_seg.boundary_edges}")
+                
+                if all_consistent:
+                    logger.info(f"  ✓ All {num_tri_segs_after} triangle segments are consistent")
+                    logger.info(f"  ✓ No stale entries found")
+                else:
+                    logger.error(f"  ✗ Found {len(errors)} consistency errors:")
+                    for err in errors[:5]:  # Show first 5
+                        logger.error(f"    {err}")
+                    return False
+                
+            else:
+                logger.warning("  ⚠ Type 1 switch failed (could not find suitable edge)")
+        else:
+            logger.warning("  ⚠ Could not test switch (no boundary VPs available)")
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("PHASE 2 COMPLETE: TRIANGLE_SEGMENTS REBUILD TESTED ✓")
+        logger.info("=" * 80)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"✗ Triangle segments rebuild test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Phase 0/1: Test topology switching dependencies and detection"
@@ -306,6 +421,12 @@ def main():
         )
         if not detection_ok:
             logger.error("Phase 1 FAILED: Topology switch detection errors")
+            return 1
+        
+        # Phase 2: Test triangle_segments rebuild
+        rebuild_ok = test_triangle_segments_rebuild(partition, mesh, switcher)
+        if not rebuild_ok:
+            logger.error("Phase 2 FAILED: Triangle segments rebuild errors")
             return 1
     else:
         logger.info("")

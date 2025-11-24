@@ -337,6 +337,72 @@ class PartitionContour:
         for i, lam in enumerate(lambda_vec):
             self.variable_points[i].lambda_param = float(np.clip(lam, 0.0, 1.0))
     
+    def rebuild_triangle_segments_from_current_vps(self):
+        """
+        Rebuild triangle_segments list based on current variable point positions.
+        
+        CRITICAL for topology switching: After VPs move to new edges, the triangle_segments
+        list becomes stale. This method re-scans the mesh and rebuilds the list based on
+        current VP locations.
+        
+        This preserves existing variable_points and their lambda values - it only updates
+        the triangle-to-VP mapping (which triangles contain which VPs).
+        """
+        self.logger.info("Rebuilding triangle_segments from current VPs...")
+        
+        # Clear existing triangle segments
+        self.triangle_segments = []
+        
+        # Create map: edge -> VP index for quick lookup
+        edge_to_vp = {}
+        for vp_idx, vp in enumerate(self.variable_points):
+            normalized_edge = tuple(sorted(vp.edge))
+            edge_to_vp[normalized_edge] = vp_idx
+        
+        # Get vertex labels for checking boundary triangles
+        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        
+        # Re-scan all mesh triangles
+        for tri_idx, face in enumerate(self.mesh.faces):
+            v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+            labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
+            
+            # Check if this is a boundary triangle (mixed labels)
+            if len(set(labels)) > 1:
+                # This triangle has boundaries - find VPs on its edges
+                tri_edges = [
+                    tuple(sorted([v1, v2])),
+                    tuple(sorted([v2, v3])),
+                    tuple(sorted([v3, v1]))
+                ]
+                
+                # Find which edges have VPs
+                boundary_edges = []
+                var_point_indices = []
+                
+                for edge in tri_edges:
+                    if edge in edge_to_vp:
+                        boundary_edges.append(edge)
+                        var_point_indices.append(edge_to_vp[edge])
+                
+                # Only create TriangleSegment if triangle has VPs on boundary
+                if len(var_point_indices) >= 2:
+                    # Create TriangleSegment
+                    tri_seg = TriangleSegment(
+                        triangle_idx=tri_idx,
+                        vertex_indices=(v1, v2, v3),
+                        vertex_labels=tuple(labels),
+                        boundary_edges=boundary_edges,
+                        var_point_indices=var_point_indices
+                    )
+                    self.triangle_segments.append(tri_seg)
+        
+        # Log statistics
+        num_two_cell = sum(1 for ts in self.triangle_segments if ts.num_cells() == 2)
+        num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
+        self.logger.info(f"Rebuilt {len(self.triangle_segments)} triangle segments: "
+                        f"{num_two_cell} two-cell, {num_triple} triple-point")
+    
     def evaluate_variable_point(self, var_point_idx: int) -> np.ndarray:
         """Get 3D/2D coordinates of a variable point."""
         return self.variable_points[var_point_idx].evaluate(self.mesh.vertices)
