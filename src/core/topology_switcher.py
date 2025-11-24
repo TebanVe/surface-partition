@@ -72,10 +72,11 @@ class TopologySwitcher:
         3. In each triangle, identify free edge through target vertex
         4. Test both candidates: compute Σ distance(VP_neighbor, VP_new_position)
         5. Move VP to edge with minimum total distance
+        6. Place VP at λ = 0.5 on new edge (midpoint for neutral initialization)
         
         Args:
             vp_idx: Index of variable point to move
-            tol: New λ position away from boundary (default 0.1)
+            tol: Unused (kept for API compatibility, new λ is always 0.5)
             
         Returns:
             True if switch successful, False otherwise
@@ -256,26 +257,27 @@ class TopologySwitcher:
     def _get_lambda_near_vertex(self, edge: Tuple[int, int], 
                                  target_vertex: int, tol: float) -> float:
         """
-        Determine λ value that places VP near target vertex.
+        Determine λ value for VP on new edge after topology switch.
+        
+        Following the paper's initialization strategy (Section 5), we place
+        the VP at the midpoint (λ = 0.5) to give the optimizer maximum freedom
+        to find the optimal position. This is more neutral than biasing toward
+        either vertex.
         
         Args:
             edge: Target edge
-            target_vertex: Vertex to place VP near
-            tol: Distance from boundary (default 0.1)
+            target_vertex: Vertex to place VP near (used for validation only)
+            tol: Unused (kept for API compatibility)
             
         Returns:
-            Lambda value (0.1 if target is edge[0], 0.9 if target is edge[1])
+            Lambda value (always 0.5 for neutral initialization)
         """
-        if edge[0] == target_vertex:
-            # Target is first vertex → λ = tol (small value)
-            return tol
-        elif edge[1] == target_vertex:
-            # Target is second vertex → λ = 1 - tol (large value)
-            return 1.0 - tol
-        else:
-            # Shouldn't happen, but fallback to middle
+        # Validate that target vertex is actually on this edge
+        if target_vertex not in edge:
             self.logger.warning(f"Target vertex {target_vertex} not in edge {edge}")
-            return 0.5
+        
+        # Always use midpoint for neutral initialization
+        return 0.5
     
     def _compute_total_segment_length(self, vp_idx: int, 
                                        test_edge: Tuple[int, int],
