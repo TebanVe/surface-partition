@@ -87,8 +87,8 @@ class PerimeterCalculator:
         """
         Compute perimeter of one cell.
         
-        Phase 2: Refactored to use triangle-based segment extraction instead of deprecated
-        CellContour.get_segments().
+        Phase 4: Uses explicit boundary_segments for accurate perimeter calculation
+        after topology switches. Falls back to triangle-based extraction if not available.
         
         Note: Caller must call partition.set_variable_vector(lambda_vec) before this method.
         
@@ -101,12 +101,20 @@ class PerimeterCalculator:
         """
         perimeter = 0.0
         
-        # Get all segments for this cell using triangle-based extraction
-        segments = self.partition.get_cell_segments_from_triangles(cell_idx)
-        
-        for var_idx_i, var_idx_j in segments:
-            length = self.compute_segment_length(var_idx_i, var_idx_j)
-            perimeter += length
+        # Phase 4: Use explicit boundary_segments if available
+        if self.partition.boundary_segments:
+            for seg in self.partition.boundary_segments:
+                # Check if this segment belongs to this cell
+                if cell_idx in seg.cell_pair:
+                    length = self.compute_segment_length(seg.vp_idx_1, seg.vp_idx_2)
+                    perimeter += length
+        else:
+            # Fallback to triangle-based extraction
+            segments = self.partition.get_cell_segments_from_triangles(cell_idx)
+            
+            for var_idx_i, var_idx_j in segments:
+                length = self.compute_segment_length(var_idx_i, var_idx_j)
+                perimeter += length
         
         return perimeter
     
@@ -186,8 +194,8 @@ class PerimeterCalculator:
         """
         Compute gradient of cell perimeter w.r.t. all λ parameters.
         
-        Phase 2: Refactored to use triangle-based segment extraction instead of deprecated
-        CellContour.get_segments().
+        Phase 4: Uses explicit boundary_segments for accurate gradient calculation
+        after topology switches. Falls back to triangle-based extraction if not available.
         
         Note: Caller must call partition.set_variable_vector(lambda_vec) before this method.
         
@@ -200,13 +208,21 @@ class PerimeterCalculator:
         """
         gradient = np.zeros(len(lambda_vec))
         
-        # Get all segments for this cell using triangle-based extraction
-        segments = self.partition.get_cell_segments_from_triangles(cell_idx)
-        
-        for var_idx_i, var_idx_j in segments:
-            grad_i, grad_j = self.compute_segment_gradient(var_idx_i, var_idx_j)
-            gradient[var_idx_i] += grad_i
-            gradient[var_idx_j] += grad_j
+        # Phase 4: Use explicit boundary_segments if available
+        if self.partition.boundary_segments:
+            for seg in self.partition.boundary_segments:
+                if cell_idx in seg.cell_pair:
+                    grad_i, grad_j = self.compute_segment_gradient(seg.vp_idx_1, seg.vp_idx_2)
+                    gradient[seg.vp_idx_1] += grad_i
+                    gradient[seg.vp_idx_2] += grad_j
+        else:
+            # Fallback to triangle-based extraction
+            segments = self.partition.get_cell_segments_from_triangles(cell_idx)
+            
+            for var_idx_i, var_idx_j in segments:
+                grad_i, grad_j = self.compute_segment_gradient(var_idx_i, var_idx_j)
+                gradient[var_idx_i] += grad_i
+                gradient[var_idx_j] += grad_j
         
         return gradient
     

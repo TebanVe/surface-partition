@@ -134,6 +134,66 @@ class TriangleSegment:
         return set(self.vertex_labels)
 
 
+@dataclass
+class SegmentCrossingInfo:
+    """
+    Precomputed geometric intersection for a segment crossing a triangle.
+    
+    Created when a segment spans multiple triangles (after topology switches).
+    Used by AreaCalculator to compute partial areas correctly.
+    
+    Attributes:
+        segment: (vp_i, vp_j) - the variable point indices defining the segment
+        triangle_idx: Index of the triangle being crossed
+        entry_point: 3D coordinates where segment enters triangle
+        exit_point: 3D coordinates where segment exits triangle
+        entry_edge: Mesh edge (v_a, v_b) where segment enters
+        exit_edge: Mesh edge (v_c, v_d) where segment exits
+        cell_idx: Which cell this segment belongs to (for area attribution)
+    """
+    segment: Tuple[int, int]
+    triangle_idx: int
+    entry_point: np.ndarray
+    exit_point: np.ndarray
+    entry_edge: Tuple[int, int]
+    exit_edge: Tuple[int, int]
+    cell_idx: int
+
+
+@dataclass
+class BoundarySegment:
+    """
+    Explicit representation of a boundary segment between two variable points.
+    
+    This replaces the implicit connectivity (inferred from TriangleSegments) with
+    explicit tracking. Essential for handling cross-triangle segments after topology
+    switches.
+    
+    Attributes:
+        vp_idx_1: First variable point index
+        vp_idx_2: Second variable point index
+        cell_pair: Tuple of (cell_a, cell_b) - the two cells this segment separates
+        segment_type: Classification of segment geometry:
+            - "normal": Both VPs in same triangle (standard case)
+            - "edge_following": VPs in different triangles but segment follows mesh edge
+            - "edge_cutting": Segment cuts across triangle edges (needs crossing info)
+        crossing_triangles: List of triangle indices this segment crosses (for edge_cutting)
+    """
+    vp_idx_1: int
+    vp_idx_2: int
+    cell_pair: Tuple[int, int]
+    segment_type: str = "normal"
+    crossing_triangles: List[int] = None
+    
+    def __post_init__(self):
+        if self.crossing_triangles is None:
+            self.crossing_triangles = []
+    
+    def normalized_key(self) -> Tuple[int, int]:
+        """Return (min_vp, max_vp) for deduplication."""
+        return (min(self.vp_idx_1, self.vp_idx_2), max(self.vp_idx_1, self.vp_idx_2))
+
+
 class PartitionContour:
     """
     Global partition representation with variable points on mesh edges.
@@ -176,6 +236,10 @@ class PartitionContour:
         self.triangle_segments: List[TriangleSegment] = []  # Triangle-centric storage
         self.edge_to_varpoint: Dict[Tuple[int, int], int] = {}
         self.triple_points: Optional[List] = None  # Computed on demand
+        
+        # Phase 4: Explicit segment connectivity (for cross-triangle segments)
+        self.boundary_segments: List[BoundarySegment] = []
+        self.segment_crossing_cache: Dict[int, List[SegmentCrossingInfo]] = {}
         
         # Choose initialization method based on available data
         if boundary_topology is not None:
@@ -253,6 +317,9 @@ class PartitionContour:
         num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
         self.logger.info(f"Created {len(self.triangle_segments)} triangle segments: "
                         f"{num_two_cell} two-cell, {num_triple} triple-point")
+        
+        # Phase 4: Build explicit segment connectivity
+        self._build_segment_connectivity()
     
     def _initialize_from_boundary_topology(self, boundary_topology: Dict):
         """
@@ -372,6 +439,9 @@ class PartitionContour:
         num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
         self.logger.info(f"Pass 2 complete: Created {len(self.triangle_segments)} triangle segments: "
                         f"{num_two_cell} two-cell, {num_triple} triple-point")
+        
+        # Phase 4: Build explicit segment connectivity
+        self._build_segment_connectivity()
     
     def get_variable_vector(self) -> np.ndarray:
         """
@@ -476,6 +546,76 @@ class PartitionContour:
         self.logger.info(f"  {num_one_vp} with 1 VP (partial segments from switches)")
         self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
         self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
+        
+        # Phase 4: Rebuild segment connectivity after triangle_segments are updated
+        self._build_segment_connectivity()
+    
+    def _build_segment_connectivity(self):
+        """
+        Build explicit segment connectivity from current triangle_segments.
+        
+        This replaces implicit connectivity (inferred from triangles with 2 VPs) with
+        explicit BoundarySegment objects. Essential for handling cross-triangle segments
+        after topology switches.
+        
+        Algorithm:
+        1. For each TriangleSegment with 2 VPs: create normal BoundarySegment
+        2. For each TriangleSegment with 3 VPs (triple point): create 3 BoundarySegments
+        3. Deduplicate (segments may appear in multiple triangles)
+        
+        After topology switches, some segments span multiple triangles. These are detected
+        and classified by _classify_and_update_segments() called from TopologySwitcher.
+        """
+        self.boundary_segments.clear()
+        seen_segments = set()
+        
+        for tri_seg in self.triangle_segments:
+            var_indices = tri_seg.var_point_indices
+            
+            if len(var_indices) == 2:
+                # Normal boundary: one segment between two VPs
+                vp1, vp2 = var_indices
+                seg_key = (min(vp1, vp2), max(vp1, vp2))
+                
+                if seg_key not in seen_segments:
+                    seen_segments.add(seg_key)
+                    
+                    # Determine cell pair from VP membership
+                    cells1 = self.variable_points[vp1].belongs_to_cells
+                    cells2 = self.variable_points[vp2].belongs_to_cells
+                    shared_cells = cells1 & cells2
+                    cell_pair = tuple(sorted(shared_cells)) if len(shared_cells) == 2 else (0, 0)
+                    
+                    self.boundary_segments.append(BoundarySegment(
+                        vp_idx_1=vp1,
+                        vp_idx_2=vp2,
+                        cell_pair=cell_pair,
+                        segment_type="normal"
+                    ))
+            
+            elif len(var_indices) == 3:
+                # Triple point: three segments forming void triangle edges
+                for i in range(3):
+                    for j in range(i + 1, 3):
+                        vp1, vp2 = var_indices[i], var_indices[j]
+                        seg_key = (min(vp1, vp2), max(vp1, vp2))
+                        
+                        if seg_key not in seen_segments:
+                            seen_segments.add(seg_key)
+                            
+                            cells1 = self.variable_points[vp1].belongs_to_cells
+                            cells2 = self.variable_points[vp2].belongs_to_cells
+                            shared_cells = cells1 & cells2
+                            cell_pair = tuple(sorted(shared_cells)) if len(shared_cells) == 2 else (0, 0)
+                            
+                            self.boundary_segments.append(BoundarySegment(
+                                vp_idx_1=vp1,
+                                vp_idx_2=vp2,
+                                cell_pair=cell_pair,
+                                segment_type="normal"
+                            ))
+        
+        self.logger.info(f"Built {len(self.boundary_segments)} boundary segments from triangle_segments")
     
     def evaluate_variable_point(self, var_point_idx: int) -> np.ndarray:
         """Get 3D/2D coordinates of a variable point."""
@@ -562,9 +702,8 @@ class PartitionContour:
         """
         Export refined contours in the same format as ContourAnalyzer.extract_contours().
         
-        Phase 3: Uses triangle-based extraction to ensure geometrically valid segments.
-        This method re-extracts contour segments from triangles using the current λ values,
-        guaranteeing that segments are continuous and follow the surface correctly.
+        Phase 4: Uses explicit boundary_segments for accurate visualization after
+        topology switches. This ensures cross-triangle segments are properly rendered.
         
         Returns:
             Dict[region_idx] -> List[segment arrays (2, D)]
@@ -572,47 +711,63 @@ class PartitionContour:
         """
         contours_dict = {i: [] for i in range(self.n_cells)}
         
-        # Phase 3: Triangle-based extraction
-        for tri_seg in self.triangle_segments:
-            if tri_seg.num_cells() == 2:
-                # Two-cell triangle: compute level-set segment using current λ values
-                if len(tri_seg.var_point_indices) == 2:
-                    vp_idx1, vp_idx2 = tri_seg.var_point_indices
-                    
-                    p1 = self.evaluate_variable_point(vp_idx1)
-                    p2 = self.evaluate_variable_point(vp_idx2)
-                    
-                    segment = np.vstack([p1, p2])
-                    
-                    # Add to both cells that share this boundary
-                    cells_in_triangle = tri_seg.get_cell_indices()
-                    for cell_idx in cells_in_triangle:
-                        contours_dict[cell_idx].append(segment)
+        # Phase 4: Use explicit boundary_segments for complete coverage
+        if self.boundary_segments:
+            for seg in self.boundary_segments:
+                # Get positions of both VPs
+                p1 = self.evaluate_variable_point(seg.vp_idx_1)
+                p2 = self.evaluate_variable_point(seg.vp_idx_2)
+                
+                segment = np.vstack([p1, p2])
+                
+                # Add to both cells that this segment separates
+                cell_a, cell_b = seg.cell_pair
+                if cell_a < self.n_cells:
+                    contours_dict[cell_a].append(segment)
+                if cell_b < self.n_cells and cell_b != cell_a:
+                    contours_dict[cell_b].append(segment)
             
-            elif tri_seg.is_triple_point():
-                # Triple-point triangle: create small triangle connecting 3 variable points
-                if len(tri_seg.var_point_indices) == 3:
-                    vp_idx1, vp_idx2, vp_idx3 = tri_seg.var_point_indices
-                    
-                    p1 = self.evaluate_variable_point(vp_idx1)
-                    p2 = self.evaluate_variable_point(vp_idx2)
-                    p3 = self.evaluate_variable_point(vp_idx3)
-                    
-                    # Create three segments forming a small triangle
-                    seg12 = np.vstack([p1, p2])
-                    seg23 = np.vstack([p2, p3])
-                    seg31 = np.vstack([p3, p1])
-                    
-                    # Add all three segments to all three cells
-                    cells_in_triangle = tri_seg.get_cell_indices()
-                    for cell_idx in cells_in_triangle:
-                        contours_dict[cell_idx].append(seg12)
-                        contours_dict[cell_idx].append(seg23)
-                        contours_dict[cell_idx].append(seg31)
-        
-        total_segments = sum(len(segs) for segs in contours_dict.values())
-        self.logger.info(f"Converted to visualization format (Phase 3 triangle-based): "
-                        f"{total_segments} total segments")
+            total_segments = sum(len(segs) for segs in contours_dict.values())
+            self.logger.info(f"Converted to visualization format (Phase 4 boundary_segments): "
+                            f"{total_segments} total segments")
+        else:
+            # Fallback to Phase 3 triangle-based extraction (for backward compatibility)
+            self.logger.warning("No boundary_segments found, using fallback triangle-based extraction")
+            for tri_seg in self.triangle_segments:
+                if tri_seg.num_cells() == 2:
+                    if len(tri_seg.var_point_indices) == 2:
+                        vp_idx1, vp_idx2 = tri_seg.var_point_indices
+                        
+                        p1 = self.evaluate_variable_point(vp_idx1)
+                        p2 = self.evaluate_variable_point(vp_idx2)
+                        
+                        segment = np.vstack([p1, p2])
+                        
+                        cells_in_triangle = tri_seg.get_cell_indices()
+                        for cell_idx in cells_in_triangle:
+                            contours_dict[cell_idx].append(segment)
+                
+                elif tri_seg.is_triple_point():
+                    if len(tri_seg.var_point_indices) == 3:
+                        vp_idx1, vp_idx2, vp_idx3 = tri_seg.var_point_indices
+                        
+                        p1 = self.evaluate_variable_point(vp_idx1)
+                        p2 = self.evaluate_variable_point(vp_idx2)
+                        p3 = self.evaluate_variable_point(vp_idx3)
+                        
+                        seg12 = np.vstack([p1, p2])
+                        seg23 = np.vstack([p2, p3])
+                        seg31 = np.vstack([p3, p1])
+                        
+                        cells_in_triangle = tri_seg.get_cell_indices()
+                        for cell_idx in cells_in_triangle:
+                            contours_dict[cell_idx].append(seg12)
+                            contours_dict[cell_idx].append(seg23)
+                            contours_dict[cell_idx].append(seg31)
+            
+            total_segments = sum(len(segs) for segs in contours_dict.values())
+            self.logger.info(f"Converted to visualization format (Phase 3 fallback): "
+                            f"{total_segments} total segments")
         
         return contours_dict
     

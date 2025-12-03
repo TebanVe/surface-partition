@@ -17,7 +17,7 @@ from typing import List, Tuple, Optional, Set, Dict
 try:
     from ..logging_config import get_logger
     from .tri_mesh import TriMesh
-    from .contour_partition import PartitionContour, VariablePoint
+    from .contour_partition import PartitionContour, VariablePoint, BoundarySegment, SegmentCrossingInfo
     from .mesh_topology import MeshTopology
     from .steiner_handler import TriplePoint, SteinerHandler
 except ImportError:
@@ -26,7 +26,7 @@ except ImportError:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from logging_config import get_logger
     from core.tri_mesh import TriMesh
-    from core.contour_partition import PartitionContour, VariablePoint
+    from core.contour_partition import PartitionContour, VariablePoint, BoundarySegment, SegmentCrossingInfo
     from core.mesh_topology import MeshTopology
     from core.steiner_handler import TriplePoint, SteinerHandler
 
@@ -143,6 +143,10 @@ class TopologySwitcher:
         self.logger.info(f"  Old edge: {old_edge}, λ = {old_lambda:.3f}")
         self.logger.info(f"  New edge: {best_edge}, λ = {best_lambda:.3f}")
         self.logger.info(f"  Total segment length: {min_distance:.6f}")
+        
+        # Phase 4: Update segment classifications after the move
+        # Note: Caller should call partition.rebuild_triangle_segments_from_current_vps()
+        # which will rebuild boundary_segments, then call update_segment_classifications_after_switch()
         
         return True
     
@@ -639,4 +643,398 @@ class TopologySwitcher:
                 closest_edge = tuple(sorted(edge))  # Normalize
         
         return closest_edge, min_dist
+    
+    # =========================================================================
+    # Phase 4: Segment Classification and Cross-Triangle Handling
+    # =========================================================================
+    
+    def classify_segment(self, vp_idx1: int, vp_idx2: int) -> str:
+        """
+        Classify a segment between two VPs.
+        
+        Returns:
+            "normal": Both VPs in same triangle (standard case)
+            "edge_following": VPs in different triangles but segment follows mesh edge
+            "edge_cutting": Segment cuts across triangle edges
+        """
+        edge1 = self.partition.variable_points[vp_idx1].edge
+        edge2 = self.partition.variable_points[vp_idx2].edge
+        
+        # Step 1: Check if edges share a triangle (NORMAL case)
+        if self._edges_share_triangle(edge1, edge2):
+            return "normal"
+        
+        # --- VPs are in different triangles (cross-triangle segment) ---
+        
+        # Step 2: Check if edges share a vertex
+        shared_vertices = set(edge1) & set(edge2)
+        
+        if not shared_vertices:
+            # No shared vertex - definitely EDGE-CUTTING
+            return "edge_cutting"
+        
+        shared_vertex = list(shared_vertices)[0]
+        
+        # Step 3: Edges share vertex - check COLLINEARITY
+        if self._edges_are_collinear(edge1, edge2, shared_vertex):
+            # Edges are on same mesh line - EDGE-FOLLOWING
+            return "edge_following"
+        else:
+            # Edges form an angle - EDGE-CUTTING (even though they share vertex)
+            return "edge_cutting"
+    
+    def _edges_share_triangle(self, edge1: Tuple[int, int], edge2: Tuple[int, int]) -> bool:
+        """Check if two edges are on the same mesh triangle."""
+        edge1_norm = tuple(sorted(edge1))
+        edge2_norm = tuple(sorted(edge2))
+        
+        triangles1 = self.mesh_topology.get_triangles_sharing_edge(edge1_norm)
+        triangles2 = self.mesh_topology.get_triangles_sharing_edge(edge2_norm)
+        
+        return bool(triangles1 & triangles2)
+    
+    def _edges_are_collinear(self, edge1: Tuple[int, int], edge2: Tuple[int, int], 
+                             shared_vertex: int) -> bool:
+        """
+        Check if two edges that share a vertex are collinear (on same mesh line).
+        
+        Uses the other vertices of each edge to form vectors from shared vertex,
+        then checks if they are parallel or anti-parallel.
+        """
+        # Get the "other" vertex from each edge
+        other1 = edge1[1] if edge1[0] == shared_vertex else edge1[0]
+        other2 = edge2[1] if edge2[0] == shared_vertex else edge2[0]
+        
+        # Get positions
+        shared_pos = self.mesh.vertices[shared_vertex]
+        other1_pos = self.mesh.vertices[other1]
+        other2_pos = self.mesh.vertices[other2]
+        
+        # Vectors from shared vertex
+        vec1 = other1_pos - shared_pos
+        vec2 = other2_pos - shared_pos
+        
+        # Normalize
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        
+        if norm1 < 1e-10 or norm2 < 1e-10:
+            return False
+        
+        vec1 = vec1 / norm1
+        vec2 = vec2 / norm2
+        
+        # Check if parallel or anti-parallel (dot product ≈ ±1)
+        dot = np.abs(np.dot(vec1, vec2))
+        return dot > 0.99  # Tolerance for numerical precision
+    
+    def classify_all_segments(self):
+        """
+        Classify ALL boundary segments and compute crossing info for edge_cutting ones.
+        
+        Called after rebuild_triangle_segments_from_current_vps() to set correct
+        segment types and populate the segment_crossing_cache.
+        """
+        # Clear the crossing cache before rebuilding
+        self.partition.segment_crossing_cache.clear()
+        
+        for seg in self.partition.boundary_segments:
+            # Classify this segment
+            seg.segment_type = self.classify_segment(seg.vp_idx_1, seg.vp_idx_2)
+            
+            # If edge_cutting, compute which triangles it crosses
+            if seg.segment_type == "edge_cutting":
+                seg.crossing_triangles = self._find_crossed_triangles(
+                    seg.vp_idx_1, seg.vp_idx_2
+                )
+                
+                # Compute and cache crossing info for area calculations
+                self._compute_and_cache_crossings(seg)
+            else:
+                seg.crossing_triangles = []
+        
+        # Log summary
+        num_normal = sum(1 for s in self.partition.boundary_segments if s.segment_type == "normal")
+        num_following = sum(1 for s in self.partition.boundary_segments if s.segment_type == "edge_following")
+        num_cutting = sum(1 for s in self.partition.boundary_segments if s.segment_type == "edge_cutting")
+        
+        self.logger.info(f"Segment classification: {num_normal} normal, "
+                        f"{num_following} edge_following, {num_cutting} edge_cutting")
+        
+        if num_cutting > 0:
+            total_crossings = sum(len(crossings) for crossings in self.partition.segment_crossing_cache.values())
+            self.logger.info(f"  Cached {total_crossings} crossing infos across {len(self.partition.segment_crossing_cache)} triangles")
+    
+    def update_segment_classifications_after_switch(self, moved_vp_idx: int):
+        """
+        After a VP moves, update the classifications of all segments involving it.
+        
+        This is called after apply_type1_switch() or apply_type2_switch().
+        Updates the partition.boundary_segments with correct segment_type values.
+        
+        Args:
+            moved_vp_idx: Index of the VP that was moved
+        """
+        # Find all BoundarySegments involving this VP
+        for seg in self.partition.boundary_segments:
+            if seg.vp_idx_1 == moved_vp_idx or seg.vp_idx_2 == moved_vp_idx:
+                # Re-classify this segment
+                seg.segment_type = self.classify_segment(seg.vp_idx_1, seg.vp_idx_2)
+                
+                # If edge_cutting, compute which triangles it crosses
+                if seg.segment_type == "edge_cutting":
+                    seg.crossing_triangles = self._find_crossed_triangles(
+                        seg.vp_idx_1, seg.vp_idx_2
+                    )
+                    
+                    # Compute and cache crossing info for area calculations
+                    self._compute_and_cache_crossings(seg)
+                else:
+                    seg.crossing_triangles = []
+        
+        # Log summary
+        num_normal = sum(1 for s in self.partition.boundary_segments if s.segment_type == "normal")
+        num_following = sum(1 for s in self.partition.boundary_segments if s.segment_type == "edge_following")
+        num_cutting = sum(1 for s in self.partition.boundary_segments if s.segment_type == "edge_cutting")
+        
+        self.logger.info(f"Segment classification update: {num_normal} normal, "
+                        f"{num_following} edge_following, {num_cutting} edge_cutting")
+    
+    def _find_crossed_triangles(self, vp_idx1: int, vp_idx2: int) -> List[int]:
+        """
+        Find all triangles that a segment crosses (for edge_cutting segments).
+        
+        Returns:
+            List of triangle indices crossed by the segment
+        """
+        pos1 = self.partition.evaluate_variable_point(vp_idx1)
+        pos2 = self.partition.evaluate_variable_point(vp_idx2)
+        
+        edge1 = self.partition.variable_points[vp_idx1].edge
+        edge2 = self.partition.variable_points[vp_idx2].edge
+        
+        # Get triangles containing each edge
+        triangles1 = self.mesh_topology.get_triangles_sharing_edge(tuple(sorted(edge1)))
+        triangles2 = self.mesh_topology.get_triangles_sharing_edge(tuple(sorted(edge2)))
+        
+        # The segment connects these two sets of triangles
+        # We need to find all triangles the line segment passes through
+        crossed = []
+        
+        # Simple approach: check all boundary triangles for intersection
+        # This is not the most efficient, but correct
+        for tri_seg in self.partition.triangle_segments:
+            tri_idx = tri_seg.triangle_idx
+            
+            # Skip triangles containing either VP
+            if tri_idx in triangles1 or tri_idx in triangles2:
+                continue
+            
+            # Check if segment intersects this triangle
+            if self._segment_intersects_triangle(pos1, pos2, tri_idx):
+                crossed.append(tri_idx)
+        
+        return crossed
+    
+    def _segment_intersects_triangle(self, pos1: np.ndarray, pos2: np.ndarray, 
+                                     tri_idx: int) -> bool:
+        """
+        Check if line segment (pos1, pos2) intersects triangle.
+        
+        Uses edge intersection test: segment intersects triangle if it
+        crosses exactly 2 of the triangle's edges.
+        """
+        face = self.mesh.faces[tri_idx]
+        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+        
+        vertices = [
+            self.mesh.vertices[v1],
+            self.mesh.vertices[v2],
+            self.mesh.vertices[v3]
+        ]
+        
+        intersection_count = 0
+        
+        for i in range(3):
+            edge_start = vertices[i]
+            edge_end = vertices[(i + 1) % 3]
+            
+            if self._line_segments_intersect(pos1, pos2, edge_start, edge_end):
+                intersection_count += 1
+        
+        return intersection_count == 2
+    
+    def _line_segments_intersect(self, p1: np.ndarray, p2: np.ndarray,
+                                  q1: np.ndarray, q2: np.ndarray) -> bool:
+        """
+        Check if 2D/3D line segments (p1,p2) and (q1,q2) intersect.
+        
+        Uses parametric form and checks if intersection point is within both segments.
+        """
+        # Direction vectors
+        d1 = p2 - p1
+        d2 = q2 - q1
+        
+        # Build matrix for least-squares solve: p1 + t*d1 = q1 + s*d2
+        # Rearrange: [d1, -d2] [t, s]^T = q1 - p1
+        A = np.column_stack([d1, -d2])
+        b = q1 - p1
+        
+        # Check if system is solvable (not parallel)
+        if A.shape[0] == 3:
+            # 3D case - use least squares
+            try:
+                result = np.linalg.lstsq(A, b, rcond=None)
+                params = result[0]
+                residual = result[1]
+                
+                # Check residual (segments may be skew in 3D)
+                if len(residual) > 0 and residual[0] > 1e-6:
+                    return False
+                
+                t, s = params[0], params[1]
+            except:
+                return False
+        else:
+            # 2D case - direct solve
+            det = d1[0] * (-d2[1]) - d1[1] * (-d2[0])
+            if abs(det) < 1e-10:
+                return False
+            
+            t = (b[0] * (-d2[1]) - b[1] * (-d2[0])) / det
+            s = (d1[0] * b[1] - d1[1] * b[0]) / det
+        
+        # Check if intersection is within both segments (with small tolerance)
+        eps = 1e-6
+        return (eps < t < 1 - eps) and (eps < s < 1 - eps)
+    
+    def _compute_and_cache_crossings(self, segment: BoundarySegment):
+        """
+        Compute detailed crossing information for an edge_cutting segment.
+        
+        For each triangle the segment crosses, compute entry/exit points
+        and store in partition.segment_crossing_cache.
+        """
+        vp_idx1 = segment.vp_idx_1
+        vp_idx2 = segment.vp_idx_2
+        pos1 = self.partition.evaluate_variable_point(vp_idx1)
+        pos2 = self.partition.evaluate_variable_point(vp_idx2)
+        
+        for tri_idx in segment.crossing_triangles:
+            entry_point, exit_point, entry_edge, exit_edge = \
+                self._compute_triangle_crossing_details(pos1, pos2, tri_idx)
+            
+            if entry_point is not None and exit_point is not None:
+                # Determine which cell this crossing belongs to
+                # Use the cells that both VPs separate
+                cells1 = self.partition.variable_points[vp_idx1].belongs_to_cells
+                cells2 = self.partition.variable_points[vp_idx2].belongs_to_cells
+                shared_cells = list(cells1 & cells2)
+                cell_idx = shared_cells[0] if shared_cells else 0
+                
+                crossing_info = SegmentCrossingInfo(
+                    segment=(min(vp_idx1, vp_idx2), max(vp_idx1, vp_idx2)),
+                    triangle_idx=tri_idx,
+                    entry_point=entry_point,
+                    exit_point=exit_point,
+                    entry_edge=entry_edge,
+                    exit_edge=exit_edge,
+                    cell_idx=cell_idx
+                )
+                
+                # Store in cache
+                if tri_idx not in self.partition.segment_crossing_cache:
+                    self.partition.segment_crossing_cache[tri_idx] = []
+                self.partition.segment_crossing_cache[tri_idx].append(crossing_info)
+    
+    def _compute_triangle_crossing_details(self, pos1: np.ndarray, pos2: np.ndarray,
+                                           tri_idx: int) -> Tuple[
+                                               Optional[np.ndarray], 
+                                               Optional[np.ndarray],
+                                               Optional[Tuple[int, int]],
+                                               Optional[Tuple[int, int]]]:
+        """
+        Compute where segment (pos1, pos2) enters and exits a triangle.
+        
+        Returns:
+            (entry_point, exit_point, entry_edge, exit_edge) or (None, None, None, None)
+        """
+        face = self.mesh.faces[tri_idx]
+        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+        
+        edges = [
+            ((v1, v2), self.mesh.vertices[v1], self.mesh.vertices[v2]),
+            ((v2, v3), self.mesh.vertices[v2], self.mesh.vertices[v3]),
+            ((v3, v1), self.mesh.vertices[v3], self.mesh.vertices[v1])
+        ]
+        
+        intersections = []
+        
+        for edge, edge_start, edge_end in edges:
+            intersection = self._compute_line_edge_intersection(pos1, pos2, edge_start, edge_end)
+            if intersection is not None:
+                intersections.append((edge, intersection))
+        
+        if len(intersections) != 2:
+            return None, None, None, None
+        
+        # Determine which is entry and which is exit based on direction from pos1 to pos2
+        (edge_a, point_a), (edge_b, point_b) = intersections
+        
+        # Compute parameter along segment
+        segment_dir = pos2 - pos1
+        segment_len = np.linalg.norm(segment_dir)
+        if segment_len < 1e-10:
+            return None, None, None, None
+        
+        t_a = np.dot(point_a - pos1, segment_dir) / (segment_len ** 2)
+        t_b = np.dot(point_b - pos1, segment_dir) / (segment_len ** 2)
+        
+        if t_a < t_b:
+            return point_a, point_b, tuple(sorted(edge_a)), tuple(sorted(edge_b))
+        else:
+            return point_b, point_a, tuple(sorted(edge_b)), tuple(sorted(edge_a))
+    
+    def _compute_line_edge_intersection(self, p1: np.ndarray, p2: np.ndarray,
+                                        q1: np.ndarray, q2: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Compute intersection point of line segment (p1, p2) with edge (q1, q2).
+        
+        Returns:
+            Intersection point or None if no intersection
+        """
+        d1 = p2 - p1
+        d2 = q2 - q1
+        
+        # Build system: p1 + t*d1 = q1 + s*d2
+        A = np.column_stack([d1, -d2])
+        b = q1 - p1
+        
+        # Check if parallel
+        if A.shape[0] == 3:
+            try:
+                result = np.linalg.lstsq(A, b, rcond=None)
+                params = result[0]
+                residual = result[1]
+                
+                if len(residual) > 0 and residual[0] > 1e-6:
+                    return None
+                
+                t, s = params[0], params[1]
+            except:
+                return None
+        else:
+            det = d1[0] * (-d2[1]) - d1[1] * (-d2[0])
+            if abs(det) < 1e-10:
+                return None
+            
+            t = (b[0] * (-d2[1]) - b[1] * (-d2[0])) / det
+            s = (d1[0] * b[1] - d1[1] * b[0]) / det
+        
+        # Check if intersection is on the edge (s in [0, 1]) and within segment (t in [0, 1])
+        eps = 1e-6
+        if not (0 - eps <= s <= 1 + eps and 0 - eps <= t <= 1 + eps):
+            return None
+        
+        return q1 + s * d2
 
