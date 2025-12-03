@@ -691,7 +691,8 @@ class TopologySwitcher:
         triangles1 = self.mesh_topology.get_triangles_sharing_edge(edge1_norm)
         triangles2 = self.mesh_topology.get_triangles_sharing_edge(edge2_norm)
         
-        return bool(triangles1 & triangles2)
+        # Convert to sets for intersection
+        return bool(set(triangles1) & set(triangles2))
     
     def _edges_are_collinear(self, edge1: Tuple[int, int], edge2: Tuple[int, int], 
                              shared_vertex: int) -> bool:

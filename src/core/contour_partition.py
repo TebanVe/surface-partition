@@ -547,8 +547,14 @@ class PartitionContour:
         self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
         self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
         
-        # Phase 4: Rebuild segment connectivity after triangle_segments are updated
-        self._build_segment_connectivity()
+        # Phase 4: DON'T rebuild segment connectivity after switches
+        # The logical connectivity is preserved - same VPs are still connected.
+        # Only their edges changed, which affects segment_type (normal vs edge_cutting).
+        # Call classify_all_segments() from TopologySwitcher to update types.
+        # 
+        # Only build connectivity if it's empty (initial creation)
+        if not self.boundary_segments:
+            self._build_segment_connectivity()
     
     def _build_segment_connectivity(self):
         """

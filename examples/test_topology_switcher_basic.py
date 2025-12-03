@@ -500,6 +500,10 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                 logger.info("Rebuilding triangle_segments after Type 1...")
                 partition.rebuild_triangle_segments_from_current_vps()
                 
+                # Phase 4: Classify all segments and populate crossing cache
+                logger.info("Classifying segments and populating crossing cache...")
+                switcher.classify_all_segments()
+                
                 num_tri_segs_after_type1 = len(partition.triangle_segments)
                 logger.info(f"  Triangle segments after Type 1: {num_tri_segs_after_type1}")
                 
@@ -572,6 +576,10 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                 logger.info("")
                 logger.info("Rebuilding triangle_segments after Type 2...")
                 partition.rebuild_triangle_segments_from_current_vps()
+                
+                # Phase 4: Classify all segments and populate crossing cache
+                logger.info("Classifying segments and populating crossing cache...")
+                switcher.classify_all_segments()
                 
                 num_tri_segs_after_type2 = len(partition.triangle_segments)
                 logger.info(f"  Triangle segments after Type 2: {num_tri_segs_after_type2}")
