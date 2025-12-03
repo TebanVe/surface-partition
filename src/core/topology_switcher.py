@@ -146,9 +146,192 @@ class TopologySwitcher:
         
         return True
     
+    def apply_type2_switch(self, triple_point: TriplePoint, tol: float = 0.1) -> bool:
+        """
+        Apply Type 2 switch: migrate triple point to adjacent triangle.
+        
+        Algorithm:
+        1. Identify anchor VP (on shared edge closest to Steiner point)
+        2. Select VP to move (closest to shared vertex)
+        3. Find target triangle (shares the anchor edge)
+        4. Find free edge in target triangle (the one without a VP)
+        5. Move VP to free edge with λ=0.5
+        6. Caller must rebuild triangle_segments and re-initialize SteinerHandler
+        
+        Args:
+            triple_point: TriplePoint with Steiner near boundary
+            tol: Distance tolerance for boundary detection
+            
+        Returns:
+            True if switch successful, False otherwise
+        """
+        self.logger.info(f"=== Applying Type 2 switch for triple point at triangle {triple_point.triangle_idx} ===")
+        
+        # Step 1: Find shared edge (where Steiner point is closest)
+        shared_edge, dist_to_edge = self._find_closest_edge_to_steiner(triple_point)
+        
+        if shared_edge is None:
+            self.logger.warning(f"Could not find shared edge for triple point at triangle {triple_point.triangle_idx}")
+            return False
+        
+        self.logger.info(f"Shared edge (closest to Steiner): {shared_edge}, distance = {dist_to_edge:.6e}")
+        
+        # Step 2: Identify anchor VP (on shared edge) and remaining VPs
+        anchor_vp_idx = None
+        remaining_vp_indices = []
+        
+        for vp_idx in triple_point.var_point_indices:
+            vp = self.partition.variable_points[vp_idx]
+            if vp.edge == shared_edge:
+                anchor_vp_idx = vp_idx
+                self.logger.info(f"  Anchor VP {vp_idx}: stays on shared edge {shared_edge}")
+            else:
+                remaining_vp_indices.append(vp_idx)
+        
+        if anchor_vp_idx is None:
+            self.logger.warning(f"No VP found on shared edge {shared_edge}")
+            return False
+        
+        if len(remaining_vp_indices) != 2:
+            self.logger.warning(f"Expected 2 remaining VPs, found {len(remaining_vp_indices)}")
+            return False
+        
+        # Step 3: Select which VP to move (closest to shared vertex)
+        moving_vp_idx = self._select_vp_closest_to_shared_edge(
+            remaining_vp_indices, shared_edge
+        )
+        
+        if moving_vp_idx is None:
+            self.logger.warning(f"Could not select VP to move")
+            return False
+        
+        moving_vp = self.partition.variable_points[moving_vp_idx]
+        staying_vp_idx = [idx for idx in remaining_vp_indices if idx != moving_vp_idx][0]
+        
+        self.logger.info(f"  Moving VP {moving_vp_idx}: edge {moving_vp.edge}, λ = {moving_vp.lambda_param:.6f}")
+        self.logger.info(f"  Staying VP {staying_vp_idx}: will remain in source triangle")
+        
+        # Save old state for logging
+        old_edge = moving_vp.edge
+        old_lambda = moving_vp.lambda_param
+        old_triangle = triple_point.triangle_idx
+        
+        # Step 4: Find target triangle (shares the anchor edge)
+        adjacent_triangles = self.mesh_topology.get_triangles_sharing_edge(shared_edge)
+        target_triangle = None
+        
+        for tri_idx in adjacent_triangles:
+            if tri_idx != triple_point.triangle_idx:
+                target_triangle = tri_idx
+                break
+        
+        if target_triangle is None:
+            self.logger.warning(f"Could not find target triangle sharing edge {shared_edge}")
+            return False
+        
+        self.logger.info(f"Target triangle: {target_triangle}")
+        
+        # Step 5: Find free edge in target triangle
+        target_tri_edges = self.mesh.get_triangle_edges(target_triangle)
+        
+        # Normalize edges for comparison (order-independent)
+        def normalize_edge(edge):
+            return tuple(sorted(edge))
+        
+        occupied_edges_normalized = set(normalize_edge(vp.edge) for vp in self.partition.variable_points)
+        
+        free_edges = [edge for edge in target_tri_edges 
+                     if normalize_edge(edge) not in occupied_edges_normalized]
+        
+        if len(free_edges) != 1:
+            self.logger.warning(f"Expected 1 free edge in target triangle, found {len(free_edges)}")
+            self.logger.warning(f"  Target triangle edges: {target_tri_edges}")
+            self.logger.warning(f"  Occupied edges: {[e for e in target_tri_edges if normalize_edge(e) in occupied_edges_normalized]}")
+            return False
+        
+        target_edge = free_edges[0]
+        self.logger.info(f"Free edge in target triangle: {target_edge}")
+        
+        # Step 6: Move VP to free edge with λ=0.5
+        new_lambda = 0.5  # Center of edge
+        self._move_variable_point(moving_vp_idx, target_edge, new_lambda)
+        
+        self.logger.info(f"=== Type 2 switch successful ===")
+        self.logger.info(f"Triple point migrated: triangle {old_triangle} → {target_triangle}")
+        self.logger.info(f"VP {moving_vp_idx} moved:")
+        self.logger.info(f"  Old: edge {old_edge}, λ = {old_lambda:.6f}")
+        self.logger.info(f"  New: edge {target_edge}, λ = {new_lambda:.6f}")
+        self.logger.info(f"Anchor VP {anchor_vp_idx} stayed on shared edge {shared_edge}")
+        self.logger.info(f"Staying VP {staying_vp_idx} remains in source triangle {old_triangle}")
+        
+        return True
+    
+    def _select_vp_closest_to_shared_edge(self, vp_indices: List[int], 
+                                           shared_edge: Tuple[int, int]) -> Optional[int]:
+        """
+        Select VP closest to a vertex on the shared edge.
+        
+        For Type 2 switches: from remaining VPs, choose the one whose edge shares
+        a vertex with the shared edge AND is closest to that shared vertex.
+        This minimizes the "jump" distance.
+        
+        Args:
+            vp_indices: List of candidate VP indices
+            shared_edge: The shared edge (anchor VP is here)
+            
+        Returns:
+            Index of VP to move
+        """
+        shared_vertices = set(shared_edge)
+        min_dist_to_shared_vertex = float('inf')
+        best_vp = None
+        
+        for vp_idx in vp_indices:
+            vp = self.partition.variable_points[vp_idx]
+            vp_vertices = set(vp.edge)
+            
+            # Find shared vertex (if any)
+            common_vertices = shared_vertices & vp_vertices
+            
+            if not common_vertices:
+                continue
+            
+            # Calculate distance to shared vertex
+            # Determine which end of vp.edge is the shared vertex
+            shared_vertex = list(common_vertices)[0]
+            
+            # CRITICAL: λ convention is position = λ * edge[0] + (1-λ) * edge[1]
+            # So: distance to edge[0] = 1-λ, distance to edge[1] = λ
+            if vp.edge[0] == shared_vertex:
+                # Shared vertex is at edge[0] → distance = 1 - λ
+                dist = 1.0 - vp.lambda_param
+            else:
+                # Shared vertex is at edge[1] → distance = λ
+                dist = vp.lambda_param
+            
+            if dist < min_dist_to_shared_vertex:
+                min_dist_to_shared_vertex = dist
+                best_vp = vp_idx
+        
+        if best_vp is not None:
+            self.logger.info(f"Selected VP {best_vp} to move (distance to shared vertex = {min_dist_to_shared_vertex:.6f})")
+        
+        return best_vp
+    
     def _identify_target_vertex(self, vp: VariablePoint) -> Optional[int]:
         """
         Identify which vertex the variable point is approaching.
+        
+        CRITICAL: The λ convention in VariablePoint is:
+            position = λ * edge[0] + (1-λ) * edge[1]
+        
+        This means:
+            - λ = 1 → position at edge[0] (smaller vertex index due to normalization)
+            - λ = 0 → position at edge[1] (larger vertex index)
+        
+        So:
+            - If λ > 0.5, VP is closer to edge[0], approaching edge[0]
+            - If λ < 0.5, VP is closer to edge[1], approaching edge[1]
         
         Args:
             vp: VariablePoint object
@@ -156,9 +339,9 @@ class TopologySwitcher:
         Returns:
             Vertex index, or None if can't determine
         """
-        # If λ < 0.5, approaching edge[0] (first vertex)
-        # If λ > 0.5, approaching edge[1] (second vertex)
-        if vp.lambda_param < 0.5:
+        # λ > 0.5 means closer to edge[0] (since λ=1 is AT edge[0])
+        # λ < 0.5 means closer to edge[1] (since λ=0 is AT edge[1])
+        if vp.lambda_param > 0.5:
             return vp.edge[0]
         else:
             return vp.edge[1]

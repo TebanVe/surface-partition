@@ -494,8 +494,14 @@ class SteinerHandler:
         self._detect_triple_points()
     
     def _detect_triple_points(self):
-        """Detect all triple points in the partition."""
-        triple_point_data = self.partition.identify_triple_points()
+        """
+        Detect all triple points in the partition.
+        
+        Uses VP-based detection (identify_triple_points_from_current_vps) which works
+        correctly after topology switches, rather than the old indicator-based method
+        which relies on stale indicator_functions.
+        """
+        triple_point_data = self.partition.identify_triple_points_from_current_vps()
         
         for tri_idx, var_point_indices in triple_point_data:
             tp = TriplePoint(tri_idx, var_point_indices, self.partition)

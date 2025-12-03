@@ -79,20 +79,52 @@ BEFORE (Triangle T1):
 - Cells meeting: 1, 2, 3
 
 Step 1: DETECT which VP to move
-        └─> One VP (e.g., VP3) already on shared edge T1↔T2 → stays in place
-        └─> From remaining 2 VPs (VP1, VP2): select the one closest to a vertex
-        └─> Choose VP that minimizes: min(λ(VP1), 1-λ(VP1), λ(VP2), 1-λ(VP2))
+        └─> One VP (e.g., VP3) already on shared edge T1↔T2 → stays in place (anchor)
+        └─> From remaining 2 VPs (VP1, VP2): select closest to a shared vertex
+        └─> VP1 on edge (v_a, v_b), VP2 on edge (v_c, v_d)
+        └─> If shared edge is (v_a, v_c): compare VP1's dist to v_a vs VP2's dist to v_c
+        └─> Choose VP that minimizes distance to its respective shared vertex
 
-Step 2: IDENTIFY target edge in T2
-        └─> T2 has 3 edges, 2 already occupied by variable points (e.g., VP4, VP3)
-        └─> VP1 moves to the one free edge in T2
+Step 2: IDENTIFY target edge in T2 (DETERMINISTIC - not optimized!)
+        └─> T2 shares edge with T1 (the edge containing anchor VP3)
+        └─> T2 has 3 edges: one is shared (has VP3), one has existing VP4
+        └─> VP1 moves to the ONE FREE edge in T2 (no other VPs on it)
+        └─> New λ = 0.5 (center of edge)
+        └─> This ensures T2 ends up with exactly 3 VPs (one per edge)
 
-Step 3: UPDATE segments (boundary + void segments)
-        └─> DESTROY boundary: Segment VP4-VP3 (no longer part of cell boundary)
-        └─> CREATE boundary: Segment VP2-VP3 (new cell boundary)
-        └─> DESTROY void: Old void triangle segments (VP1-VP2, VP2-VP3, VP3-VP1)
-        └─> CREATE void: New void triangle segments (VP3-VP1, VP1-VP4, VP4-VP3)
-        └─> Note: Void segments are part of cell contours but handled by Steiner trees
+Step 3: UPDATE segments - CONCEPTUAL view (what "really" happens)
+        
+        Segment Role Changes:
+        └─> VP4-VP3: Boundary segment → Void triangle edge (absorbed into triple point)
+        └─> VP2-VP3: Void triangle edge → Boundary segment (triple point dissolved in T1)
+        
+        Segments Destroyed:
+        └─> VP1-VP2: Connection broken (VP1 left T1)
+        
+        Segments Persist:
+        └─> VP1-VP3: Still connects moving VP to anchor (now in T2)
+        
+        Segments Created:
+        └─> VP1-VP4: New void triangle edge in T2
+        
+        Net Effect:
+        └─> Boundary segments: unchanged count (VP4-VP3 lost, VP2-VP3 gained)
+        └─> Void edges: 3 in T1 → 0, 0 in T2 → 3 (reorganized)
+
+Step 3b: IMPLEMENTATION approach (how code handles it)
+        
+        └─> Don't track individual segment transformations (too complex!)
+        └─> Instead: Destroy & Rebuild strategy
+        └─> Process:
+            1. Destroy all 3 void triangle edges in T1 (SteinerHandler cleanup)
+            2. Move VP1 to free edge in T2
+            3. Rebuild triangle_segments from current VPs
+               → T1 now 2 VPs → normal boundary (VP2-VP3)
+               → T2 now 3 VPs → triple point detected
+            4. Re-initialize SteinerHandler
+               → Creates 3 new void edges in T2 (VP3-VP1, VP1-VP4, VP4-VP3)
+               → Computes new Steiner point position
+        └─> Why this works: Void edges are virtual (Steiner tree), recomputed from VP positions
 
 AFTER (Triangle T2):
 - New void triangle: VP3, VP1, VP4 (on edges of T2)

@@ -50,14 +50,24 @@ class VariablePoint:
     """
     A point on a mesh edge parameterized by λ ∈ [0,1].
     
-    Position: x = λ * v_start + (1-λ) * v_end
+    CRITICAL λ CONVENTION:
+        Position: x = λ * edge[0] + (1-λ) * edge[1]
+        
+        This means:
+        - λ = 1  → position is exactly at edge[0]
+        - λ = 0  → position is exactly at edge[1]
+        - λ = 0.5 → position is at midpoint
+        
+        Since edges are normalized (smaller vertex index first):
+        - λ = 1 → at smaller vertex index
+        - λ = 0 → at larger vertex index
     
     As per paper Section 5: "each of these points belongs to at least two cells"
     because they are situated on mesh triangle edges that cross cell boundaries.
     
     Attributes:
-        edge: Tuple of (vertex_idx_start, vertex_idx_end) on mesh triangle
-        lambda_param: Parameter value in [0, 1]
+        edge: Tuple of (vertex_idx_start, vertex_idx_end), normalized so edge[0] < edge[1]
+        lambda_param: Parameter value in [0, 1]. λ=1 → edge[0], λ=0 → edge[1]
         global_idx: Index in the global variable vector
         belongs_to_cells: Set of cell indices that this point belongs to (boundary between these cells)
     """
@@ -99,12 +109,25 @@ class TriangleSegment:
     var_point_indices: List[int]
     
     def num_cells(self) -> int:
-        """Return number of distinct cells in this triangle."""
+        """
+        Return number of distinct cells in this triangle.
+        
+        NOTE: This uses vertex_labels which may become stale after topology switches.
+        For triple point detection after switches, use is_triple_point() instead.
+        """
         return len(set(self.vertex_labels))
     
     def is_triple_point(self) -> bool:
-        """Check if this is a triple point (3 different cells meet)."""
-        return self.num_cells() == 3
+        """
+        Check if this is a triple point (3 different cells meet).
+        
+        Uses the number of variable points instead of vertex_labels, which ensures
+        correctness even after topology switches when vertex_labels become stale.
+        
+        A triangle is a triple point if it has exactly 3 variable points
+        (one on each edge of the void triangle interior).
+        """
+        return len(self.var_point_indices) == 3
     
     def get_cell_indices(self) -> Set[int]:
         """Get set of unique cell indices in this triangle."""
@@ -287,8 +310,20 @@ class PartitionContour:
         # PASS 2: Create triangle segments
         # This maps each triangle to its variable points
         # Essential for: segment extraction, area calculation, triple point detection
+        # 
+        # NOTE: boundary_topology is organized by region, so triangles bordering
+        # multiple regions appear in multiple region lists (e.g., a triangle between
+        # cells 0 and 2 appears in both boundary_topology[0] and boundary_topology[2]).
+        # Use seen_triangles set to avoid creating duplicate TriangleSegment entries.
+        seen_triangles = set()
+        
         for region_idx, tri_infos in boundary_topology.items():
             for tri_info in tri_infos:
+                # Skip if we've already processed this triangle
+                if tri_info.triangle_idx in seen_triangles:
+                    continue
+                seen_triangles.add(tri_info.triangle_idx)
+                
                 # Find variable point indices for this triangle's crossed edges
                 var_point_indices = []
                 boundary_edges_normalized = []
@@ -298,7 +333,7 @@ class PartitionContour:
                     var_point_indices.append(self.edge_to_varpoint[normalized_edge])
                     boundary_edges_normalized.append(normalized_edge)
                 
-                # Create triangle segment
+                # Create triangle segment (once per unique triangle)
                 tri_seg = TriangleSegment(
                     triangle_idx=tri_info.triangle_idx,
                     vertex_indices=tri_info.vertices,
@@ -307,6 +342,30 @@ class PartitionContour:
                     var_point_indices=var_point_indices
                 )
                 self.triangle_segments.append(tri_seg)
+        
+        # PASS 3: Fix triple point triangles
+        # boundary_topology is per-region, so triple point triangles only have 2 crossed_edges
+        # listed (not all 3). We need to complete them by finding the missing 3rd VP.
+        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        
+        for tri_seg in self.triangle_segments:
+            if len(tri_seg.var_point_indices) == 2:  # Potential incomplete triple point
+                v1, v2, v3 = tri_seg.vertex_indices
+                labels = {vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]}
+                
+                if len(labels) == 3:  # Triple point: all 3 vertices in different cells
+                    # Find the missing 3rd edge
+                    tri_edges = [
+                        tuple(sorted([v1, v2])),
+                        tuple(sorted([v2, v3])),
+                        tuple(sorted([v3, v1]))
+                    ]
+                    
+                    for edge in tri_edges:
+                        if edge not in tri_seg.boundary_edges and edge in self.edge_to_varpoint:
+                            # Found the missing edge!
+                            tri_seg.boundary_edges.append(edge)
+                            tri_seg.var_point_indices.append(self.edge_to_varpoint[edge])
         
         # Log statistics
         num_two_cell = sum(1 for ts in self.triangle_segments if ts.num_cells() == 2)
@@ -345,6 +404,18 @@ class PartitionContour:
         list becomes stale. This method re-scans the mesh and rebuilds the list based on
         current VP locations.
         
+        CRITICAL: After topology switches, triangles can have 1, 2, or 3 VPs:
+        - 1 VP: Partial segment (e.g., T3 with only VP5 after Type 2 switch)
+        - 2 VPs: Normal boundary segment
+        - 3 VPs: Triple point
+        
+        All must be included (>= 1) to maintain complete representation.
+        
+        Example: After Type 2 switch moving VP1 from T1 to T2:
+        - T3 loses VP1, keeps only VP5 (1 VP) - must be included
+        - T5 has VP1 on edge shared with T2 (1 VP) - must be included
+        - T2 becomes triple point with VP1, VP3, VP4 (3 VPs)
+        
         This preserves existing variable_points and their lambda values - it only updates
         the triangle-to-VP mapping (which triangles contain which VPs).
         """
@@ -359,7 +430,8 @@ class PartitionContour:
             normalized_edge = tuple(sorted(vp.edge))
             edge_to_vp[normalized_edge] = vp_idx
         
-        # Get vertex labels for checking boundary triangles
+        # Get vertex labels (still used for vertex_labels attribute in TriangleSegment)
+        # Note: These may be stale after switches, but they're only used for diagnostics
         vertex_labels = np.argmax(self.indicator_functions, axis=1)
         
         # Re-scan all mesh triangles
@@ -367,41 +439,43 @@ class PartitionContour:
             v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
             labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
             
-            # Check if this is a boundary triangle (mixed labels)
-            if len(set(labels)) > 1:
-                # This triangle has boundaries - find VPs on its edges
-                tri_edges = [
-                    tuple(sorted([v1, v2])),
-                    tuple(sorted([v2, v3])),
-                    tuple(sorted([v3, v1]))
-                ]
-                
-                # Find which edges have VPs
-                boundary_edges = []
-                var_point_indices = []
-                
-                for edge in tri_edges:
-                    if edge in edge_to_vp:
-                        boundary_edges.append(edge)
-                        var_point_indices.append(edge_to_vp[edge])
-                
-                # Only create TriangleSegment if triangle has VPs on boundary
-                if len(var_point_indices) >= 2:
-                    # Create TriangleSegment
-                    tri_seg = TriangleSegment(
-                        triangle_idx=tri_idx,
-                        vertex_indices=(v1, v2, v3),
-                        vertex_labels=tuple(labels),
-                        boundary_edges=boundary_edges,
-                        var_point_indices=var_point_indices
-                    )
-                    self.triangle_segments.append(tri_seg)
+            # Find VPs on this triangle's edges
+            tri_edges = [
+                tuple(sorted([v1, v2])),
+                tuple(sorted([v2, v3])),
+                tuple(sorted([v3, v1]))
+            ]
+            
+            boundary_edges = []
+            var_point_indices = []
+            
+            for edge in tri_edges:
+                if edge in edge_to_vp:
+                    boundary_edges.append(edge)
+                    var_point_indices.append(edge_to_vp[edge])
+            
+            # CRITICAL CHANGE: Include triangles with >= 1 VP (was >= 2)
+            # This ensures triangles like T3 (VP5 only) and T5 (VP1 only) are included
+            # These represent partial segments that span multiple triangles
+            if len(var_point_indices) >= 1:
+                tri_seg = TriangleSegment(
+                    triangle_idx=tri_idx,
+                    vertex_indices=(v1, v2, v3),
+                    vertex_labels=tuple(labels),
+                    boundary_edges=boundary_edges,
+                    var_point_indices=var_point_indices
+                )
+                self.triangle_segments.append(tri_seg)
         
-        # Log statistics
-        num_two_cell = sum(1 for ts in self.triangle_segments if ts.num_cells() == 2)
-        num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
-        self.logger.info(f"Rebuilt {len(self.triangle_segments)} triangle segments: "
-                        f"{num_two_cell} two-cell, {num_triple} triple-point")
+        # Log statistics with breakdown
+        num_one_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 1)
+        num_two_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
+        num_three_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 3)
+        
+        self.logger.info(f"Rebuilt {len(self.triangle_segments)} triangle segments:")
+        self.logger.info(f"  {num_one_vp} with 1 VP (partial segments from switches)")
+        self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
+        self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
     
     def evaluate_variable_point(self, var_point_idx: int) -> np.ndarray:
         """Get 3D/2D coordinates of a variable point."""
@@ -634,6 +708,12 @@ class PartitionContour:
         These are mesh triangles with three variable points from three different cells,
         creating small void spaces that need Steiner tree treatment (Section 5).
         
+        DEPRECATED: This method uses indicator_functions which become stale after
+        topology switches. Use identify_triple_points_from_current_vps() instead
+        for post-switch scenarios. This method is kept for initial creation and
+        backward compatibility. Will be removed after full testing confirms the
+        new method works correctly in all scenarios.
+        
         Returns:
             List of (triangle_idx, [var_point_idx1, var_point_idx2, var_point_idx3])
         """
@@ -661,6 +741,45 @@ class PartitionContour:
                     triple_points.append((tri_idx, var_points))
         
         self.logger.info(f"Identified {len(triple_points)} triple points")
+        return triple_points
+    
+    def identify_triple_points_from_current_vps(self) -> List[Tuple[int, List[int]]]:
+        """
+        Identify triple points based on CURRENT VP positions (works after topology switches).
+        
+        This method is the correct way to identify triple points after topology switches,
+        as it uses actual VP positions and their belongs_to_cells attribute rather than
+        stale indicator_functions.
+        
+        A triangle is a triple point if:
+        1. It has exactly 3 variable points on its edges
+        2. Those 3 VPs collectively separate 3 different partition cells
+        
+        Example from Type 2 switch:
+        - After switch, T2 has VP1, VP3, VP4 (3 VPs)
+        - VP1 separates cells {A, B}, VP3 separates {B, C}, VP4 separates {A, C}
+        - All cells: {A, B, C} → 3 different cells → T2 is triple point
+        
+        Returns:
+            List of (triangle_idx, [var_point_idx1, var_point_idx2, var_point_idx3])
+        """
+        triple_points = []
+        
+        # Iterate through all triangle segments (after rebuild, includes 1-VP triangles)
+        for tri_seg in self.triangle_segments:
+            # Check if triangle has exactly 3 VPs
+            if len(tri_seg.var_point_indices) == 3:
+                # Collect all cells that these 3 VPs separate
+                all_cells = set()
+                for vp_idx in tri_seg.var_point_indices:
+                    vp = self.variable_points[vp_idx]
+                    all_cells.update(vp.belongs_to_cells)
+                
+                # True triple point: 3 VPs collectively separate 3 different cells
+                if len(all_cells) == 3:
+                    triple_points.append((tri_seg.triangle_idx, tri_seg.var_point_indices))
+        
+        self.logger.info(f"Identified {len(triple_points)} triple points from current VP state")
         return triple_points
     
     def get_boundary_variable_points(self, tol: float = 1e-3) -> List[int]:
