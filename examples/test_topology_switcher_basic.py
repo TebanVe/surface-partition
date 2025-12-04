@@ -285,9 +285,12 @@ def test_class_instantiation(relaxed_file: str, refined_file: str = None):
         mesh = TriMesh(analyzer.vertices, analyzer.faces)
         logger.info(f"  ✓ Mesh created")
         
-        # Create partition with boundary topology
+        # Create partition WITHOUT boundary topology
+        # CRITICAL: Must match VP indices used when refined_contours.h5 was saved
+        # Using boundary_topology creates different VP ordering, causing lambdas
+        # to be assigned to wrong VPs when loading from refined file
         logger.info("  Creating PartitionContour...")
-        partition = PartitionContour(mesh, indicators, boundary_topology=boundary_topology)
+        partition = PartitionContour(mesh, indicators)
         logger.info(f"  ✓ Partition created: {len(partition.variable_points)} variable points")
         logger.info(f"    - {len(partition.triangle_segments)} triangle segments")
         
@@ -622,31 +625,44 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                 if len(other_vps) == 2:
                     anchor_vp_idx, staying_vp_idx = other_vps[0], other_vps[1]
                 
-                # Analyze the KNOWN segments from the triple point
+                # Analyze ALL segments involving the moved VP (after switch)
                 if moved_vp_idx is not None:
                     logger.info("")
-                    logger.info("Analyzing segment types after Type 2 switch:")
+                    logger.info("Analyzing ALL segments involving moved VP after Type 2 switch:")
                     
-                    # The segments involving moved VP are known from triple point structure
-                    segments_to_analyze_type2 = [
-                        (moved_vp_idx, anchor_vp_idx),   # moved ↔ anchor
-                        (moved_vp_idx, staying_vp_idx),  # moved ↔ staying
-                    ]
-                    logger.info(f"  Segments to analyze (from triple point): {segments_to_analyze_type2}")
+                    # Find all segments involving the moved VP from boundary_segments
+                    # This reflects the CURRENT topology after the switch
+                    segments_involving_moved_vp = []
+                    for seg in partition.boundary_segments:
+                        if seg.vp_idx_1 == moved_vp_idx or seg.vp_idx_2 == moved_vp_idx:
+                            other_vp = seg.vp_idx_2 if seg.vp_idx_1 == moved_vp_idx else seg.vp_idx_1
+                            segments_involving_moved_vp.append((moved_vp_idx, other_vp))
                     
+                    logger.info(f"  Segments involving VP {moved_vp_idx}: {len(segments_involving_moved_vp)}")
+                    for seg in segments_involving_moved_vp:
+                        logger.info(f"    {seg}")
+                    
+                    # Also check: the destroyed segment should NOT be in boundary_segments
+                    destroyed_key = (min(moved_vp_idx, staying_vp_idx), max(moved_vp_idx, staying_vp_idx))
+                    destroyed_exists = any(s.normalized_key() == destroyed_key for s in partition.boundary_segments)
+                    if destroyed_exists:
+                        logger.warning(f"  ⚠ Destroyed segment ({moved_vp_idx}, {staying_vp_idx}) still in boundary_segments!")
+                    else:
+                        logger.info(f"  ✓ Destroyed segment ({moved_vp_idx}, {staying_vp_idx}) correctly removed")
+                    
+                    # Classify all segments involving the moved VP
                     type2_classification = {"normal": 0, "edge_following": 0, "edge_cutting": 0}
-                    for seg in segments_to_analyze_type2:
-                        if seg[0] is not None and seg[1] is not None:
-                            result = classify_segment(partition, mesh, mesh_topology, seg[0], seg[1])
-                            seg_type = result['type']
-                            type2_classification[seg_type] += 1
-                            
-                            logger.info(f"    Segment {seg}: {seg_type}")
-                            logger.info(f"      VP edges: {result['vp1_edge']} ↔ {result['vp2_edge']}")
-                            if result['shared_vertex'] is not None:
-                                logger.info(f"      Shared vertex: {result['shared_vertex']}")
+                    for seg in segments_involving_moved_vp:
+                        result = classify_segment(partition, mesh, mesh_topology, seg[0], seg[1])
+                        seg_type = result['type']
+                        type2_classification[seg_type] += 1
+                        
+                        logger.info(f"    Segment {seg}: {seg_type}")
+                        logger.info(f"      VP edges: {result['vp1_edge']} ↔ {result['vp2_edge']}")
+                        if result['shared_vertex'] is not None:
+                            logger.info(f"      Shared vertex: {result['shared_vertex']}")
                     
-                    logger.info(f"  Type 2 Summary:")
+                    logger.info(f"  Type 2 Summary (segments involving moved VP):")
                     logger.info(f"    Normal (same triangle): {type2_classification['normal']}")
                     logger.info(f"    Edge-following (same mesh line): {type2_classification['edge_following']}")
                     logger.info(f"    Edge-cutting (cuts triangles): {type2_classification['edge_cutting']}")

@@ -362,7 +362,12 @@ class PartitionContour:
                     all_edges_info[normalized_edge].update([label_start, label_end])
         
         # Create variable points for all unique edges
-        for normalized_edge, cells in all_edges_info.items():
+        # CRITICAL: Sort edges to ensure deterministic VP ordering across runs
+        # This ensures VP indices match regardless of dict iteration order
+        sorted_edges = sorted(all_edges_info.keys())
+        
+        for normalized_edge in sorted_edges:
+            cells = all_edges_info[normalized_edge]
             var_point = VariablePoint(
                 edge=normalized_edge,
                 lambda_param=0.5,  # Initial position at midpoint

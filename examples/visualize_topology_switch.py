@@ -41,9 +41,16 @@ from src.core.steiner_handler import SteinerHandler
 
 
 def load_partition_contour_from_analyzer(analyzer):
-    """Create PartitionContour with Phase 1 structures from ContourAnalyzer data."""
+    """Create PartitionContour with Phase 1 structures from ContourAnalyzer data.
+    
+    CRITICAL: Must use _initialize_from_indicators() path (NO boundary_topology)
+    because the refined_contours.h5 lambda values were saved with VP indices
+    from this path. Using boundary_topology creates different VP indices,
+    causing lambdas to be assigned to wrong VPs.
+    """
     mesh = TriMesh(analyzer.vertices, analyzer.faces)
     indicator_functions = analyzer.compute_indicator_functions()
+    # NO boundary_topology - must match the path used when saving refined lambdas
     partition = PartitionContour(mesh, indicator_functions)
     return mesh, partition
 
@@ -96,6 +103,7 @@ def plot_partition_with_switch_highlight(
     steiner_info: dict = None,
     highlight_vp_positions: list = None,
     highlight_vp_colors: list = None,
+    highlight_vp_labels: list = None,  # NEW: Labels for VPs (e.g., "VP1: (9075, 9076)")
     highlight_triangles: list = None,
     highlight_segments: list = None,
     highlight_vertices: list = None,
@@ -180,9 +188,21 @@ def plot_partition_with_switch_highlight(
     # Highlight specific VP positions (the VP being moved)
     if highlight_vp_positions is not None:
         vp_colors = highlight_vp_colors or ['yellow'] * len(highlight_vp_positions)
-        for pos, color in zip(highlight_vp_positions, vp_colors):
+        vp_labels = highlight_vp_labels or [None] * len(highlight_vp_positions)
+        for i, (pos, color) in enumerate(zip(highlight_vp_positions, vp_colors)):
             sphere = pv.Sphere(radius=vp_size, center=pos)
             plotter.add_mesh(sphere, color=color, opacity=1.0)
+            
+            # Add label if provided
+            if i < len(vp_labels) and vp_labels[i] is not None:
+                # Offset label slightly above the VP
+                label_pos = pos + np.array([0, 0, vp_size * 3])
+                plotter.add_point_labels(
+                    [label_pos], [vp_labels[i]], 
+                    font_size=10, text_color='black',
+                    shape_color='white', shape_opacity=0.7,
+                    always_visible=True
+                )
     
     # Highlight specific triangles (affected by switch)
     if highlight_triangles is not None:
@@ -423,11 +443,20 @@ def run_visualization(args):
             if args.state in ['before', 'both']:
                 print("\nShowing BEFORE state...")
                 
+                # Create labels with VP index and edge vertices
+                vp_labels_before = []
+                for i, vp_idx in enumerate(tp.var_point_indices):
+                    edge = vp_edges_before[vp_idx]
+                    label = f"VP{i+1} (idx={vp_idx})\nedge: ({edge[0]}, {edge[1]})"
+                    vp_labels_before.append(label)
+                    print(f"  {label.replace(chr(10), ' ')}")
+                
                 plotter = plot_partition_with_switch_highlight(
                     vertices, faces, contours, triangle_labels,
                     steiner_info=steiner_info,
                     highlight_vp_positions=vp_positions,
                     highlight_vp_colors=['red', 'blue', 'green'],
+                    highlight_vp_labels=vp_labels_before,
                     highlight_triangles=[tp.triangle_idx],
                     title=f"Type 2 BEFORE: Triple point at triangle {tp.triangle_idx}",
                     steiner_size=args.steiner_size,
@@ -471,19 +500,26 @@ def run_visualization(args):
                         new_vp_positions = [partition.evaluate_variable_point(vp_idx) 
                                            for vp_idx in new_tp.var_point_indices]
                         
-                        # Colors: moved VP in orange, others in original colors
+                        # Colors and labels: moved VP in orange, others in cyan
                         new_vp_colors = []
+                        new_vp_labels = []
                         for vp_idx in new_tp.var_point_indices:
+                            edge = partition.variable_points[vp_idx].edge
                             if vp_idx == moved_vp_idx:
                                 new_vp_colors.append('orange')
+                                label = f"VP1 MOVED (idx={vp_idx})\nedge: ({edge[0]}, {edge[1]})"
                             else:
                                 new_vp_colors.append('cyan')
+                                label = f"VP (idx={vp_idx})\nedge: ({edge[0]}, {edge[1]})"
+                            new_vp_labels.append(label)
+                            print(f"  {label.replace(chr(10), ' ')}")
                         
                         plotter = plot_partition_with_switch_highlight(
                             vertices, faces, contours_after, triangle_labels,
                             steiner_info=steiner_info_after,
                             highlight_vp_positions=new_vp_positions,
                             highlight_vp_colors=new_vp_colors,
+                            highlight_vp_labels=new_vp_labels,
                             highlight_triangles=[new_tp.triangle_idx, tp.triangle_idx],
                             title=f"Type 2 AFTER: Triple point migrated to triangle {new_tp.triangle_idx}",
                             steiner_size=args.steiner_size,
