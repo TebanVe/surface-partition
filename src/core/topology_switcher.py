@@ -268,6 +268,19 @@ class TopologySwitcher:
         self.logger.info(f"Anchor VP {anchor_vp_idx} stayed on shared edge {shared_edge}")
         self.logger.info(f"Staying VP {staying_vp_idx} remains in source triangle {old_triangle}")
         
+        # Step 7: Update boundary_segments for the segment topology change
+        # Find the "new VP" in target triangle - the VP on the third edge (not shared, not free)
+        new_vp_in_target_idx = self._find_new_vp_in_target_triangle(
+            target_triangle, shared_edge, target_edge
+        )
+        
+        if new_vp_in_target_idx is not None:
+            self._update_segments_for_type2_switch(
+                moving_vp_idx, staying_vp_idx, anchor_vp_idx, new_vp_in_target_idx
+            )
+        else:
+            self.logger.warning(f"Could not find new VP in target triangle - segment update skipped")
+        
         return True
     
     def _select_vp_closest_to_shared_edge(self, vp_indices: List[int], 
@@ -321,6 +334,110 @@ class TopologySwitcher:
             self.logger.info(f"Selected VP {best_vp} to move (distance to shared vertex = {min_dist_to_shared_vertex:.6f})")
         
         return best_vp
+    
+    def _find_new_vp_in_target_triangle(self, target_triangle: int, 
+                                         shared_edge: Tuple[int, int],
+                                         free_edge: Tuple[int, int]) -> Optional[int]:
+        """
+        Find the VP in the target triangle that's on the third edge.
+        
+        The target triangle has 3 edges:
+        1. shared_edge - where anchor VP is
+        2. free_edge - where moving VP will land
+        3. third edge - where the "new VP" is (the one that joins the new void triangle)
+        
+        Args:
+            target_triangle: Index of the target triangle
+            shared_edge: Edge shared with source triangle (anchor VP here)
+            free_edge: Edge where moving VP lands
+            
+        Returns:
+            Index of the VP on the third edge, or None if not found
+        """
+        target_tri_edges = self.mesh.get_triangle_edges(target_triangle)
+        
+        # Normalize for comparison
+        shared_norm = tuple(sorted(shared_edge))
+        free_norm = tuple(sorted(free_edge))
+        
+        # Find the third edge
+        third_edge = None
+        for edge in target_tri_edges:
+            edge_norm = tuple(sorted(edge))
+            if edge_norm != shared_norm and edge_norm != free_norm:
+                third_edge = edge_norm
+                break
+        
+        if third_edge is None:
+            self.logger.warning(f"Could not find third edge in target triangle {target_triangle}")
+            return None
+        
+        # Find VP on this edge
+        if third_edge in self.partition.edge_to_varpoint:
+            new_vp_idx = self.partition.edge_to_varpoint[third_edge]
+            self.logger.info(f"  New VP in target triangle: VP {new_vp_idx} on edge {third_edge}")
+            return new_vp_idx
+        
+        self.logger.warning(f"No VP found on third edge {third_edge} of target triangle")
+        return None
+    
+    def _update_segments_for_type2_switch(self, moving_vp_idx: int, staying_vp_idx: int,
+                                           anchor_vp_idx: int, new_vp_in_target_idx: int):
+        """
+        Update boundary_segments for Type 2 switch topology change.
+        
+        Type 2 switch changes segment connectivity:
+        - DESTROYED: (moving_vp, staying_vp) - this connection is broken
+        - CREATED: (moving_vp, new_vp_in_target) - new void edge
+        - UNCHANGED: (anchor_vp, staying_vp) - changes role from void to boundary
+        - UNCHANGED: (anchor_vp, moving_vp) - still void edge, now in new triangle
+        
+        Args:
+            moving_vp_idx: VP that moved to new triangle
+            staying_vp_idx: VP that stayed in old triangle (no longer in void)
+            anchor_vp_idx: VP on shared edge (unchanged position)
+            new_vp_in_target_idx: VP already in target triangle (joins new void)
+        """
+        # Step 1: Remove destroyed segment (moving, staying)
+        destroyed_key = (min(moving_vp_idx, staying_vp_idx), max(moving_vp_idx, staying_vp_idx))
+        
+        segments_before = len(self.partition.boundary_segments)
+        self.partition.boundary_segments = [
+            seg for seg in self.partition.boundary_segments
+            if seg.normalized_key() != destroyed_key
+        ]
+        segments_after_remove = len(self.partition.boundary_segments)
+        
+        if segments_after_remove < segments_before:
+            self.logger.info(f"  Removed segment ({moving_vp_idx}, {staying_vp_idx}) - destroyed")
+        else:
+            self.logger.warning(f"  Segment ({moving_vp_idx}, {staying_vp_idx}) not found in boundary_segments")
+        
+        # Step 2: Add new segment (moving, new_vp_in_target)
+        new_key = (min(moving_vp_idx, new_vp_in_target_idx), max(moving_vp_idx, new_vp_in_target_idx))
+        
+        # Check if segment already exists (shouldn't, but be safe)
+        existing = any(seg.normalized_key() == new_key for seg in self.partition.boundary_segments)
+        
+        if not existing:
+            # Determine cell pair from VP membership
+            cells_moving = self.partition.variable_points[moving_vp_idx].belongs_to_cells
+            cells_new = self.partition.variable_points[new_vp_in_target_idx].belongs_to_cells
+            shared_cells = cells_moving & cells_new
+            cell_pair = tuple(sorted(shared_cells)) if len(shared_cells) == 2 else (0, 0)
+            
+            new_segment = BoundarySegment(
+                vp_idx_1=moving_vp_idx,
+                vp_idx_2=new_vp_in_target_idx,
+                cell_pair=cell_pair,
+                segment_type="normal"  # Will be reclassified later
+            )
+            self.partition.boundary_segments.append(new_segment)
+            self.logger.info(f"  Added segment ({moving_vp_idx}, {new_vp_in_target_idx}) - new void edge")
+        else:
+            self.logger.info(f"  Segment ({moving_vp_idx}, {new_vp_in_target_idx}) already exists")
+        
+        self.logger.info(f"  Segment count: {segments_before} → {len(self.partition.boundary_segments)}")
     
     def _identify_target_vertex(self, vp: VariablePoint) -> Optional[int]:
         """
