@@ -47,14 +47,14 @@ class AreaCalculator:
     Attributes:
         mesh: The underlying TriMesh
         partition: PartitionContour with variable points
-        vertex_labels: (N,) array mapping vertices to cell indices
         triangle_areas: (T,) array of mesh triangle areas (cached)
         cell_interior_triangles: Dict[cell_idx] -> List[tri_idx] for fully interior triangles
         cell_boundary_triangles: Dict[cell_idx] -> List[tri_idx] for boundary triangles
         cell_interior_area: Dict[cell_idx] -> float for constant interior area
+        use_vp_based: bool indicating which categorization method to use
     """
     
-    def __init__(self, mesh: TriMesh, partition: PartitionContour):
+    def __init__(self, mesh: TriMesh, partition: PartitionContour, use_vp_based: bool = False):
         """
         Initialize area calculator with optimized triangle categorization.
         
@@ -64,13 +64,13 @@ class AreaCalculator:
         Args:
             mesh: TriMesh object
             partition: PartitionContour with indicator functions and variable points
+            use_vp_based: If True, use VP-based categorization (accurate after topology switches).
+                         If False, use vertex_labels categorization (initial, proven method).
         """
         self.mesh = mesh
         self.partition = partition
         self.logger = get_logger(__name__)
-        
-        # Cache vertex labels from indicator functions
-        self.vertex_labels = np.argmax(partition.indicator_functions, axis=1)
+        self.use_vp_based = use_vp_based
         
         # Cache triangle areas for efficiency
         self.triangle_areas = mesh.triangle_areas
@@ -79,7 +79,14 @@ class AreaCalculator:
         self.cell_interior_triangles: Dict[int, List[int]] = {}
         self.cell_boundary_triangles: Dict[int, List[int]] = {}
         self.cell_interior_area: Dict[int, float] = {}
-        self._categorize_triangles()
+        
+        # Choose categorization method
+        if use_vp_based:
+            self.logger.info("Using VP-based categorization (post-topology-switch)")
+            self._categorize_triangles_from_vps()
+        else:
+            self.logger.info("Using vertex-labels categorization (initial/proven)")
+            self._categorize_triangles()
         
         self.logger.info(f"Initialized AreaCalculator for {partition.n_cells} cells, "
                         f"{mesh.faces.shape[0]} triangles")
@@ -95,7 +102,14 @@ class AreaCalculator:
         Performance impact: For mesh with T triangles and n cells:
         - Before: T × n triangle checks per evaluation
         - After: Only boundary triangles checked per evaluation (~5% of T × n)
+        
+        NOTE: This method uses static vertex_labels from indicator_functions.
+        It is accurate for the initial iteration but becomes stale after topology switches.
+        Use _categorize_triangles_from_vps() for post-switch accuracy.
         """
+        # Cache vertex labels from indicator functions (for this method only)
+        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        
         for cell_idx in range(self.partition.n_cells):
             interior = []
             boundary = []
@@ -104,7 +118,7 @@ class AreaCalculator:
             # Scan all triangles once to categorize them
             for tri_idx, face in enumerate(self.mesh.faces):
                 v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-                labels = [self.vertex_labels[v1], self.vertex_labels[v2], self.vertex_labels[v3]]
+                labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
                 
                 # Check if this is a triple-point triangle
                 if len(set(labels)) == 3:
@@ -133,7 +147,53 @@ class AreaCalculator:
         avg_interior_per_cell = total_interior / self.partition.n_cells
         avg_boundary_per_cell = total_boundary / self.partition.n_cells
         
-        self.logger.info(f"Triangle categorization complete:")
+        self.logger.info(f"Triangle categorization complete (vertex-labels method):")
+        self.logger.info(f"  Interior triangles: {total_interior} total, "
+                        f"{avg_interior_per_cell:.1f} avg per cell")
+        self.logger.info(f"  Boundary triangles: {total_boundary} total, "
+                        f"{avg_boundary_per_cell:.1f} avg per cell")
+        self.logger.info(f"  Optimization speedup: ~{100 * total_boundary / (self.mesh.faces.shape[0] * self.partition.n_cells):.1f}% "
+                        f"of original triangle checks needed")
+    
+    def _categorize_triangles_from_vps(self):
+        """
+        Pre-categorize triangles using actual variable point positions.
+        
+        This method uses partition.get_triangles_by_cell_involvement() which bases
+        categorization on current VP positions (from triangle_segments) rather than
+        static indicator_functions. This ensures accuracy after topology switches.
+        
+        Key improvement over _categorize_triangles():
+        - OLD: Based on vertex_labels from indicator_functions (static, becomes stale)
+        - NEW: Based on actual VP positions (dynamic, always current)
+        
+        Performance impact: Same as old method (~5% of triangles processed per evaluation)
+        Accuracy impact: Correct categorization even after multiple topology switches
+        """
+        # Get VP-based categorization from partition
+        categorization = self.partition.get_triangles_by_cell_involvement()
+        
+        # Convert to internal format and compute interior areas
+        for cell_idx in range(self.partition.n_cells):
+            interior = categorization[cell_idx]['interior']
+            boundary = categorization[cell_idx]['boundary']
+            # Note: triple_point triangles are skipped (handled by SteinerHandler)
+            
+            # Compute total area of interior triangles (constant contribution)
+            interior_area = sum(self.triangle_areas[tri_idx] for tri_idx in interior)
+            
+            # Store categorization
+            self.cell_interior_triangles[cell_idx] = interior
+            self.cell_boundary_triangles[cell_idx] = boundary
+            self.cell_interior_area[cell_idx] = interior_area
+        
+        # Log statistics (same format as before for consistency)
+        total_interior = sum(len(v) for v in self.cell_interior_triangles.values())
+        total_boundary = sum(len(v) for v in self.cell_boundary_triangles.values())
+        avg_interior_per_cell = total_interior / self.partition.n_cells
+        avg_boundary_per_cell = total_boundary / self.partition.n_cells
+        
+        self.logger.info(f"Triangle categorization complete (VP-based method):")
         self.logger.info(f"  Interior triangles: {total_interior} total, "
                         f"{avg_interior_per_cell:.1f} avg per cell")
         self.logger.info(f"  Boundary triangles: {total_boundary} total, "
@@ -217,13 +277,31 @@ class AreaCalculator:
         """
         Compute area contribution and gradient from one mesh triangle to one partition cell.
         
+        NOTE: This method uses vertex_labels from indicator_functions to determine
+        the geometry (n_inside = 0, 1, 2, or 3). This is SAFE because:
+        
+        1. This method is only called for triangles in cell_boundary_triangles[cell_idx]
+        2. cell_boundary_triangles is populated via categorization (old or new method)
+        3. Only triangles that actually have VPs (or should have VPs) are processed
+        4. For triangles with VPs, vertex_labels determines the cut geometry, which
+           depends on which vertices are "inside" vs "outside" the cell
+        5. Even after topology switches, if a triangle has a VP separating two cells,
+           the vertex labels at the VP's edge endpoints remain valid for determining
+           the geometric configuration
+        
+        The key insight: We're not using vertex_labels for CATEGORIZATION (which
+        triangles to process), but for GEOMETRY (how to compute partial areas).
+        
         Returns:
             (area_contribution, gradient_contribution)
             where gradient_contribution is shape (n_variable_points,)
         """
         face = self.mesh.faces[tri_idx]
         v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-        labels = [self.vertex_labels[v1], self.vertex_labels[v2], self.vertex_labels[v3]]
+        
+        # Get vertex labels for geometric determination (safe - see docstring)
+        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
         
         # Count how many vertices belong to this partition cell
         n_inside = sum(1 for lab in labels if lab == cell_idx)
@@ -256,6 +334,9 @@ class AreaCalculator:
         Area depends on λ parameters of the two edges connecting to the outside vertex.
         
         Phase 4: Also handles cross-triangle segments using segment_crossing_cache.
+        
+        Note: labels parameter is already passed from _triangle_contribution, which
+        gets it from vertex_labels. No need to recompute here.
         """
         # Identify which vertices are inside and which is outside
         vertices = [v1, v2, v3]

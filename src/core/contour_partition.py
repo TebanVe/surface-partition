@@ -567,6 +567,100 @@ class PartitionContour:
         if not self.boundary_segments:
             self._build_segment_connectivity()
     
+    def get_triangles_by_cell_involvement(self) -> Dict[int, Dict[str, List[int]]]:
+        """
+        Categorize triangles for each cell based on actual variable point positions.
+        
+        Uses triangle_segments (which is rebuilt after topology switches) instead of
+        static indicator_functions, ensuring accuracy throughout optimization.
+        
+        This method replaces the vertex_labels-based categorization in AreaCalculator,
+        which becomes inaccurate after topology switches because indicator_functions
+        are never updated when VPs move.
+        
+        Algorithm:
+            PASS 1: Process triangles WITH VPs (from triangle_segments)
+                    - Extract cell involvement from vp.belongs_to_cells
+                    - Categorize as boundary or triple_point
+            
+            PASS 2: Process triangles WITHOUT VPs (potential interior)
+                    - Use vertex_labels to detect all-same-cell triangles
+                    - Safe to use indicator_functions here because:
+                      * Interior triangles never have VPs
+                      * Vertex-cell relationship doesn't change
+            
+            PASS 3: Add cross-triangle segments (from segment_crossing_cache)
+                    - Include triangles that segments pass through
+                    - Critical for accuracy after Type 1 switches
+        
+        Returns:
+            Dict[cell_idx] -> {
+                'interior': List[tri_idx],    # Triangles fully inside cell (no VPs)
+                'boundary': List[tri_idx],    # Triangles with 1-2 VPs (partial area)
+                'triple_point': List[tri_idx] # Triangles with 3 VPs (Steiner trees)
+            }
+        """
+        # Initialize categorization dict
+        categorization = {
+            i: {'interior': [], 'boundary': [], 'triple_point': []} 
+            for i in range(self.n_cells)
+        }
+        
+        # PASS 1: Process triangles WITH variable points
+        triangles_with_vps = set()
+        
+        for tri_seg in self.triangle_segments:
+            tri_idx = tri_seg.triangle_idx
+            triangles_with_vps.add(tri_idx)
+            
+            if tri_seg.is_triple_point():
+                # Triple point: get all 3 cells involved
+                cells = set()
+                for vp_idx in tri_seg.var_point_indices:
+                    vp = self.variable_points[vp_idx]
+                    cells.update(vp.belongs_to_cells)
+                
+                # Add to triple_point category for all involved cells
+                for cell_idx in cells:
+                    categorization[cell_idx]['triple_point'].append(tri_idx)
+            
+            else:
+                # Boundary triangle (1 or 2 VPs): get cells from VPs
+                cells = set()
+                for vp_idx in tri_seg.var_point_indices:
+                    vp = self.variable_points[vp_idx]
+                    cells.update(vp.belongs_to_cells)
+                
+                # Add to boundary category for all involved cells
+                for cell_idx in cells:
+                    categorization[cell_idx]['boundary'].append(tri_idx)
+        
+        # PASS 2: Process triangles WITHOUT VPs (interior detection)
+        # Safe to use vertex_labels here - interior triangles don't change
+        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        
+        for tri_idx, face in enumerate(self.mesh.faces):
+            if tri_idx not in triangles_with_vps:
+                v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+                labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
+                
+                # All vertices in same cell → interior triangle
+                if len(set(labels)) == 1:
+                    cell_idx = labels[0]
+                    categorization[cell_idx]['interior'].append(tri_idx)
+                # Otherwise: triangle is outside all cells (no VPs, mixed vertices)
+        
+        # PASS 3: Add triangles from segment_crossing_cache
+        # Critical for cross-triangle segments created by Type 1 switches
+        for tri_idx, crossings in self.segment_crossing_cache.items():
+            for crossing in crossings:
+                cell_idx = crossing.cell_idx
+                # Add to boundary if not already there
+                if tri_idx not in categorization[cell_idx]['boundary']:
+                    categorization[cell_idx]['boundary'].append(tri_idx)
+        
+        return categorization
+    
     def _build_segment_connectivity(self):
         """
         Build explicit segment connectivity from current triangle_segments.
