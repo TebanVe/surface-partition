@@ -19,7 +19,7 @@ Main features:
 
 import numpy as np
 from scipy.optimize import minimize, OptimizeResult
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List, Set
 import time
 
 try:
@@ -370,28 +370,57 @@ class PerimeterOptimizer:
         Returns whether any λ parameters are near boundaries (0 or 1),
         indicating that variable points want to move to adjacent edges.
         
+        IMPORTANT: Boundary VPs are classified into two categories:
+        1. Pure boundary VPs: Safe for Type 1 switches (not part of any triple point)
+        2. Triple point boundary VPs: Should be handled via Type 2 switches
+        
+        This distinction is critical because applying Type 1 to a triple point VP
+        would break the triple point structure instead of properly migrating it.
+        
         Args:
             tol: Threshold for considering a point at boundary
             
         Returns:
             (switches_needed, switch_info) where switch_info contains details
         """
-        boundary_points = self.partition.get_boundary_variable_points(tol)
+        # Step 1: Get all VPs that are part of triple points
+        triple_point_vps = set()
+        for tp in self.steiner_handler.triple_points:
+            triple_point_vps.update(tp.var_point_indices)
+        
+        # Step 2: Get all boundary VPs (λ near 0 or 1)
+        all_boundary_points = self.partition.get_boundary_variable_points(tol)
+        
+        # Step 3: Classify boundary VPs
+        pure_boundary_points = [vp for vp in all_boundary_points if vp not in triple_point_vps]
+        triple_point_boundary_vps = [vp for vp in all_boundary_points if vp in triple_point_vps]
+        
+        # Step 4: Get boundary triple points (Steiner point near mesh edge)
         boundary_triple_points = self.steiner_handler.get_boundary_triple_points(tol)
         
-        switches_needed = len(boundary_points) > 0 or len(boundary_triple_points) > 0
+        # Switches needed if any boundary VPs or triple points near boundaries
+        switches_needed = len(pure_boundary_points) > 0 or len(boundary_triple_points) > 0
         
         switch_info = {
-            'n_boundary_points': len(boundary_points),
-            'boundary_point_indices': boundary_points,
+            # Pure boundary VPs - safe for Type 1 switches
+            'n_boundary_points': len(pure_boundary_points),
+            'boundary_point_indices': pure_boundary_points,
+            # Triple point boundary VPs - NOT safe for Type 1, handle via Type 2
+            'n_triple_point_boundary_vps': len(triple_point_boundary_vps),
+            'triple_point_boundary_vp_indices': triple_point_boundary_vps,
+            # Boundary triple points - for Type 2 switches
             'n_boundary_triple_points': len(boundary_triple_points),
-            'boundary_triple_point_indices': [tp.triangle_idx for tp in boundary_triple_points]
+            'boundary_triple_point_indices': [tp.triangle_idx for tp in boundary_triple_points],
+            # Total counts for logging
+            'n_total_boundary_vps': len(all_boundary_points)
         }
         
-        if switches_needed:
+        if switches_needed or len(triple_point_boundary_vps) > 0:
             self.logger.info(f"Topology switches needed:")
-            self.logger.info(f"  {len(boundary_points)} variable points near boundaries")
-            self.logger.info(f"  {len(boundary_triple_points)} triple points near boundaries")
+            self.logger.info(f"  {len(pure_boundary_points)} pure boundary VPs (Type 1 candidates)")
+            if len(triple_point_boundary_vps) > 0:
+                self.logger.info(f"  {len(triple_point_boundary_vps)} triple point boundary VPs (handle via Type 2)")
+            self.logger.info(f"  {len(boundary_triple_points)} triple points near boundaries (Type 2 candidates)")
         
         return switches_needed, switch_info
     
@@ -495,8 +524,12 @@ class PerimeterOptimizer:
         """
         Apply topology switches (Type 1 and/or Type 2) based on detection results.
         
-        This is a helper method for the manual loop in refine_perimeter.py.
-        It applies switches but leaves control flow to the caller.
+        IMPORTANT: Type 2 switches are applied FIRST, then Type 1 switches.
+        This ensures triple point VPs are properly migrated before any
+        individual VP moves that could break triple point structure.
+        
+        Type 1 switches are only applied to "pure" boundary VPs (not part of any
+        triple point). Triple point boundary VPs are handled via Type 2 migration.
         
         Args:
             switch_info: Dict from check_topology_switches_needed()
@@ -514,45 +547,202 @@ class PerimeterOptimizer:
         
         total_vp_moves = 0
         
-        n_type1_detected = switch_info['n_boundary_points']
+        n_type1_detected = switch_info['n_boundary_points']  # Pure boundary VPs only
         n_type2_detected = switch_info['n_boundary_triple_points']
+        n_triple_point_boundary = switch_info.get('n_triple_point_boundary_vps', 0)
         
-        # Handle Type 1 switches (direct boundary VPs)
-        if n_type1_detected > 0:
-            self.logger.info(f"Applying Type 1 switches...")
-            n_type1_applied = 0
+        # Log if there are triple point boundary VPs that will be handled via Type 2
+        if n_triple_point_boundary > 0:
+            self.logger.info(f"Note: {n_triple_point_boundary} boundary VPs are part of triple points")
+            self.logger.info(f"  These will be handled via Type 2 migration, not Type 1 switches")
+        
+        # Handle Type 2 switches FIRST (boundary triple points)
+        # This ensures proper migration before any Type 1 switches
+        if n_type2_detected > 0:
+            self.logger.info(f"Applying Type 2 switches (triple point migration)...")
+            n_type2_applied = 0
             
-            for vp_idx in switch_info['boundary_point_indices']:
+            # Get boundary triple points fresh (they may have been updated)
+            boundary_triple_points = self.steiner_handler.get_boundary_triple_points(switch_tol)
+            
+            for tp in boundary_triple_points:
+                # Apply proper Type 2 switch (handles segment topology correctly)
+                if switcher.apply_type2_switch(tp, tol=0.1):
+                    n_type2_applied += 1
+                    total_vp_moves += 1
+            
+            self.logger.info(f"  ✓ Applied {n_type2_applied}/{n_type2_detected} Type 2 switches")
+            
+            # Rebuild after Type 2 switches
+            if n_type2_applied > 0:
+                self.partition.rebuild_triangle_segments_from_current_vps()
+                self.steiner_handler = SteinerHandler(self.mesh, self.partition)
+        
+        # Handle Type 1 switches (pure boundary VPs only - NOT part of triple points)
+        if n_type1_detected > 0:
+            self.logger.info(f"Applying Type 1 switches (pure boundary VPs)...")
+            
+            # Filter connected VPs (keep closest in each component)
+            boundary_vps = switch_info['boundary_point_indices']
+            filtered_vps = self._filter_connected_boundary_vps(boundary_vps)
+            
+            # Sort remaining VPs by distance to target vertex (closest first)
+            filtered_vps_sorted = sorted(
+                filtered_vps,
+                key=lambda vp_idx: self._compute_boundary_distance(vp_idx)
+            )
+            
+            self.logger.info(f"  Processing {len(filtered_vps_sorted)} VPs (filtered from {len(boundary_vps)})")
+            
+            # Apply switches in priority order
+            n_type1_applied = 0
+            for vp_idx in filtered_vps_sorted:
+                dist = self._compute_boundary_distance(vp_idx)
+                self.logger.debug(f"    VP {vp_idx}: distance = {dist:.6f}")
                 if switcher.apply_type1_switch(vp_idx, tol=0.1):
                     n_type1_applied += 1
                     total_vp_moves += 1
             
-            self.logger.info(f"  ✓ Applied {n_type1_applied}/{n_type1_detected} Type 1 switches")
-        
-        # Handle Type 2 switches (boundary triple points)
-        if n_type2_detected > 0:
-            self.logger.info(f"Applying Type 2 switches...")
-            n_type2_applied = 0
-            
-            # For each boundary triple point, identify VP to move and apply Type 1
-            boundary_triple_points = self.steiner_handler.get_boundary_triple_points(switch_tol)
-            
-            for tp in boundary_triple_points:
-                # Type 2 = Select VP + Apply Type 1 move
-                vp_to_move = switcher.select_variable_point_for_type2(tp)
-                
-                if vp_to_move is not None:
-                    # Apply Type 1 switch to enable triple point migration
-                    if switcher.apply_type1_switch(vp_to_move, tol=0.1):
-                        n_type2_applied += 1
-                        total_vp_moves += 1
-            
-            self.logger.info(f"  ✓ Applied {n_type2_applied}/{n_type2_detected} Type 2 switches")
+            self.logger.info(f"  ✓ Applied {n_type1_applied}/{len(filtered_vps_sorted)} Type 1 switches")
         
         if total_vp_moves == 0:
             self.logger.warning(f"⚠ Switches detected but none could be applied")
         
         return total_vp_moves
+    
+    def _compute_boundary_distance(self, vp_idx: int) -> float:
+        """
+        Compute how far a boundary VP is from its target vertex.
+        
+        For λ < 0.5: VP approaching edge[1], distance = λ
+        For λ > 0.5: VP approaching edge[0], distance = (1 - λ)
+        
+        Args:
+            vp_idx: Variable point index
+            
+        Returns:
+            Distance in [0, 0.5], where smaller = closer to target vertex
+        """
+        vp = self.partition.variable_points[vp_idx]
+        if vp.lambda_param < 0.5:
+            return vp.lambda_param
+        else:
+            return 1.0 - vp.lambda_param
+    
+    def _find_connected_components(self, boundary_vps: Set[int]) -> List[Set[int]]:
+        """
+        Find connected components of boundary VPs using DFS.
+        
+        VPs are connected if they form a segment (edge of partition boundary).
+        
+        Args:
+            boundary_vps: Set of boundary VP indices
+            
+        Returns:
+            List of sets, each set is a connected component of VP indices
+        """
+        from collections import defaultdict
+        
+        # Build adjacency list (only for boundary VPs)
+        adjacency = defaultdict(set)
+        for segment in self.partition.boundary_segments:
+            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
+            if vp1 in boundary_vps and vp2 in boundary_vps:
+                adjacency[vp1].add(vp2)
+                adjacency[vp2].add(vp1)
+        
+        # Find connected components using DFS
+        visited = set()
+        components = []
+        
+        for vp_idx in boundary_vps:
+            if vp_idx in visited:
+                continue
+            
+            # DFS to find component
+            component = set()
+            stack = [vp_idx]
+            
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                
+                visited.add(current)
+                component.add(current)
+                
+                # Add unvisited neighbors
+                for neighbor in adjacency[current]:
+                    if neighbor not in visited:
+                        stack.append(neighbor)
+            
+            components.append(component)
+        
+        return components
+    
+    def _filter_connected_boundary_vps(self, boundary_vps: List[int]) -> List[int]:
+        """
+        Filter boundary VPs to keep only one per connected component.
+        
+        For each connected component of boundary VPs:
+        - Find the VP closest to its target vertex
+        - Keep only that VP
+        - Remove all others in the component
+        
+        This ensures we don't switch multiple connected VPs simultaneously,
+        which would invalidate the segments between them.
+        
+        Args:
+            boundary_vps: List of pure boundary VP indices (not in triple points)
+            
+        Returns:
+            Filtered list with one VP per connected component
+        """
+        if not boundary_vps:
+            return []
+        
+        boundary_set = set(boundary_vps)
+        
+        # Find connected components
+        components = self._find_connected_components(boundary_set)
+        
+        vps_to_keep = []
+        vps_deferred = []
+        
+        self.logger.info(f"  Found {len(components)} connected component(s) among {len(boundary_vps)} boundary VPs")
+        
+        for i, component in enumerate(components):
+            if len(component) == 1:
+                # Single VP - always keep
+                vp_idx = list(component)[0]
+                vps_to_keep.append(vp_idx)
+                self.logger.debug(f"    Component {i+1}: Single VP {vp_idx}")
+            else:
+                # Multiple connected VPs - keep closest
+                vps_with_dist = [
+                    (self._compute_boundary_distance(vp), vp)
+                    for vp in component
+                ]
+                vps_with_dist.sort()  # Sort by distance (closest first)
+                
+                closest_dist, closest_vp = vps_with_dist[0]
+                vps_to_keep.append(closest_vp)
+                
+                # Defer all others
+                deferred_in_component = [vp for _, vp in vps_with_dist[1:]]
+                vps_deferred.extend(deferred_in_component)
+                
+                self.logger.info(f"    Component {i+1}: {len(component)} connected VPs")
+                self.logger.info(f"      Keeping VP {closest_vp} (distance={closest_dist:.6f})")
+                if len(deferred_in_component) <= 3:
+                    self.logger.info(f"      Deferring: {deferred_in_component}")
+                else:
+                    self.logger.info(f"      Deferring: {len(deferred_in_component)} VPs")
+        
+        if vps_deferred:
+            self.logger.info(f"  Total deferred: {len(vps_deferred)} VPs (will be reconsidered in next iteration)")
+        
+        return vps_to_keep
     
     def reinitialize_after_switches(self) -> None:
         """

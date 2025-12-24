@@ -56,6 +56,8 @@ def main():
     parser.add_argument('--log-level', type=str, default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging level (default: INFO)')
+    parser.add_argument('--no-switch', action='store_true',
+                       help='Disable topology switching (run optimization only, save pre-switch state)')
     
     args = parser.parse_args()
     
@@ -177,25 +179,40 @@ def main():
             converged = True
         else:
             logger.info("")
-            logger.info("Topology switches detected - applying switches")
             
             # Print detailed diagnostics for boundary triple points
             if switch_info['n_boundary_triple_points'] > 0:
                 optimizer.diagnose_boundary_triple_points(tol=args.boundary_tol)
             
-            logger.info("")
-            
-            # Apply topology switches
-            n_moves = optimizer.apply_topology_switches(switch_info, switch_tol=args.boundary_tol)
-            
-            if n_moves > 0:
-                # Re-initialize calculators after switches
-                optimizer.reinitialize_after_switches()
-                logger.info(f"Continuing to next topology iteration...")
+            # Check if switching is disabled
+            if args.no_switch:
+                logger.info("")
+                logger.info("="*60)
+                logger.info("TOPOLOGY SWITCHES DETECTED BUT --no-switch FLAG IS SET")
+                logger.info(f"  Pure boundary VPs (Type 1 candidates): {switch_info['n_boundary_points']}")
+                n_tp_boundary = switch_info.get('n_triple_point_boundary_vps', 0)
+                if n_tp_boundary > 0:
+                    logger.info(f"  Triple point boundary VPs (handle via Type 2): {n_tp_boundary}")
+                logger.info(f"  Boundary triple points (Type 2 candidates): {switch_info['n_boundary_triple_points']}")
+                logger.info(f"  Total boundary VPs: {switch_info.get('n_total_boundary_vps', switch_info['n_boundary_points'])}")
+                logger.info("Saving pre-switch state and stopping.")
+                logger.info("="*60)
+                converged = True  # Stop iteration, save current state
             else:
-                # Couldn't apply switches - stop here
-                logger.warning("Could not apply topology switches - stopping")
-                converged = True
+                logger.info("Topology switches detected - applying switches")
+                logger.info("")
+                
+                # Apply topology switches
+                n_moves = optimizer.apply_topology_switches(switch_info, switch_tol=args.boundary_tol)
+                
+                if n_moves > 0:
+                    # Re-initialize calculators after switches
+                    optimizer.reinitialize_after_switches()
+                    logger.info(f"Continuing to next topology iteration...")
+                else:
+                    # Couldn't apply switches - stop here
+                    logger.warning("Could not apply topology switches - stopping")
+                    converged = True
         
         topology_iteration += 1
     

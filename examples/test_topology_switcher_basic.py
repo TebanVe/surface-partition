@@ -36,103 +36,6 @@ logger = logging.getLogger(__name__)
 # Segment Classification Helpers (for Phase 3 diagnostics)
 # ==============================================================================
 
-def edges_share_triangle(mesh_topology, edge1, edge2) -> bool:
-    """Check if two edges are part of the same mesh triangle."""
-    edge1_norm = tuple(sorted(edge1))
-    edge2_norm = tuple(sorted(edge2))
-    tris1 = set(mesh_topology.get_triangles_sharing_edge(edge1_norm))
-    tris2 = set(mesh_topology.get_triangles_sharing_edge(edge2_norm))
-    return bool(tris1 & tris2)
-
-
-def get_shared_vertex(edge1, edge2):
-    """Get shared vertex between two edges, or None."""
-    shared = set(edge1) & set(edge2)
-    return shared.pop() if shared else None
-
-
-def edges_are_collinear(mesh, edge1, edge2, shared_vertex, tol=1e-6) -> bool:
-    """
-    Check if two edges sharing a vertex are collinear (on same mesh line).
-    
-    Uses cross product to detect if direction vectors are parallel/antiparallel.
-    """
-    v_shared = mesh.vertices[shared_vertex]
-    
-    # Get the OTHER vertex of each edge
-    v1_other = edge1[0] if edge1[1] == shared_vertex else edge1[1]
-    v2_other = edge2[0] if edge2[1] == shared_vertex else edge2[1]
-    
-    p1 = mesh.vertices[v1_other]
-    p2 = mesh.vertices[v2_other]
-    
-    # Direction vectors from shared vertex
-    dir1 = p1 - v_shared
-    dir2 = p2 - v_shared
-    
-    # Normalize
-    norm1 = np.linalg.norm(dir1)
-    norm2 = np.linalg.norm(dir2)
-    if norm1 < 1e-10 or norm2 < 1e-10:
-        return False
-    
-    dir1_norm = dir1 / norm1
-    dir2_norm = dir2 / norm2
-    
-    # Cross product magnitude (0 if collinear)
-    cross = np.cross(dir1_norm, dir2_norm)
-    return np.linalg.norm(cross) < tol
-
-
-def classify_segment(partition, mesh, mesh_topology, vp_idx1: int, vp_idx2: int) -> dict:
-    """
-    Classify a segment between two VPs.
-    
-    Returns dict with:
-        'type': "normal", "edge_following", or "edge_cutting"
-        'shared_vertex': vertex index if edge_following, else None
-        'vp1_edge': edge of VP1
-        'vp2_edge': edge of VP2
-    """
-    edge1 = partition.variable_points[vp_idx1].edge
-    edge2 = partition.variable_points[vp_idx2].edge
-    
-    result = {
-        'segment': (vp_idx1, vp_idx2),
-        'vp1_edge': edge1,
-        'vp2_edge': edge2,
-        'shared_vertex': None,
-        'type': None
-    }
-    
-    # Step 1: Check if edges share a triangle (NORMAL case)
-    if edges_share_triangle(mesh_topology, edge1, edge2):
-        result['type'] = "normal"
-        return result
-    
-    # --- VPs are in different triangles (cross-triangle segment) ---
-    
-    # Step 2: Check if edges share a vertex
-    shared_vertex = get_shared_vertex(edge1, edge2)
-    
-    if shared_vertex is None:
-        # No shared vertex - definitely EDGE-CUTTING
-        result['type'] = "edge_cutting"
-        return result
-    
-    result['shared_vertex'] = shared_vertex
-    
-    # Step 3: Edges share vertex - check COLLINEARITY
-    if edges_are_collinear(mesh, edge1, edge2, shared_vertex):
-        # Edges are on same mesh line - EDGE-FOLLOWING
-        result['type'] = "edge_following"
-    else:
-        # Edges form an angle - EDGE-CUTTING (even though they share vertex)
-        result['type'] = "edge_cutting"
-    
-    return result
-
-
 def get_neighboring_vps(partition, vp_idx: int) -> list:
     """
     Get indices of VPs that form segments with the given VP.
@@ -151,6 +54,244 @@ def get_neighboring_vps(partition, vp_idx: int) -> list:
     return list(neighbors)
 
 
+def compute_boundary_distance(partition, vp_idx: int) -> float:
+    """
+    Compute how far a boundary VP is from its target vertex.
+    
+    For λ < 0.5: VP approaching edge[1], distance = λ
+    For λ > 0.5: VP approaching edge[0], distance = (1 - λ)
+    
+    Returns:
+        Distance in [0, 0.5], where smaller = closer to target vertex
+    """
+    vp = partition.variable_points[vp_idx]
+    if vp.lambda_param < 0.5:
+        return vp.lambda_param
+    else:
+        return 1.0 - vp.lambda_param
+
+
+def find_connected_components(boundary_vps_set, partition):
+    """
+    Find connected components of boundary VPs.
+    
+    Returns:
+        List of sets, each set is a connected component of VP indices
+    """
+    from collections import defaultdict
+    
+    # Build adjacency list
+    adjacency = defaultdict(set)
+    for segment in partition.boundary_segments:
+        vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
+        if vp1 in boundary_vps_set and vp2 in boundary_vps_set:
+            adjacency[vp1].add(vp2)
+            adjacency[vp2].add(vp1)
+    
+    # DFS to find components
+    visited = set()
+    components = []
+    
+    for vp_idx in boundary_vps_set:
+        if vp_idx in visited:
+            continue
+        
+        component = set()
+        stack = [vp_idx]
+        
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            
+            visited.add(current)
+            component.add(current)
+            
+            for neighbor in adjacency[current]:
+                if neighbor not in visited:
+                    stack.append(neighbor)
+        
+        components.append(component)
+    
+    return components
+
+
+def filter_connected_boundary_vps(boundary_vps, partition, logger):
+    """
+    Filter boundary VPs to keep only one per connected component.
+    
+    Returns:
+        Filtered list with one VP per connected component
+    """
+    if not boundary_vps:
+        return []
+    
+    boundary_set = set(boundary_vps)
+    components = find_connected_components(boundary_set, partition)
+    
+    vps_to_keep = []
+    vps_deferred = []
+    
+    logger.info(f"  Found {len(components)} connected component(s) among {len(boundary_vps)} boundary VPs")
+    
+    for i, component in enumerate(components):
+        if len(component) == 1:
+            vp_idx = list(component)[0]
+            vps_to_keep.append(vp_idx)
+            logger.debug(f"    Component {i+1}: Single VP {vp_idx}")
+        else:
+            # Multiple connected VPs - keep closest
+            vps_with_dist = [
+                (compute_boundary_distance(partition, vp), vp)
+                for vp in component
+            ]
+            vps_with_dist.sort()
+            
+            closest_dist, closest_vp = vps_with_dist[0]
+            vps_to_keep.append(closest_vp)
+            
+            deferred_in_component = [vp for _, vp in vps_with_dist[1:]]
+            vps_deferred.extend(deferred_in_component)
+            
+            logger.info(f"    Component {i+1}: {len(component)} connected VPs")
+            logger.info(f"      Keeping VP {closest_vp} (distance={closest_dist:.6f})")
+            logger.info(f"      Deferring: {deferred_in_component}")
+    
+    if vps_deferred:
+        logger.info(f"  Total deferred: {len(vps_deferred)} VPs")
+    
+    return vps_to_keep
+
+
+def test_crossing_point_computation(partition, mesh, mesh_topology, switcher, vp_idx: int):
+    """
+    Test the dual projection crossing point computation for a VP involved in Type 1 switch.
+    
+    Diagnostics:
+    - Identify the old edge and target edge
+    - Compute crossing point using dual projection
+    - Verify crossing point lies on shared edge
+    - Report distances from both projections
+    
+    Args:
+        partition: PartitionContour
+        mesh: TriMesh
+        mesh_topology: MeshTopology
+        switcher: TopologySwitcher
+        vp_idx: Variable point index to test
+    """
+    logger.info("="*80)
+    logger.info(f"TESTING CROSSING POINT COMPUTATION FOR VP {vp_idx}")
+    logger.info("="*80)
+    
+    vp = partition.variable_points[vp_idx]
+    old_edge = vp.edge
+    lambda_param = vp.lambda_param
+    
+    logger.info(f"VP {vp_idx}:")
+    logger.info(f"  Old edge: {old_edge}")
+    logger.info(f"  Lambda: {lambda_param:.6f}")
+    logger.info(f"  Position: {partition.evaluate_variable_point(vp_idx)}")
+    
+    # Identify target vertex
+    target_vertex = switcher._identify_target_vertex(vp)
+    logger.info(f"  Target vertex: {target_vertex}")
+    
+    # Get candidate target edges using NEW algorithm
+    # 1. Get all triangles at target vertex
+    triangles_at_vertex = switcher._get_all_triangles_at_vertex(target_vertex)
+    logger.info(f"  Triangles at target vertex: {len(triangles_at_vertex)}")
+    
+    # 2. Filter to empty triangles
+    empty_triangles = [
+        tri_idx for tri_idx in triangles_at_vertex
+        if not switcher._triangle_has_boundary_segment(tri_idx)
+    ]
+    logger.info(f"  Empty triangles (no boundary segments): {len(empty_triangles)}")
+    
+    # 3. Get free edges from empty triangles
+    candidates = []
+    for tri_idx in empty_triangles:
+        free_edges = switcher._get_free_edges_in_triangle(tri_idx, target_vertex)
+        candidates.extend(free_edges)
+    
+    # Remove duplicates
+    candidates = list(set(candidates))
+    
+    if not candidates:
+        logger.info("  No candidate edges found in empty triangles!")
+        return
+    
+    logger.info(f"  Candidate target edges: {candidates}")
+    
+    # Test first candidate (or use the best one from switcher)
+    best_edge = switcher.get_best_target_edge_for_type1(vp_idx)
+    target_edge = best_edge if best_edge else candidates[0]
+    logger.info(f"\nTesting crossing for target edge: {target_edge}")
+    
+    # Simulate VP move to target edge
+    new_lambda = 0.5  # Test with midpoint
+    
+    # Get old and new positions
+    pos_old = partition.evaluate_variable_point(vp_idx)
+    pos_new_on_edge = new_lambda * mesh.vertices[target_edge[0]] + (1 - new_lambda) * mesh.vertices[target_edge[1]]
+    
+    logger.info(f"  Old position (VP on old edge): {pos_old}")
+    logger.info(f"  New position (test at λ=0.5 on target): {pos_new_on_edge}")
+    
+    # Get triangles containing each edge
+    old_triangles = mesh_topology.get_triangles_sharing_edge(tuple(sorted(old_edge)))
+    new_triangles = mesh_topology.get_triangles_sharing_edge(tuple(sorted(target_edge)))
+    
+    logger.info(f"  Triangles with old edge: {old_triangles}")
+    logger.info(f"  Triangles with new edge: {new_triangles}")
+    
+    # Find shared edge between triangles
+    for tri_old in old_triangles:
+        for tri_new in new_triangles:
+            shared_edge = switcher._find_shared_edge_between_triangles(tri_old, tri_new)
+            if shared_edge:
+                logger.info(f"\n  Found shared edge {shared_edge} between triangles {tri_old} and {tri_new}")
+                
+                # Test dual projection
+                crossing = switcher._compute_crossing_via_dual_projection(
+                    pos_old, pos_new_on_edge, tri_old, tri_new, shared_edge
+                )
+                
+                if crossing is not None:
+                    logger.info(f"  ✓ Crossing point computed: {crossing}")
+                    
+                    # Verify it's on the edge
+                    edge_start = mesh.vertices[shared_edge[0]]
+                    edge_end = mesh.vertices[shared_edge[1]]
+                    edge_vec = edge_end - edge_start
+                    edge_length = np.linalg.norm(edge_vec)
+                    
+                    # Project crossing onto edge to find parameter
+                    proj_vec = crossing - edge_start
+                    t = np.dot(proj_vec, edge_vec) / (edge_length ** 2)
+                    
+                    logger.info(f"  Edge vertices: {shared_edge[0]} → {shared_edge[1]}")
+                    logger.info(f"  Edge length: {edge_length:.6f}")
+                    logger.info(f"  Crossing parameter t: {t:.6f} (0=start, 1=end)")
+                    
+                    # Check distance to edge
+                    closest_on_edge = edge_start + t * edge_vec
+                    dist_to_edge = np.linalg.norm(crossing - closest_on_edge)
+                    logger.info(f"  Distance from crossing to edge: {dist_to_edge:.2e}")
+                    
+                    if dist_to_edge < 1e-6:
+                        logger.info(f"  ✓ Crossing point lies on edge (within tolerance)")
+                    else:
+                        logger.warning(f"  ⚠ Crossing point NOT on edge!")
+                else:
+                    logger.warning(f"  ✗ Dual projection failed to compute crossing")
+                
+                return  # Only test first shared edge
+    
+    logger.info("  No shared edge found between old and new triangles")
+
+
 def analyze_segments_for_vp(partition, mesh, mesh_topology, vp_idx: int, logger):
     """
     Analyze all segments involving a specific VP and classify them.
@@ -164,10 +305,20 @@ def analyze_segments_for_vp(partition, mesh, mesh_topology, vp_idx: int, logger)
     segment_details = []
     
     for neighbor_idx in neighbors:
-        classification = classify_segment(partition, mesh, mesh_topology, vp_idx, neighbor_idx)
-        seg_type = classification['type']
-        classification_counts[seg_type] += 1
-        segment_details.append(classification)
+        # Get segment classification from BoundarySegment
+        seg_key = (min(vp_idx, neighbor_idx), max(vp_idx, neighbor_idx))
+        seg_obj = None
+        for seg in partition.boundary_segments:
+            if seg.normalized_key() == seg_key:
+                seg_obj = seg
+                break
+        
+        if seg_obj:
+            seg_type = seg_obj.segment_type
+            classification_counts[seg_type] += 1
+            segment_details.append({'type': seg_type, 'vp_idx_1': vp_idx, 'vp_idx_2': neighbor_idx})
+        else:
+            logger.warning(f"    Segment ({vp_idx}, {neighbor_idx}) not found in boundary_segments")
     
     # Log summary
     logger.info(f"  Segment classification for VP {vp_idx}:")
@@ -285,12 +436,11 @@ def test_class_instantiation(relaxed_file: str, refined_file: str = None):
         mesh = TriMesh(analyzer.vertices, analyzer.faces)
         logger.info(f"  ✓ Mesh created")
         
-        # Create partition WITHOUT boundary topology
-        # CRITICAL: Must match VP indices used when refined_contours.h5 was saved
-        # Using boundary_topology creates different VP ordering, causing lambdas
-        # to be assigned to wrong VPs when loading from refined file
+        # Create partition WITH boundary topology
+        # CRITICAL: Must match VP indices used in refine_perimeter.py
+        # The refined_contours.h5 lambda values were saved with this path
         logger.info("  Creating PartitionContour...")
-        partition = PartitionContour(mesh, indicators)
+        partition = PartitionContour(mesh, indicators, boundary_topology=boundary_topology)
         logger.info(f"  ✓ Partition created: {len(partition.variable_points)} variable points")
         logger.info(f"    - {len(partition.triangle_segments)} triangle segments")
         
@@ -390,19 +540,8 @@ def test_topology_switch_detection(partition, mesh, mesh_topology, switcher, bou
                     vp = partition.variable_points[vp_idx]
                     logger.info(f"      VP {vp_idx}: λ = {vp.lambda_param:.6f}")
         
-        # Test 3: Test VP selection for Type 2
-        if len(boundary_tps) > 0:
-            logger.info("")
-            logger.info("Test 3: Testing VP selection for Type 2 switch...")
-            tp = boundary_tps[0]
-            vp_to_move = switcher.select_variable_point_for_type2(tp)
-            
-            if vp_to_move is not None:
-                logger.info(f"  ✓ Selected VP {vp_to_move} for Type 2 switch")
-                vp = partition.variable_points[vp_to_move]
-                logger.info(f"    Current: λ = {vp.lambda_param:.6f}, edge = {vp.edge}")
-            else:
-                logger.warning(f"  ⚠ Could not select VP for Type 2 switch")
+        # Note: VP selection for Type 2 is now done internally by apply_type2_switch()
+        # using _select_vp_minimizing_perimeter() for perimeter optimization
         
         logger.info("")
         logger.info("=" * 80)
@@ -471,8 +610,31 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
         non_triple_boundary_vps = [vp for vp in boundary_vps if vp not in triple_point_vp_indices]
         
         if len(non_triple_boundary_vps) > 0:
-            vp_idx = non_triple_boundary_vps[0]
+            # Filter connected VPs (keep closest in each component)
+            logger.info("")
+            logger.info("Filtering connected boundary VPs...")
+            filtered_vps = filter_connected_boundary_vps(non_triple_boundary_vps, partition, logger)
+            
+            # Sort by distance to target vertex
+            filtered_vps_sorted = sorted(
+                filtered_vps,
+                key=lambda vp_idx: compute_boundary_distance(partition, vp_idx)
+            )
+            
+            # Select closest VP
+            vp_idx = filtered_vps_sorted[0]
             vp = partition.variable_points[vp_idx]
+            
+            # Log prioritization
+            logger.info("")
+            logger.info(f"Boundary VPs after filtering: {len(filtered_vps)}")
+            logger.info("Top candidates (by distance to target vertex):")
+            for i, vp_i in enumerate(filtered_vps_sorted[:min(5, len(filtered_vps_sorted))]):
+                dist = compute_boundary_distance(partition, vp_i)
+                vp_temp = partition.variable_points[vp_i]
+                logger.info(f"  #{i+1}: VP {vp_i}, λ={vp_temp.lambda_param:.6f}, distance={dist:.6f}")
+            
+            logger.info(f"Selected VP {vp_idx} (closest to target vertex)")
             
             old_edge = vp.edge
             old_lambda = vp.lambda_param
@@ -481,9 +643,14 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
             neighbors_before_type1 = get_neighboring_vps(partition, vp_idx)
             segments_to_analyze_type1 = [(vp_idx, n) for n in neighbors_before_type1]
             
+            logger.info("")
             logger.info(f"Testing Type 1 with VP {vp_idx} (NOT part of triple point):")
             logger.info(f"  Before: λ = {old_lambda:.6f}, edge = {old_edge}")
             logger.info(f"  Neighbors before switch: {neighbors_before_type1}")
+            
+            # Test crossing point computation BEFORE applying switch
+            logger.info("")
+            test_crossing_point_computation(partition, mesh, mesh_topology, switcher, vp_idx)
             
             # Apply Type 1 switch
             logger.info("")
@@ -526,19 +693,94 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                 
                 type1_classification = {"normal": 0, "edge_following": 0, "edge_cutting": 0}
                 for seg in segments_to_analyze_type1:
-                    result = classify_segment(partition, mesh, mesh_topology, seg[0], seg[1])
-                    seg_type = result['type']
-                    type1_classification[seg_type] += 1
+                    # Get segment classification from BoundarySegment
+                    seg_key = (min(seg[0], seg[1]), max(seg[0], seg[1]))
+                    seg_obj = None
+                    for s in partition.boundary_segments:
+                        if s.normalized_key() == seg_key:
+                            seg_obj = s
+                            break
                     
-                    logger.info(f"    Segment {seg}: {seg_type}")
-                    logger.info(f"      VP edges: {result['vp1_edge']} ↔ {result['vp2_edge']}")
-                    if result['shared_vertex'] is not None:
-                        logger.info(f"      Shared vertex: {result['shared_vertex']}")
+                    if seg_obj:
+                        seg_type = seg_obj.segment_type
+                        type1_classification[seg_type] += 1
+                        
+                        vp1_edge = partition.variable_points[seg[0]].edge
+                        vp2_edge = partition.variable_points[seg[1]].edge
+                        shared_vertex = set(vp1_edge) & set(vp2_edge)
+                        
+                        logger.info(f"    Segment {seg}: {seg_type}")
+                        logger.info(f"      VP edges: {vp1_edge} ↔ {vp2_edge}")
+                        if shared_vertex:
+                            logger.info(f"      Shared vertex: {shared_vertex.pop()}")
+                    else:
+                        logger.warning(f"    Segment {seg} not found in boundary_segments")
                 
                 logger.info(f"  Type 1 Summary:")
                 logger.info(f"    Normal (same triangle): {type1_classification['normal']}")
                 logger.info(f"    Edge-following (same mesh line): {type1_classification['edge_following']}")
                 logger.info(f"    Edge-cutting (cuts triangles): {type1_classification['edge_cutting']}")
+                
+                # Report crossing information from cache with improved clarity
+                if partition.segment_crossing_cache:
+                    logger.info("")
+                    logger.info("Segment Crossing Information (from cache):")
+                    
+                    # Get VP positions for comparison
+                    vp_positions_dict = {}
+                    for n_idx in neighbors_before_type1 + [vp_idx]:
+                        vp_pos = partition.evaluate_variable_point(n_idx)
+                        vp_positions_dict[n_idx] = vp_pos
+                    
+                    for tri_idx, crossings in partition.segment_crossing_cache.items():
+                        for crossing in crossings:
+                            seg_key = crossing.segment
+                            
+                            # Get VP positions for this segment
+                            vp1_pos = vp_positions_dict.get(seg_key[0])
+                            vp2_pos = vp_positions_dict.get(seg_key[1])
+                            
+                            # Check if entry/exit points are at VP positions (within tolerance)
+                            tol = 1e-8
+                            entry_is_vp1 = vp1_pos is not None and np.linalg.norm(crossing.entry_point - vp1_pos) < tol
+                            entry_is_vp2 = vp2_pos is not None and np.linalg.norm(crossing.entry_point - vp2_pos) < tol
+                            exit_is_vp1 = vp1_pos is not None and np.linalg.norm(crossing.exit_point - vp1_pos) < tol
+                            exit_is_vp2 = vp2_pos is not None and np.linalg.norm(crossing.exit_point - vp2_pos) < tol
+                            
+                            entry_is_vp = entry_is_vp1 or entry_is_vp2
+                            exit_is_vp = exit_is_vp1 or exit_is_vp2
+                            
+                            # Determine what to display
+                            if entry_is_vp and exit_is_vp:
+                                # Both endpoints are VPs (normal segment in single triangle)
+                                logger.info(f"  Triangle {tri_idx}: Normal segment")
+                                logger.info(f"    Segment ({seg_key[0]}, {seg_key[1]}): Both VPs in triangle")
+                            elif entry_is_vp:
+                                # Entry is VP, exit is computed crossing
+                                vp_id = seg_key[0] if entry_is_vp1 else seg_key[1]
+                                logger.info(f"  Triangle {tri_idx}: VP {vp_id} at entry, crossing at exit")
+                                logger.info(f"    Segment ({seg_key[0]}, {seg_key[1]}):")
+                                logger.info(f"      VP {vp_id} position (entry): {crossing.entry_point}")
+                                logger.info(f"      COMPUTED CROSSING (exit) edge {crossing.exit_edge}: {crossing.exit_point}")
+                            elif exit_is_vp:
+                                # Exit is VP, entry is computed crossing
+                                vp_id = seg_key[0] if exit_is_vp1 else seg_key[1]
+                                logger.info(f"  Triangle {tri_idx}: Crossing at entry, VP {vp_id} at exit")
+                                logger.info(f"    Segment ({seg_key[0]}, {seg_key[1]}):")
+                                logger.info(f"      COMPUTED CROSSING (entry) edge {crossing.entry_edge}: {crossing.entry_point}")
+                                logger.info(f"      VP {vp_id} position (exit): {crossing.exit_point}")
+                            elif crossing.is_vertex_crossing:
+                                # Vertex crossing (neither VP is at entry/exit)
+                                logger.info(f"  Triangle {tri_idx}: Vertex crossing")
+                                logger.info(f"    Segment ({seg_key[0]}, {seg_key[1]}): At vertex {crossing.entry_vertex}")
+                                logger.info(f"      Position: {crossing.entry_point}")
+                            else:
+                                # True edge crossing (intermediate triangle)
+                                logger.info(f"  Triangle {tri_idx}: Computed edge crossing")
+                                logger.info(f"    Segment ({seg_key[0]}, {seg_key[1]}):")
+                                logger.info(f"      COMPUTED entry edge {crossing.entry_edge}: {crossing.entry_point}")
+                                logger.info(f"      COMPUTED exit edge {crossing.exit_edge}: {crossing.exit_point}")
+                                logger.info(f"      Cell: {crossing.cell_idx}")
             else:
                 logger.warning("  ⚠ Type 1 switch failed")
         else:
@@ -650,22 +892,21 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                     else:
                         logger.info(f"  ✓ Destroyed segment ({moved_vp_idx}, {staying_vp_idx}) correctly removed")
                     
-                    # Classify all segments involving the moved VP
-                    type2_classification = {"normal": 0, "edge_following": 0, "edge_cutting": 0}
-                    for seg in segments_involving_moved_vp:
-                        result = classify_segment(partition, mesh, mesh_topology, seg[0], seg[1])
-                        seg_type = result['type']
-                        type2_classification[seg_type] += 1
+                    # Show segment classifications (from classify_all_segments)
+                    logger.info("")
+                    logger.info("  Segment classifications after Type 2 switch:")
+                    for seg_vps in segments_involving_moved_vp:
+                        # Find the BoundarySegment object to get its classification
+                        seg_obj = None
+                        for seg in partition.boundary_segments:
+                            if seg.normalized_key() == (min(seg_vps), max(seg_vps)):
+                                seg_obj = seg
+                                break
                         
-                        logger.info(f"    Segment {seg}: {seg_type}")
-                        logger.info(f"      VP edges: {result['vp1_edge']} ↔ {result['vp2_edge']}")
-                        if result['shared_vertex'] is not None:
-                            logger.info(f"      Shared vertex: {result['shared_vertex']}")
-                    
-                    logger.info(f"  Type 2 Summary (segments involving moved VP):")
-                    logger.info(f"    Normal (same triangle): {type2_classification['normal']}")
-                    logger.info(f"    Edge-following (same mesh line): {type2_classification['edge_following']}")
-                    logger.info(f"    Edge-cutting (cuts triangles): {type2_classification['edge_cutting']}")
+                        if seg_obj:
+                            logger.info(f"    Segment {seg_vps}: {seg_obj.segment_type}")
+                        else:
+                            logger.info(f"    Segment {seg_vps}: (not found in boundary_segments)")
                 else:
                     logger.warning("  ⚠ Could not detect which VP was moved")
                 
@@ -696,6 +937,53 @@ def test_triangle_segments_rebuild(partition, mesh, mesh_topology, switcher, ste
                 logger.warning("  ⚠ Type 2 switch failed")
         else:
             logger.warning("  ⚠ No boundary triple points found, skipping Type 2 test")
+        
+        # =====================================================================
+        # CROSSING CACHE SUMMARY (After Type 1 and Type 2 migrations)
+        # =====================================================================
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("CROSSING CACHE SUMMARY (After Both Migrations)")
+        logger.info("=" * 70)
+        
+        if partition.segment_crossing_cache:
+            total_triangles_with_crossings = len(partition.segment_crossing_cache)
+            total_crossing_infos = sum(len(crossings) for crossings in partition.segment_crossing_cache.values())
+            
+            logger.info(f"Total triangles with cached crossings: {total_triangles_with_crossings}")
+            logger.info(f"Total crossing info records: {total_crossing_infos}")
+            
+            # Count by crossing type
+            vertex_crossings = 0
+            edge_crossings = 0
+            
+            for tri_idx, crossings in partition.segment_crossing_cache.items():
+                for crossing in crossings:
+                    if crossing.is_vertex_crossing:
+                        vertex_crossings += 1
+                    else:
+                        edge_crossings += 1
+            
+            logger.info(f"  Vertex crossings (edge_following): {vertex_crossings}")
+            logger.info(f"  Edge crossings (edge_cutting): {edge_crossings}")
+            
+            # Show ALL crossing data
+            logger.info("")
+            logger.info("All crossing data:")
+            for i, (tri_idx, crossings) in enumerate(partition.segment_crossing_cache.items()):
+                logger.info(f"  Triangle {tri_idx}: {len(crossings)} crossing(s)")
+                for crossing in crossings:
+                    seg = crossing.segment
+                    if crossing.is_vertex_crossing:
+                        # For edge-following segments, the shared vertex can be entry OR exit
+                        vertex = crossing.entry_vertex if crossing.entry_vertex is not None else crossing.exit_vertex
+                        logger.info(f"    Segment ({seg[0]}, {seg[1]}): VERTEX crossing at vertex {vertex}")
+                    else:
+                        logger.info(f"    Segment ({seg[0]}, {seg[1]}): EDGE crossing")
+                        logger.info(f"      Entry: edge {crossing.entry_edge}, point {crossing.entry_point}")
+                        logger.info(f"      Exit:  edge {crossing.exit_edge}, point {crossing.exit_point}")
+        else:
+            logger.info("WARNING: No crossing cache data found!")
         
         logger.info("")
         logger.info("=" * 80)
