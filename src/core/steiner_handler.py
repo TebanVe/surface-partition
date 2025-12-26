@@ -81,6 +81,11 @@ class TriplePoint:
         # Compute cell-to-variable-point mapping for perimeter calculation
         # Per Figure 7: each cell gets perimeter from 2 variable points on edges opposite its vertex
         self.cell_to_varpoint_pair: Dict[int, Tuple[int, int]] = {}
+        
+        # Map cell_idx -> mesh_vertex_idx for the corner vertex of each cell
+        # This is needed to compute corner areas (from mesh vertex to adjacent VPs)
+        self.cell_to_mesh_vertex: Dict[int, int] = {}
+        
         self._compute_cell_to_varpoint_mapping()
         
         # Will be computed
@@ -118,6 +123,9 @@ class TriplePoint:
         for i in range(3):
             vertex = vertices[i]
             cell_label = labels[i]
+            
+            # Store which mesh vertex belongs to this cell (for corner area calculation)
+            self.cell_to_mesh_vertex[cell_label] = int(vertex)
             
             # The two "opposite" edges don't include this vertex
             # They connect the other two vertices
@@ -190,6 +198,31 @@ class TriplePoint:
         self.steiner_point = result.x
         return self.steiner_point
     
+    def _triangle_area_3d(self, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
+        """
+        Compute area of triangle with vertices p1, p2, p3.
+        
+        Works for both 2D and 3D triangles.
+        
+        Args:
+            p1, p2, p3: Triangle vertices (2D or 3D coordinates)
+            
+        Returns:
+            Triangle area
+        """
+        v1 = p2 - p1
+        v2 = p3 - p1
+        
+        if len(p1) == 2:
+            # 2D case: use cross product formula
+            area = 0.5 * abs(v1[0] * v2[1] - v1[1] * v2[0])
+        else:
+            # 3D case: use cross product magnitude
+            cross = np.cross(v1, v2)
+            area = 0.5 * np.linalg.norm(cross)
+        
+        return area
+    
     def get_perimeter_contribution(self) -> Dict[int, float]:
         """
         Compute NET perimeter contribution to each adjacent cell.
@@ -231,12 +264,22 @@ class TriplePoint:
         """
         Compute area contribution to each adjacent cell.
         
+        CRITICAL FIX: This method now correctly computes BOTH:
+        1. Void interior area (Steiner subdivisions) - as per paper Figure 7
+        2. Corner area (from mesh vertex to adjacent VPs) - previously missing!
+        
         Per Figure 7 of the paper: The triangular void ABC is divided into three 
         sub-triangles by the Steiner point X. Each sub-triangle is assigned to the
         corresponding cell. For example, area of ABX is added to Cell 3.
         
+        HOWEVER: The paper implicitly assumes that corner areas (from mesh vertices
+        to VPs) are handled elsewhere. Since AreaCalculator SKIPS entire triple point
+        triangles, we must add corners here.
+        
+        Total area for each cell = Void interior + Corner region
+        
         Returns:
-            Dict mapping cell_idx -> additional area
+            Dict mapping cell_idx -> total area contribution (void + corner)
         """
         if self.steiner_point is None:
             self.compute_steiner_point()
@@ -247,16 +290,14 @@ class TriplePoint:
         var_points_pos = [self.partition.evaluate_variable_point(vp_idx) 
                           for vp_idx in self.var_point_indices]
         
-        # Per Figure 7: Each cell gets the area of the sub-triangle formed by:
-        # - The Steiner point X
-        # - The two variable points on the edges opposite to that cell's vertex
-        # This mapping is already in self.cell_to_varpoint_pair
-        
+        # For each cell: compute void interior + corner area
         for cell_idx in self.cell_indices:
             if cell_idx not in self.cell_to_varpoint_pair:
                 # Fallback: equal division (shouldn't happen if mapping is correct)
                 triangle_area = mesh.triangle_areas[self.triangle_idx]
                 contributions[cell_idx] = triangle_area / 3.0
+                self.logger.warning(f"Cell {cell_idx} not in cell_to_varpoint_pair for "
+                                  f"triple point at triangle {self.triangle_idx}")
                 continue
             
             # Get the two variable point indices for this cell
@@ -268,19 +309,23 @@ class TriplePoint:
             pos1 = var_points_pos[idx1_in_list]
             pos2 = var_points_pos[idx2_in_list]
             
-            # Compute area of triangle (pos1, pos2, steiner_point)
-            # Using same formula as AreaCalculator._triangle_area_3d
-            v1 = pos2 - pos1
-            v2 = self.steiner_point - pos1
-            if len(pos1) == 2:
-                # 2D case
-                area = 0.5 * abs(v1[0] * v2[1] - v1[1] * v2[0])
-            else:
-                # 3D case
-                cross = np.cross(v1, v2)
-                area = 0.5 * np.linalg.norm(cross)
+            # PART 1: Void interior area (per Figure 7)
+            # Triangle formed by (vp1, vp2, steiner_point)
+            void_area = self._triangle_area_3d(pos1, pos2, self.steiner_point)
             
-            contributions[cell_idx] = area
+            # PART 2: Corner area (CRITICAL FIX - was missing!)
+            # Triangle formed by (mesh_vertex, vp1, vp2)
+            if cell_idx in self.cell_to_mesh_vertex:
+                mesh_vertex_idx = self.cell_to_mesh_vertex[cell_idx]
+                vertex_pos = mesh.vertices[mesh_vertex_idx]
+                corner_area = self._triangle_area_3d(vertex_pos, pos1, pos2)
+            else:
+                corner_area = 0.0
+                self.logger.warning(f"Cell {cell_idx} not in cell_to_mesh_vertex for "
+                                  f"triple point at triangle {self.triangle_idx}")
+            
+            # TOTAL area contribution
+            contributions[cell_idx] = void_area + corner_area
         
         return contributions
     
