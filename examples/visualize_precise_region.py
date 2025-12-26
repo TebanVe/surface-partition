@@ -577,8 +577,16 @@ def render_single_region_precise(
         # Create PyVista mesh (single operation - FAST!)
         region_mesh = pv.PolyData(vertices_combined, faces_combined)
         
-        # Add to plotter (single call - FAST!)
-        plotter.add_mesh(region_mesh, color=color, opacity=opacity, show_edges=False)
+        # Add to plotter with edges (like reference scripts)
+        plotter.add_mesh(
+            region_mesh, 
+            color=color, 
+            opacity=opacity, 
+            show_edges=True,           # Show mesh edges on region
+            edge_color='gray',         # Match reference scripts
+            line_width=0.5,            # Match reference scripts
+            backface_culling=True      # Hide back faces (no confusing rear view)
+        )
         
         if show_progress:
             print(f"  ✓ Rendered {len(all_vertices)} polygons in single mesh")
@@ -614,22 +622,8 @@ def render_region_precise(
         '#e7e1ef', '#fee0d2', '#ffffcc', '#d0e1f9', '#fde0ef', '#e0ecf4'
     ]
     
-    # Add base mesh with edges (wireframe) - like visualize_topology_switch.py
-    if show_mesh_triangles:
-        print(f"  Adding base mesh with triangle edges...")
-        # Create PyVista mesh for wireframe
-        faces_pv = np.hstack([np.full((mesh.faces.shape[0], 1), 3), mesh.faces]).astype(np.int64).ravel()
-        base_mesh = pv.PolyData(mesh.vertices, faces_pv)
-        
-        # Add with low opacity to show structure
-        plotter.add_mesh(
-            base_mesh,
-            color='lightgray',
-            opacity=0.1,
-            show_edges=True,
-            edge_color='gray',
-            line_width=0.3
-        )
+    # NOTE: Mesh edges will be displayed on region meshes directly (like reference scripts)
+    # No need for separate base mesh
     
     # Render all regions with precise boundaries (using pastel colors)
     if target_only:
