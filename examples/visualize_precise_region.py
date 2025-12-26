@@ -578,14 +578,15 @@ def render_single_region_precise(
         region_mesh = pv.PolyData(vertices_combined, faces_combined)
         
         # Add to plotter with edges (like reference scripts)
+        # NOTE: backface_culling disabled because it causes triple point polygons
+        # to disappear (inconsistent normal directions in Steiner subdivisions)
         plotter.add_mesh(
             region_mesh, 
             color=color, 
             opacity=opacity, 
             show_edges=True,           # Show mesh edges on region
             edge_color='gray',         # Match reference scripts
-            line_width=0.5,            # Match reference scripts
-            backface_culling=True      # Hide back faces (no confusing rear view)
+            line_width=0.5             # Match reference scripts
         )
         
         if show_progress:
