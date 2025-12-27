@@ -413,10 +413,18 @@ def compute_triple_point_cell_portion(
     steiner_handler: SteinerHandler,
     tri_idx: int,
     cell_idx: int
-) -> Optional[np.ndarray]:
+) -> Optional[List[np.ndarray]]:
     """
     Compute the portion of a triple point triangle belonging to cell_idx.
-    Uses Steiner tree subdivision.
+    
+    CRITICAL FIX: Now returns BOTH void interior AND corner region.
+    
+    Returns:
+        List of polygons (numpy arrays) or None if not found:
+        - [0]: Void interior quadrilateral (VP, neighbor1, steiner, neighbor2)
+        - [1]: Corner triangle (mesh_vertex, VP positions)
+        
+    Previously only returned void interior, causing white gaps in visualization.
     """
     # Find the triple point for this triangle
     triple_point = None
@@ -431,36 +439,40 @@ def compute_triple_point_cell_portion(
     # Compute Steiner point
     steiner_pos = triple_point.compute_steiner_point()
     
-    # Find the VP belonging to this cell
-    cell_vp_idx = None
-    for vp_idx in triple_point.var_point_indices:
-        vp = partition.variable_points[vp_idx]
-        if cell_idx in vp.belongs_to_cells:
-            cell_vp_idx = vp_idx
-            break
-    
-    if cell_vp_idx is None:
+    # Get the two VPs that bound this cell (from triple point mapping)
+    if cell_idx not in triple_point.cell_to_varpoint_pair:
         return None
     
-    # Get the two other VPs (neighbors in void triangle)
-    other_vps = [vp for vp in triple_point.var_point_indices if vp != cell_vp_idx]
+    vp_idx1, vp_idx2 = triple_point.cell_to_varpoint_pair[cell_idx]
+    vp_pos1 = partition.evaluate_variable_point(vp_idx1)
+    vp_pos2 = partition.evaluate_variable_point(vp_idx2)
     
-    # The cell portion is bounded by:
-    # - Two Steiner branches to neighboring VPs
-    # - Two void triangle edges from cell_vp to neighbors
-    cell_vp_pos = partition.evaluate_variable_point(cell_vp_idx)
-    neighbor1_pos = partition.evaluate_variable_point(other_vps[0])
-    neighbor2_pos = partition.evaluate_variable_point(other_vps[1])
+    # POLYGON 1: Void interior quadrilateral
+    # The cell's portion of the void is bounded by the two VPs and Steiner point
+    # Note: Ordering matters for correct winding
+    void_quad = np.array([
+        vp_pos1,
+        vp_pos2,
+        steiner_pos
+    ])  # Triangle, not quad - let PyVista triangulate if needed
     
-    # Return as quadrilateral (cell_vp, neighbor1, steiner, neighbor2)
-    polygon = np.array([
-        cell_vp_pos,
-        neighbor1_pos,
-        steiner_pos,
-        neighbor2_pos
-    ])
+    # POLYGON 2: Corner triangle (CRITICAL FIX - was missing!)
+    # Get the mesh vertex that belongs to this cell
+    polygons = [void_quad]
     
-    return polygon
+    if cell_idx in triple_point.cell_to_mesh_vertex:
+        mesh_vertex_idx = triple_point.cell_to_mesh_vertex[cell_idx]
+        vertex_pos = mesh.vertices[mesh_vertex_idx]
+        
+        # Corner triangle: mesh vertex to the two adjacent VPs
+        corner_triangle = np.array([
+            vertex_pos,
+            vp_pos1,
+            vp_pos2
+        ])
+        polygons.append(corner_triangle)
+    
+    return polygons
 
 
 def render_single_region_precise(
@@ -550,18 +562,21 @@ def render_single_region_precise(
             vertex_offset += 3
     
     # Triple point triangles (Steiner subdivisions)
+    # CRITICAL FIX: Now handles multiple polygons per triple point (void + corner)
     if use_exact_boundaries:
         for tp in steiner_handler.triple_points:
             if cell_idx in tp.cell_indices:
-                poly_vertices = compute_triple_point_cell_portion(
+                polygons = compute_triple_point_cell_portion(
                     mesh, partition, steiner_handler, tp.triangle_idx, cell_idx
                 )
-                if poly_vertices is not None:
-                    n_verts = len(poly_vertices)
-                    all_vertices.append(poly_vertices)
-                    face_indices = [n_verts] + list(range(vertex_offset, vertex_offset + n_verts))
-                    all_faces.extend(face_indices)
-                    vertex_offset += n_verts
+                if polygons is not None:
+                    # Add all polygons (void interior + corner)
+                    for poly_vertices in polygons:
+                        n_verts = len(poly_vertices)
+                        all_vertices.append(poly_vertices)
+                        face_indices = [n_verts] + list(range(vertex_offset, vertex_offset + n_verts))
+                        all_faces.extend(face_indices)
+                        vertex_offset += n_verts
     
     # Create single mesh from all collected vertices and faces (FAST - O(n)!)
     if all_vertices:
