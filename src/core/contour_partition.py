@@ -558,14 +558,18 @@ class PartitionContour:
         self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
         self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
         
-        # Phase 4: DON'T rebuild segment connectivity after switches
-        # The logical connectivity is preserved - same VPs are still connected.
-        # Only their edges changed, which affects segment_type (normal vs edge_cutting).
-        # Call classify_all_segments() from TopologySwitcher to update types.
+        # CRITICAL FIX: Always rebuild segment connectivity to keep boundary_segments
+        # synchronized with triangle_segments after topology switches.
         # 
-        # Only build connectivity if it's empty (initial creation)
-        if not self.boundary_segments:
-            self._build_segment_connectivity()
+        # While VP connectivity (which VPs connect to which) doesn't change during
+        # topology switches, boundary_segments must be rebuilt because:
+        # 1. classify_all_segments() iterates over boundary_segments to compute crossings
+        # 2. Visualization uses boundary_segments for accurate rendering
+        # 3. cell_pair needs to be recomputed from current vp.belongs_to_cells
+        # 
+        # Without this rebuild, boundary_segments becomes stale after switches, causing
+        # visualization to render OLD boundary positions even though VPs have moved.
+        self._build_segment_connectivity()
     
     def get_triangles_by_cell_involvement(self) -> Dict[int, Dict[str, List[int]]]:
         """
