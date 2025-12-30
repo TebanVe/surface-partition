@@ -623,7 +623,9 @@ def render_region_precise(
     steiner_size: float = 0.000005,
     title: str = "Precise Region Visualization",
     target_only: bool = False,
-    highlight_vp_indices: list = None  # NEW: Only highlight specific VPs
+    highlight_vp_indices: list = None,  # Only highlight specific VPs
+    camera_focus: np.ndarray = None,   # Point to focus camera on
+    camera_zoom: float = None,         # Zoom level (distance from focus point)
 ):
     """
     Render ALL regions with precise boundaries.
@@ -631,6 +633,8 @@ def render_region_precise(
     Args:
         target_only: If True, only render target region (much faster, ~1 minute)
         highlight_vp_indices: List of VP indices to highlight (for migrations)
+        camera_focus: Point to focus camera on (for zoom)
+        camera_zoom: Zoom level (smaller = more zoomed in)
     """
     # Light pastel palette for all regions (like other scripts)
     pale_palette = [
@@ -715,6 +719,22 @@ def render_region_precise(
     
     # NOTE: Mesh edges are already added at the beginning (line 617-632) efficiently
     # Don't duplicate here with individual line segments - it's VERY slow!
+    
+    # Apply camera zoom if requested
+    if camera_focus is not None and camera_zoom is not None:
+        # Set camera position relative to focus point
+        # Calculate a good viewing angle (slightly above and to the side)
+        offset = np.array([camera_zoom, camera_zoom * 0.5, camera_zoom * 0.5])
+        camera_position = camera_focus + offset
+        
+        plotter.camera_position = [
+            camera_position,  # Camera location
+            camera_focus,     # Focal point
+            (0, 0, 1)        # View up direction
+        ]
+        
+        # Adjust clipping range for close-up views
+        plotter.camera.clipping_range = (camera_zoom * 0.1, camera_zoom * 10)
     
     plotter.add_title(title, font_size=14)
 
@@ -824,7 +844,9 @@ def run_visualization(args):
             steiner_size=args.steiner_size,
             title=f"Precise Region {args.region} - Current State",
             target_only=args.target_only,
-            highlight_vp_indices=None  # No migration, no VPs to highlight
+            highlight_vp_indices=None,  # No migration, no VPs to highlight
+            camera_focus=None,          # No zoom for current state
+            camera_zoom=None
         )
         plotter.show()
         
@@ -860,7 +882,7 @@ def run_visualization(args):
         )
         
         # Select closest VP
-        vp_idx = filtered_vps_sorted[0]
+        vp_idx = filtered_vps_sorted[10]
         vp = partition.variable_points[vp_idx]
         
         print(f"\nSelected VP {vp_idx}:")
@@ -892,6 +914,9 @@ def run_visualization(args):
             neighbors_before = get_neighbors_from_triangle_segments(partition, vp_idx)
             highlight_vps_before = [vp_idx] + neighbors_before
             
+            # Calculate camera focus for Type 1 (VP position)
+            vp_pos = partition.evaluate_variable_point(vp_idx)
+            
             render_region_precise(
                 plotter, mesh, partition, area_calc, steiner_handler,
                 args.region, args.intense_color,
@@ -902,7 +927,9 @@ def run_visualization(args):
                 steiner_size=args.steiner_size,
                 title=f"Region {args.region} - BEFORE Type 1 (VP {vp_idx})",
                 target_only=args.target_only,
-                highlight_vp_indices=highlight_vps_before if args.show_vps else None
+                highlight_vp_indices=highlight_vps_before if args.show_vps else None,
+                camera_focus=vp_pos if args.apply_zoom else None,
+                camera_zoom=args.zoom_factor if args.apply_zoom else None
             )
             
             if args.save_before:
@@ -972,6 +999,9 @@ def run_visualization(args):
             neighbors_after = get_neighbors_from_triangle_segments(partition, vp_idx)
             highlight_vps_after = [vp_idx] + neighbors_after
             
+            # Calculate new VP position for camera focus
+            new_vp_pos = partition.evaluate_variable_point(vp_idx)
+            
             render_region_precise(
                 plotter, mesh, partition, area_calc, steiner_handler,
                 args.region, args.intense_color,
@@ -982,7 +1012,9 @@ def run_visualization(args):
                 steiner_size=args.steiner_size,
                 title=f"Region {args.region} - AFTER Type 1 (VP {vp_idx} moved)",
                 target_only=args.target_only,
-                highlight_vp_indices=highlight_vps_after if args.show_vps else None
+                highlight_vp_indices=highlight_vps_after if args.show_vps else None,
+                camera_focus=new_vp_pos if args.apply_zoom else None,
+                camera_zoom=args.zoom_factor if args.apply_zoom else None
             )
             
             if args.save_after:
@@ -1001,7 +1033,7 @@ def run_visualization(args):
             print("ERROR: No boundary triple points found for Type 2 migration")
             return
         
-        tp = boundary_tps[0]
+        tp = boundary_tps[3]
         print(f"\nSelected triple point at triangle {tp.triangle_idx}:")
         print(f"  VPs: {tp.var_point_indices}")
         print(f"  Cells: {tp.cell_indices}")
@@ -1029,6 +1061,9 @@ def run_visualization(args):
             # Highlight VPs involved in triple point
             highlight_vps_before = list(tp.var_point_indices)
             
+            # Calculate camera focus for Type 2 (Steiner point position)
+            steiner_pos = tp.compute_steiner_point()
+            
             render_region_precise(
                 plotter, mesh, partition, area_calc, steiner_handler,
                 args.region, args.intense_color,
@@ -1039,7 +1074,9 @@ def run_visualization(args):
                 steiner_size=args.steiner_size,
                 title=f"Region {args.region} - BEFORE Type 2 (TP at T{tp.triangle_idx})",
                 target_only=args.target_only,
-                highlight_vp_indices=highlight_vps_before if args.show_vps else None
+                highlight_vp_indices=highlight_vps_before if args.show_vps else None,
+                camera_focus=steiner_pos if args.apply_zoom else None,
+                camera_zoom=args.zoom_factor if args.apply_zoom else None
             )
             
             if args.save_before:
@@ -1112,9 +1149,11 @@ def run_visualization(args):
             
             # Find new triple point and highlight its VPs
             new_tp_vps = []
-            for tp_new in steiner_after.triple_points:
+            new_steiner_pos = None
+            for tp_new in steiner_handler.triple_points:
                 if any(vp_idx in tp.var_point_indices for vp_idx in tp_new.var_point_indices):
                     new_tp_vps = list(tp_new.var_point_indices)
+                    new_steiner_pos = tp_new.compute_steiner_point()
                     break
             
             render_region_precise(
@@ -1127,7 +1166,9 @@ def run_visualization(args):
                 steiner_size=args.steiner_size,
                 title=f"Region {args.region} - AFTER Type 2 (TP migrated)",
                 target_only=args.target_only,
-                highlight_vp_indices=new_tp_vps if args.show_vps else None
+                highlight_vp_indices=new_tp_vps if args.show_vps else None,
+                camera_focus=new_steiner_pos if args.apply_zoom and new_steiner_pos is not None else None,
+                camera_zoom=args.zoom_factor if args.apply_zoom else None
             )
             
             if args.save_after:
@@ -1168,6 +1209,10 @@ def main():
                        help='Threshold for boundary detection (default: 0.1)')
     parser.add_argument('--target-only', action='store_true',
                        help='Render ONLY target region (skip other regions for speed, 100x faster)')
+    parser.add_argument('--apply-zoom', action='store_true',
+                       help='Automatically zoom and focus camera on the migration region')
+    parser.add_argument('--zoom-factor', type=float, default=0.05,
+                       help='Zoom level (default: 0.05, smaller = more zoomed in)')
     parser.add_argument('--save-before', type=str,
                        help='Path to save BEFORE state image')
     parser.add_argument('--save-after', type=str,
