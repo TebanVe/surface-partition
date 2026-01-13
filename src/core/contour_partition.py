@@ -149,7 +149,8 @@ class SegmentCrossingInfo:
         exit_point: 3D coordinates where segment exits triangle
         entry_edge: Mesh edge (v_a, v_b) where segment enters
         exit_edge: Mesh edge (v_c, v_d) where segment exits
-        cell_idx: Which cell this segment belongs to (for area attribution)
+        cell_idx: Primary cell for area attribution (DEPRECATED, use cell_pair instead)
+        cell_pair: Both cells that this segment separates (for proper area attribution)
         entry_vertex: Vertex index if entry is at vertex, None otherwise (for edge_following)
         exit_vertex: Vertex index if exit is at vertex, None otherwise (for edge_following)
         is_vertex_crossing: True if crossing is through shared vertex (edge_following)
@@ -160,10 +161,15 @@ class SegmentCrossingInfo:
     exit_point: np.ndarray
     entry_edge: Tuple[int, int]
     exit_edge: Tuple[int, int]
-    cell_idx: int
+    cell_idx: int  # DEPRECATED: kept for backward compatibility, use cell_pair
+    cell_pair: Tuple[int, int] = (0, 0)  # Both cells separated by this segment
     entry_vertex: Optional[int] = None
     exit_vertex: Optional[int] = None
     is_vertex_crossing: bool = False
+    
+    def involves_cell(self, cell_idx: int) -> bool:
+        """Check if this crossing involves the given cell."""
+        return cell_idx in self.cell_pair or cell_idx == self.cell_idx
 
 
 @dataclass
@@ -656,32 +662,70 @@ class PartitionContour:
         
         # PASS 3: Add triangles from segment_crossing_cache
         # Critical for cross-triangle segments created by Type 1 switches
+        # CRITICAL FIX: Add to BOTH cells that the segment separates, not just one
         for tri_idx, crossings in self.segment_crossing_cache.items():
             for crossing in crossings:
-                cell_idx = crossing.cell_idx
-                # Add to boundary if not already there
-                if tri_idx not in categorization[cell_idx]['boundary']:
-                    categorization[cell_idx]['boundary'].append(tri_idx)
+                # Use cell_pair to add triangle to both cells
+                cells_to_add = set()
+                if hasattr(crossing, 'cell_pair') and crossing.cell_pair != (0, 0):
+                    cells_to_add.update(crossing.cell_pair)
+                else:
+                    # Fallback to legacy cell_idx
+                    cells_to_add.add(crossing.cell_idx)
+                
+                for cell_idx in cells_to_add:
+                    if cell_idx < self.n_cells:
+                        # Check if already in boundary
+                        if tri_idx not in categorization[cell_idx]['boundary']:
+                            # Also check if it was categorized as interior and move it
+                            if tri_idx in categorization[cell_idx]['interior']:
+                                categorization[cell_idx]['interior'].remove(tri_idx)
+                            categorization[cell_idx]['boundary'].append(tri_idx)
         
         return categorization
     
     def _build_segment_connectivity(self):
         """
-        Build explicit segment connectivity from current triangle_segments.
+        Build or update explicit segment connectivity.
         
-        This replaces implicit connectivity (inferred from triangles with 2 VPs) with
-        explicit BoundarySegment objects. Essential for handling cross-triangle segments
-        after topology switches.
+        TWO MODES OF OPERATION:
         
-        Algorithm:
-        1. For each TriangleSegment with 2 VPs: create normal BoundarySegment
-        2. For each TriangleSegment with 3 VPs (triple point): create 3 BoundarySegments
-        3. Deduplicate (segments may appear in multiple triangles)
+        Mode 1 - Initial Build (boundary_segments is empty):
+            Build from triangle_segments as before. This establishes initial VP-VP connectivity.
         
-        After topology switches, some segments span multiple triangles. These are detected
-        and classified by _classify_and_update_segments() called from TopologySwitcher.
+        Mode 2 - Update After Topology Switch (boundary_segments exists):
+            PRESERVE existing segment list (don't clear). Only update cell_pair attributes.
+            This is CRITICAL because:
+            - Type 1 switches: VP moves to new edge, but segment connectivity unchanged.
+              The segment now crosses intermediate triangles. Clearing would lose this segment.
+            - Type 2 switches: _update_segments_for_type2_switch() explicitly adds/removes segments.
+              Clearing would destroy those explicit changes.
+        
+        After topology switches, classify_all_segments() will iterate over preserved
+        boundary_segments, detect cross-triangle cases, and populate segment_crossing_cache.
         """
-        self.boundary_segments.clear()
+        if self.boundary_segments:
+            # MODE 2: Update existing segments (after topology switch)
+            # Preserve connectivity, only update cell_pair attributes
+            self.logger.info(f"Updating {len(self.boundary_segments)} existing boundary segments (preserving connectivity)")
+            
+            for seg in self.boundary_segments:
+                # Update cell_pair from current VP membership
+                cells1 = self.variable_points[seg.vp_idx_1].belongs_to_cells
+                cells2 = self.variable_points[seg.vp_idx_2].belongs_to_cells
+                shared_cells = cells1 & cells2
+                seg.cell_pair = tuple(sorted(shared_cells)) if len(shared_cells) == 2 else (0, 0)
+                
+                # Reset segment_type to "normal" - will be reclassified by classify_all_segments()
+                # This allows segments that became cross-triangle to be properly detected
+                seg.segment_type = "normal"
+                seg.crossing_triangles = []
+            
+            self.logger.info(f"Updated cell_pair attributes for {len(self.boundary_segments)} segments")
+            return
+        
+        # MODE 1: Initial build from scratch (boundary_segments is empty)
+        self.logger.info("Building segment connectivity from scratch (initial build)")
         seen_segments = set()
         
         for tri_seg in self.triangle_segments:

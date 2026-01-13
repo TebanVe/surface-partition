@@ -1390,12 +1390,21 @@ class TopologySwitcher:
                             break
             
             if entry_point is not None and exit_point is not None:
-                # Determine which cell this crossing belongs to
-                # Use the cells that both VPs separate
+                # Determine BOTH cells this crossing separates
+                # The segment separates exactly 2 cells (the intersection of both VP's belongs_to_cells)
                 cells1 = self.partition.variable_points[vp_idx1].belongs_to_cells
                 cells2 = self.partition.variable_points[vp_idx2].belongs_to_cells
                 shared_cells = list(cells1 & cells2)
-                cell_idx = shared_cells[0] if shared_cells else 0
+                
+                # Store both cells for proper area attribution
+                if len(shared_cells) >= 2:
+                    cell_pair = tuple(sorted(shared_cells[:2]))
+                elif len(shared_cells) == 1:
+                    cell_pair = (shared_cells[0], shared_cells[0])
+                else:
+                    cell_pair = (0, 0)
+                
+                cell_idx = shared_cells[0] if shared_cells else 0  # Legacy field
                 
                 # NEW: Check if crossing is at a vertex (edge_following case)
                 entry_vertex = self._is_crossing_at_vertex(entry_point, entry_edge)
@@ -1417,6 +1426,7 @@ class TopologySwitcher:
                     entry_edge=entry_edge,
                     exit_edge=exit_edge,
                     cell_idx=cell_idx,
+                    cell_pair=cell_pair,
                     entry_vertex=entry_vertex,
                     exit_vertex=exit_vertex,
                     is_vertex_crossing=is_vertex_crossing
