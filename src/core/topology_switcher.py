@@ -2036,4 +2036,972 @@ class TopologySwitcher:
             return None
         
         return q1 + s * d2
+    
+    # =========================================================================
+    # Stage 0: Component Analysis Infrastructure (Vertex-Collapse Strategy)
+    # =========================================================================
+    
+    def get_non_triple_point_boundary_vps(self, boundary_tol: float = 0.1) -> List[int]:
+        """
+        Get boundary VPs that are NOT part of triple point triangles.
+        
+        CRITICAL: Type 1 migration should only consider VPs that are NOT in triple points.
+        Triple points are handled separately via Type 2 migration.
+        
+        Args:
+            boundary_tol: Threshold for boundary detection
+            
+        Returns:
+            List of boundary VP indices (excluding triple point VPs)
+        """
+        from .steiner_handler import SteinerHandler
+        
+        # Get all boundary VPs
+        all_boundary_vps = self.partition.get_boundary_variable_points(tol=boundary_tol)
+        
+        # Get VPs that are part of triple points
+        steiner_handler = SteinerHandler(self.mesh, self.partition)
+        triple_point_vps = set()
+        for tp in steiner_handler.triple_points:
+            triple_point_vps.update(tp.var_point_indices)
+        
+        # Filter out triple point VPs
+        non_triple_boundary_vps = [vp for vp in all_boundary_vps if vp not in triple_point_vps]
+        
+        self.logger.debug(f"Boundary VPs: {len(all_boundary_vps)} total, "
+                         f"{len(triple_point_vps)} in triple points, "
+                         f"{len(non_triple_boundary_vps)} available for Type 1")
+        
+        return non_triple_boundary_vps
+    
+    def compute_boundary_distance(self, vp_idx: int) -> float:
+        """
+        Compute distance from VP to its target vertex: min(λ, 1-λ)
+        
+        Args:
+            vp_idx: Variable point index
+            
+        Returns:
+            Distance in [0, 0.5], where smaller = closer to target vertex
+        """
+        vp = self.partition.variable_points[vp_idx]
+        return min(vp.lambda_param, 1.0 - vp.lambda_param)
+    
+    def find_connected_components(self, boundary_vps_set: set) -> List[set]:
+        """
+        Find connected components of boundary VPs via DFS on boundary_segments.
+        
+        Args:
+            boundary_vps_set: Set of boundary VP indices
+            
+        Returns:
+            List of sets, each set is a connected component
+        """
+        from collections import defaultdict
+        
+        # Build adjacency from boundary_segments (only for boundary VPs)
+        adjacency = defaultdict(set)
+        for segment in self.partition.boundary_segments:
+            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
+            if vp1 in boundary_vps_set and vp2 in boundary_vps_set:
+                adjacency[vp1].add(vp2)
+                adjacency[vp2].add(vp1)
+        
+        # DFS to find connected components
+        visited = set()
+        components = []
+        
+        for vp_idx in boundary_vps_set:
+            if vp_idx in visited:
+                continue
+            
+            component = set()
+            stack = [vp_idx]
+            
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                
+                visited.add(current)
+                component.add(current)
+                
+                for neighbor in adjacency[current]:
+                    if neighbor not in visited:
+                        stack.append(neighbor)
+            
+            if component:
+                components.append(component)
+        
+        return components
+    
+    def _get_triple_point_vps(self) -> Set[int]:
+        """
+        Get all VPs that are part of triple point triangles.
+        
+        Returns:
+            Set of VP indices that belong to triple point triangles
+        """
+        from .steiner_handler import SteinerHandler
+        
+        steiner_handler = SteinerHandler(self.mesh, self.partition)
+        triple_point_vps = set()
+        for tp in steiner_handler.triple_points:
+            triple_point_vps.update(tp.var_point_indices)
+        
+        return triple_point_vps
+    
+    def _component_near_triple_point(self, component: Dict) -> Tuple[bool, List[int]]:
+        """
+        Check if a component is too close to a triple point triangle.
+        
+        A component is "too close" if:
+        - It shares a non-boundary VP with a triple point triangle
+        - AND the component has < 3 VPs (risky migration)
+        
+        For 3-VP components, this is safe because both neighbors are internal,
+        so they won't affect triple point VPs.
+        
+        Args:
+            component: Component info dict from analyze_component()
+            
+        Returns:
+            (is_near: bool, shared_vps: List[int])
+            - is_near: True if component is too close to triple point (and has < 3 VPs)
+            - shared_vps: List of non-boundary VPs that connect component to triple points
+        """
+        # 3-VP components are safe (internal neighbors)
+        if component['size'] >= 3:
+            return False, []
+        
+        # Get triple point VPs
+        triple_point_vps = self._get_triple_point_vps()
+        
+        # Build adjacency from boundary_segments to find connections
+        from collections import defaultdict
+        adjacency = defaultdict(set)
+        for segment in self.partition.boundary_segments:
+            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
+            adjacency[vp1].add(vp2)
+            adjacency[vp2].add(vp1)
+        
+        # Check if any non-boundary neighbor of this component is connected to a triple point VP
+        shared_vps = []
+        for non_boundary_vp in component['non_boundary_neighbors']:
+            # Check if this non-boundary VP is connected to any triple point VP
+            neighbors_of_non_boundary = adjacency.get(non_boundary_vp, set())
+            if neighbors_of_non_boundary & triple_point_vps:
+                # This non-boundary VP connects the component to a triple point
+                shared_vps.append(non_boundary_vp)
+        
+        is_near = len(shared_vps) > 0
+        return is_near, shared_vps
+    
+    def analyze_component(self, component_vps: Set[int]) -> Dict:
+        """
+        Analyze a component and extract metadata.
+        
+        Args:
+            component_vps: Set of VP indices in the component
+            
+        Returns:
+            {
+                'vp_indices': List[int],
+                'size': int,
+                'target_vertex': int,  # Common vertex all VPs converge to
+                'min_distance': float,  # Closest VP distance to target
+                'non_boundary_neighbors': List[int],  # External non-boundary VPs
+                'boundary_neighbors': List[int],  # External boundary VPs
+                'centroid': np.ndarray  # Geometric center
+            }
+        """
+        from collections import defaultdict
+        
+        # Build adjacency from boundary_segments
+        adjacency = defaultdict(set)
+        for segment in self.partition.boundary_segments:
+            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
+            adjacency[vp1].add(vp2)
+            adjacency[vp2].add(vp1)
+        
+        # Get all neighbors of this component
+        all_neighbors = set()
+        for vp_idx in component_vps:
+            all_neighbors.update(adjacency.get(vp_idx, set()))
+        
+        # External neighbors (not in this component)
+        external_neighbors = all_neighbors - component_vps
+        
+        # Get boundary VPs set for classification
+        boundary_vps_set = set(self.partition.get_boundary_variable_points(tol=0.1))
+        
+        # Separate boundary and non-boundary external neighbors
+        boundary_neighbors = external_neighbors & boundary_vps_set
+        non_boundary_neighbors = external_neighbors - boundary_vps_set
+        
+        # Find target vertex (common vertex all VPs share)
+        all_edges = []
+        all_vertices = set()
+        for vp_idx in component_vps:
+            vp = self.partition.variable_points[vp_idx]
+            all_edges.append(tuple(sorted(vp.edge)))
+            all_vertices.update(vp.edge)
+        
+        target_vertex = None
+        for v in all_vertices:
+            if all(v in edge for edge in all_edges):
+                target_vertex = v
+                break
+        
+        # Compute min distance (closest VP to target vertex)
+        min_distance = float('inf')
+        for vp_idx in component_vps:
+            dist = self.compute_boundary_distance(vp_idx)
+            if dist < min_distance:
+                min_distance = dist
+        
+        # Compute centroid
+        positions = []
+        for vp_idx in component_vps:
+            vp = self.partition.variable_points[vp_idx]
+            positions.append(vp.evaluate(self.mesh.vertices))
+        centroid = np.mean(positions, axis=0) if positions else np.array([0.0, 0.0, 0.0])
+        
+        # Check proximity to triple points
+        component_dict = {
+            'vp_indices': list(component_vps),
+            'size': len(component_vps),
+            'target_vertex': target_vertex,
+            'min_distance': min_distance,
+            'non_boundary_neighbors': list(non_boundary_neighbors),
+            'boundary_neighbors': list(boundary_neighbors),
+            'centroid': centroid
+        }
+        
+        # Check if component is too close to triple point (only risky if < 3 VPs)
+        is_near, shared_vps = self._component_near_triple_point(component_dict)
+        component_dict['near_triple_point'] = is_near
+        component_dict['triple_point_shared_vps'] = shared_vps
+        
+        return component_dict
+    
+    def detect_proximity_conflicts(self, components: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Detect conflicts between components (shared non-boundary neighbors).
+        
+        A conflict exists when:
+        - Components share a non-boundary neighbor VP (topological connection)
+        - Both components are near convergence (min_dist < 0.01)
+        
+        Note: Conflict detection does NOT determine deferral. Deferral requires
+        additional condition: at least one component has < 3 VPs (risky).
+        
+        IMPORTANT: Each conflict is between exactly 2 components (one shared VP).
+        However, chains can form: Component A shares VP_ab with B, B shares VP_bc with C.
+        This creates a chain: A - B - C, where B has multiple neighbors.
+        
+        Returns:
+            (conflicts: List[Dict], chain_warnings: List[Dict])
+        """
+        conflicts = []
+        
+        # Detect pairwise conflicts
+        for i in range(len(components)):
+            for j in range(i + 1, len(components)):
+                comp_i = components[i]
+                comp_j = components[j]
+                
+                shared_non_boundary = set(comp_i['non_boundary_neighbors']) & set(comp_j['non_boundary_neighbors'])
+                
+                if shared_non_boundary:
+                    # Calculate minimum distances in each component
+                    min_dist_i = comp_i['min_distance']
+                    min_dist_j = comp_j['min_distance']
+                    
+                    # Determine if both components are near convergence
+                    proximity_threshold = 0.01
+                    both_near = min_dist_i < proximity_threshold and min_dist_j < proximity_threshold
+                    
+                    conflicts.append({
+                        'component_i': i,
+                        'component_j': j,
+                        'size_i': comp_i['size'],
+                        'size_j': comp_j['size'],
+                        'shared_vps': list(shared_non_boundary),
+                        'min_dist_i': min_dist_i,
+                        'min_dist_j': min_dist_j,
+                        'both_near_convergence': both_near,
+                    })
+        
+        # Detect chains: components with multiple neighbors
+        from collections import defaultdict, deque
+        
+        component_neighbors = defaultdict(set)
+        for conflict in conflicts:
+            i, j = conflict['component_i'], conflict['component_j']
+            component_neighbors[i].add(j)
+            component_neighbors[j].add(i)
+        
+        chain_warnings = []
+        for comp_idx, neighbors in component_neighbors.items():
+            if len(neighbors) >= 2:
+                # This component has 2+ neighbors → part of a chain
+                neighbor_list = list(neighbors)
+                neighbor_sizes = [components[n]['size'] for n in neighbor_list]
+                
+                # Find all components in the chain (connected components)
+                chain_components = self._find_chain_components(comp_idx, component_neighbors)
+                
+                chain_warnings.append({
+                    'component_index': comp_idx,
+                    'neighbor_indices': neighbor_list,
+                    'component_size': components[comp_idx]['size'],
+                    'neighbor_sizes': neighbor_sizes,
+                    'chain_components': chain_components,
+                    'chain_length': len(chain_components),
+                    'warning': f"CHAIN: Component {comp_idx} has {len(neighbors)} neighbors "
+                              f"(indices: {neighbor_list}). Chain length: {len(chain_components)}"
+                })
+                self.logger.warning(
+                    f"⚠️  COMPONENT CHAIN DETECTED: Component {comp_idx} (size={components[comp_idx]['size']}) "
+                    f"has {len(neighbors)} neighbors: {neighbor_list} (sizes: {neighbor_sizes}). "
+                    f"Total chain length: {len(chain_components)} components."
+                )
+        
+        return (conflicts, chain_warnings)
+    
+    def _find_chain_components(self, start_idx: int, component_neighbors: Dict[int, Set[int]]) -> Set[int]:
+        """
+        Find all components in the chain starting from start_idx.
+        
+        Uses BFS to find all connected components.
+        """
+        from collections import deque
+        
+        chain = set()
+        queue = deque([start_idx])
+        visited = set()
+        
+        while queue:
+            current = queue.popleft()
+            if current in visited:
+                continue
+            visited.add(current)
+            chain.add(current)
+            
+            for neighbor in component_neighbors.get(current, set()):
+                if neighbor not in visited:
+                    queue.append(neighbor)
+        
+        return chain
+    
+    # =========================================================================
+    # Stage 1: Core Migration Function (Vertex-Collapse Strategy)
+    # =========================================================================
+    
+    def _find_opposite_edge(self, current_edge: Tuple[int, int], 
+                            target_vertex: int) -> Optional[Tuple[int, int]]:
+        """
+        Find the "opposite edge" - the edge in an adjacent triangle that continues
+        the boundary path through the target vertex.
+        
+        On a torus (curved surface), edges are NOT perfectly collinear. They belong
+        to different triangles and have a small angle between them.
+        
+        Strategy:
+        1. Find all edges at target_vertex
+        2. For each candidate edge, compute angle with current edge at target_vertex
+        3. Find edge with angle closest to 180° (π radians) - almost collinear continuation
+        4. Must be in empty triangle (no boundary segments) and free (no VP)
+        
+        Args:
+            current_edge: Current edge (v_a, target_vertex) or (target_vertex, v_a)
+            target_vertex: The vertex the VP is approaching
+            
+        Returns:
+            Opposite edge tuple (normalized), or None if not found
+        """
+        import numpy as np
+        
+        # Get the other endpoint of current edge
+        if current_edge[0] == target_vertex:
+            other_endpoint = current_edge[1]
+        elif current_edge[1] == target_vertex:
+            other_endpoint = current_edge[0]
+        else:
+            self.logger.warning(f"Target vertex {target_vertex} not in current edge {current_edge}")
+            return None
+        
+        # Get direction vector FROM target_vertex TO other_endpoint (for current edge)
+        v_target = self.mesh.vertices[target_vertex]
+        v_other = self.mesh.vertices[other_endpoint]
+        current_dir = v_other - v_target
+        current_dir_norm = np.linalg.norm(current_dir)
+        if current_dir_norm < 1e-10:
+            self.logger.warning(f"Current edge has zero length")
+            return None
+        current_dir = current_dir / current_dir_norm
+        
+        # Get all edges at target_vertex
+        all_edges_at_vertex = self.mesh_topology.get_edges_at_vertex(target_vertex)
+        
+        best_edge = None
+        min_deviation_from_180 = float('inf')  # Deviation from 180° (π)
+        
+        for candidate_edge in all_edges_at_vertex:
+            # Skip current edge
+            if tuple(sorted(candidate_edge)) == tuple(sorted(current_edge)):
+                continue
+            
+            # Get the other endpoint of candidate edge
+            if candidate_edge[0] == target_vertex:
+                candidate_endpoint = candidate_edge[1]
+            else:
+                candidate_endpoint = candidate_edge[0]
+            
+            # Get direction vector FROM target_vertex TO candidate_endpoint
+            v_candidate = self.mesh.vertices[candidate_endpoint]
+            candidate_dir = v_candidate - v_target
+            candidate_dir_norm = np.linalg.norm(candidate_dir)
+            if candidate_dir_norm < 1e-10:
+                continue
+            candidate_dir = candidate_dir / candidate_dir_norm
+            
+            # Compute angle between the two edges at target_vertex
+            dot_product = np.dot(current_dir, candidate_dir)
+            dot_product = np.clip(dot_product, -1.0, 1.0)
+            angle = np.arccos(dot_product)
+            
+            # For almost collinear edges, angle ≈ 180° (π)
+            deviation_from_180 = abs(np.pi - angle)
+            
+            # Check if candidate edge is in empty triangle and free
+            candidate_triangles = self.mesh_topology.get_triangles_sharing_edge(candidate_edge)
+            is_valid = False
+            for tri in candidate_triangles:
+                if not self._triangle_has_boundary_segment(tri):
+                    edge_norm = tuple(sorted(candidate_edge))
+                    if edge_norm not in self.partition.edge_to_varpoint:
+                        is_valid = True
+                        break
+            
+            if is_valid and deviation_from_180 < min_deviation_from_180:
+                min_deviation_from_180 = deviation_from_180
+                best_edge = tuple(sorted(candidate_edge))
+        
+        if best_edge is None:
+            self.logger.debug(f"Could not find opposite edge for {current_edge} "
+                             f"through target vertex {target_vertex}")
+        
+        return best_edge
+    
+    def _get_two_neighbors(self, vp_idx: int) -> Tuple[int, int]:
+        """
+        Get the two neighbors of a VP via boundary_segments.
+        
+        CRITICAL: Every VP has exactly 2 neighbors (one on each side of the boundary segment).
+        
+        Args:
+            vp_idx: Variable point index
+            
+        Returns:
+            (left_neighbor_idx, right_neighbor_idx)
+            Note: These might be boundary or non-boundary VPs!
+            
+        Raises:
+            ValueError: If VP doesn't have exactly 2 neighbors
+        """
+        neighbors = []
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 == vp_idx:
+                neighbors.append(segment.vp_idx_2)
+            elif segment.vp_idx_2 == vp_idx:
+                neighbors.append(segment.vp_idx_1)
+        
+        if len(neighbors) != 2:
+            raise ValueError(f"VP {vp_idx} must have exactly 2 neighbors, found {len(neighbors)}")
+        
+        return (neighbors[0], neighbors[1])
+    
+    def _find_triangle_with_segment(self, vp_idx1: int, vp_idx2: int) -> Optional[int]:
+        """
+        Find the triangle that contains a segment between two VPs.
+        
+        Args:
+            vp_idx1: First VP index
+            vp_idx2: Second VP index
+            
+        Returns:
+            Triangle index if found, None otherwise
+        """
+        for tri_seg in self.partition.triangle_segments:
+            if vp_idx1 in tri_seg.var_point_indices and vp_idx2 in tri_seg.var_point_indices:
+                return tri_seg.triangle_idx
+        return None
+    
+    def _adjust_neighbor_to_free_edge(self, neighbor_vp_idx: int, 
+                                      migrating_vp_idx: int) -> bool:
+        """
+        Adjust neighbor VP to free edge in the triangle containing its segment with its OTHER neighbor.
+        
+        CRITICAL: The neighbor VP belongs to TWO triangles (its edge is shared by 2 triangles).
+        We must move it to the free edge in the triangle that contains the segment to its
+        OTHER neighbor (not the migrating VP).
+        
+        Example: For component VP1 — VP2 — VP3 — VP4 — VP5 where VP3 is migrating:
+        - VP2's other neighbor is VP1 (not VP3)
+        - We find the triangle containing segment VP1-VP2
+        - Move VP2 to a free edge in THAT triangle
+        
+        Args:
+            neighbor_vp_idx: VP to adjust (e.g., VP2)
+            migrating_vp_idx: The migrating VP (e.g., VP3) - used to identify the other neighbor
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Step 1: Find the other neighbor of neighbor_vp (the one that's NOT migrating_vp)
+        neighbor_vp_neighbors = []
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 == neighbor_vp_idx:
+                neighbor_vp_neighbors.append(segment.vp_idx_2)
+            elif segment.vp_idx_2 == neighbor_vp_idx:
+                neighbor_vp_neighbors.append(segment.vp_idx_1)
+        
+        if len(neighbor_vp_neighbors) != 2:
+            self.logger.error(f"Neighbor VP {neighbor_vp_idx} must have exactly 2 neighbors, found {len(neighbor_vp_neighbors)}")
+            return False
+        
+        # Find the other neighbor (not the migrating VP)
+        other_neighbor = None
+        for n in neighbor_vp_neighbors:
+            if n != migrating_vp_idx:
+                other_neighbor = n
+                break
+        
+        if other_neighbor is None:
+            self.logger.error(f"Could not find other neighbor for VP {neighbor_vp_idx} (migrating VP: {migrating_vp_idx})")
+            return False
+        
+        self.logger.debug(f"Neighbor VP {neighbor_vp_idx}: other neighbor is VP {other_neighbor} "
+                         f"(segment {other_neighbor}-{neighbor_vp_idx})")
+        
+        # Step 2: Find the triangle containing the segment between neighbor_vp and its other neighbor
+        target_triangle = self._find_triangle_with_segment(neighbor_vp_idx, other_neighbor)
+        
+        if target_triangle is None:
+            self.logger.warning(f"Could not find triangle containing segment VP{other_neighbor}-VP{neighbor_vp_idx}")
+            # Fallback: try any triangle containing neighbor_vp's edge
+            neighbor_vp = self.partition.variable_points[neighbor_vp_idx]
+            neighbor_triangles = self.mesh_topology.get_triangles_sharing_edge(neighbor_vp.edge)
+            if not neighbor_triangles:
+                self.logger.error(f"Neighbor VP {neighbor_vp_idx}: No triangles found for edge {neighbor_vp.edge}")
+                return False
+            target_triangle = neighbor_triangles[0]  # Use first triangle as fallback
+            self.logger.warning(f"Using fallback triangle {target_triangle} for neighbor VP {neighbor_vp_idx}")
+        else:
+            self.logger.debug(f"Found triangle {target_triangle} containing segment VP{other_neighbor}-VP{neighbor_vp_idx}")
+        
+        # Step 3: Find a free edge in the target triangle
+        neighbor_vp = self.partition.variable_points[neighbor_vp_idx]
+        tri_edges = self.mesh.get_triangle_edges(target_triangle)
+        
+        for edge in tri_edges:
+            edge_norm = tuple(sorted(edge))
+            # Skip the neighbor's current edge and any edge with a VP
+            if edge_norm != tuple(sorted(neighbor_vp.edge)) and edge_norm not in self.partition.edge_to_varpoint:
+                # Found free edge in the correct triangle!
+                self._move_variable_point(neighbor_vp_idx, edge_norm, 0.5)
+                self.logger.debug(f"Adjusted neighbor VP {neighbor_vp_idx} to free edge {edge_norm} "
+                                f"in triangle {target_triangle} (contains segment VP{other_neighbor}-VP{neighbor_vp_idx})")
+                return True
+        
+        self.logger.warning(f"Neighbor VP {neighbor_vp_idx}: No free edge found in triangle {target_triangle} "
+                          f"(contains segment VP{other_neighbor}-VP{neighbor_vp_idx})")
+        return False
+    
+    def _determine_target_vertex_cell_flip(
+        self, 
+        target_vertex: int,
+        migrating_vp_idx: int
+    ) -> Tuple[int, int]:
+        """
+        Determine which cells the target vertex flips between during Type 1 migration.
+        
+        Simple logic:
+        1. Get the 2 cells separated by the boundary (from VP.belongs_to_cells)
+        2. Get target vertex's current cell (from indicator_functions BEFORE migration)
+        3. Target vertex flips to the OTHER cell
+        
+        MUST be called BEFORE moving any VPs to capture the original cell assignment.
+        
+        Args:
+            target_vertex: The vertex that changes cells
+            migrating_vp_idx: The VP being migrated (to get cell info)
+            
+        Returns:
+            (old_cell, new_cell) tuple
+        """
+        # Get the two cells involved in this boundary
+        migrating_vp = self.partition.variable_points[migrating_vp_idx]
+        cells = migrating_vp.belongs_to_cells
+        
+        if len(cells) != 2:
+            raise ValueError(f"Expected boundary VP to separate 2 cells, found {len(cells)}: {cells}")
+        
+        # Get target vertex's current cell assignment (BEFORE migration)
+        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        old_cell = int(vertex_labels[target_vertex])
+        
+        # Target vertex flips to the OTHER cell
+        cells_list = list(cells)
+        if cells_list[0] == old_cell:
+            new_cell = cells_list[1]
+        elif cells_list[1] == old_cell:
+            new_cell = cells_list[0]
+        else:
+            # This shouldn't happen - target vertex should be in one of the boundary cells
+            self.logger.warning(f"Target vertex {target_vertex} in cell {old_cell}, "
+                              f"but boundary separates cells {cells_list}")
+            new_cell = cells_list[0] if cells_list[0] != old_cell else cells_list[1]
+        
+        self.logger.debug(f"Target vertex {target_vertex} will flip: cell {old_cell} → cell {new_cell}")
+        
+        return (old_cell, new_cell)
+    
+    def _update_indicator_functions_for_target_vertex(
+        self,
+        target_vertex: int,
+        old_cell: int,
+        new_cell: int
+    ) -> None:
+        """
+        Update indicator_functions matrix after Type 1 migration.
+        
+        The target vertex is the ONLY vertex that changes cells during Type 1 migration.
+        This is the fundamental change that causes triangles to gain/lose segments.
+        
+        Updates:
+            partition.indicator_functions[target_vertex, old_cell] = 0
+            partition.indicator_functions[target_vertex, new_cell] = 1
+        
+        Args:
+            target_vertex: Index of vertex that changes cells
+            old_cell: Cell index before migration
+            new_cell: Cell index after migration
+        """
+        # Flip the target vertex cell assignment
+        self.partition.indicator_functions[target_vertex, old_cell] = 0
+        self.partition.indicator_functions[target_vertex, new_cell] = 1
+        
+        self.logger.info(f"Updated indicator_functions: vertex {target_vertex} "
+                        f"flipped from cell {old_cell} to cell {new_cell}")
+    
+    def update_data_structures_after_type1_migration(self, target_vertex: int):
+        """
+        Optimized update for Type 1 vertex-collapse migration.
+        
+        Only updates the 6 triangles affected by target vertex cell flip.
+        This is MUCH faster than rebuilding all triangles.
+        
+        IMPORTANT: indicator_functions MUST be updated BEFORE calling this method,
+        because rebuild uses vertex_labels from indicator_functions.
+        
+        Updates (in this order):
+        1. partition.triangle_segments (rebuilds ONLY 6 affected triangles)
+        2. Verifies edge_to_varpoint consistency
+        
+        Does NOT update:
+        - boundary_segments: Connectivity unchanged (VP1 still connected to VP2)
+        - segment_crossing_cache: Not used in vertex-collapse (no crossings)
+        
+        Args:
+            target_vertex: The vertex that changed cells (shared by 6 triangles)
+        """
+        # Step 1: Get affected triangles (only 6)
+        affected_triangles = self._get_all_triangles_at_vertex(target_vertex)
+        
+        self.logger.debug(f"Updating {len(affected_triangles)} triangles affected by "
+                         f"target vertex {target_vertex} cell flip")
+        
+        # Step 2: Rebuild only affected triangle_segments
+        self.partition.rebuild_triangle_segments_for_affected_triangles(affected_triangles)
+        
+        # Step 3: Verify edge_to_varpoint consistency
+        for vp_idx, vp in enumerate(self.partition.variable_points):
+            edge_norm = tuple(sorted(vp.edge))
+            if edge_norm not in self.partition.edge_to_varpoint:
+                self.logger.warning(f"VP {vp_idx} edge {edge_norm} not in edge_to_varpoint!")
+            elif self.partition.edge_to_varpoint[edge_norm] != vp_idx:
+                self.logger.warning(f"VP {vp_idx} edge {edge_norm} mapped to different VP "
+                                  f"{self.partition.edge_to_varpoint[edge_norm]}!")
+        
+        self.logger.debug(f"Type 1 data structures updated: "
+                         f"{len(self.partition.triangle_segments)} triangle segments total")
+    
+    def update_data_structures_after_migration(self):
+        """
+        General-purpose update for all migration types (Type 1, Type 2, etc.).
+        
+        This is CRITICAL because:
+        1. Triangles that had boundary segments may no longer have them
+        2. Triangles that didn't have boundary segments may now have them
+        3. This affects visualization (cell colors) and area calculations
+        
+        IMPORTANT: indicator_functions MUST be updated BEFORE calling this method,
+        because rebuild_triangle_segments_from_current_vps() reads vertex_labels
+        from indicator_functions for the TriangleSegment.vertex_labels attribute.
+        
+        Updates (in this order):
+        1. partition.triangle_segments (rebuilds from current VPs and updated indicator_functions)
+        2. partition.boundary_segments (rebuilds connectivity)
+        3. Verifies edge_to_varpoint consistency
+        
+        Note: For Type 1 vertex-collapse, use update_data_structures_after_type1_migration()
+        instead - it's much faster (6 triangles vs all triangles).
+        
+        Note: segment_crossing_cache is NOT used in vertex-collapse strategy.
+        """
+        # Step 1: Rebuild triangle_segments based on current VP positions
+        # This updates which triangles have boundary segments and which don't
+        self.partition.rebuild_triangle_segments_from_current_vps()
+        
+        # rebuild_triangle_segments_from_current_vps() automatically calls
+        # _build_segment_connectivity() at the end, which rebuilds boundary_segments
+        
+        # Step 2: Verify edge_to_varpoint consistency
+        for vp_idx, vp in enumerate(self.partition.variable_points):
+            edge_norm = tuple(sorted(vp.edge))
+            if edge_norm not in self.partition.edge_to_varpoint:
+                self.logger.warning(f"VP {vp_idx} edge {edge_norm} not in edge_to_varpoint!")
+            elif self.partition.edge_to_varpoint[edge_norm] != vp_idx:
+                self.logger.warning(f"VP {vp_idx} edge {edge_norm} mapped to different VP "
+                                  f"{self.partition.edge_to_varpoint[edge_norm]}!")
+        
+        self.logger.debug(f"Data structures updated after migration: "
+                         f"{len(self.partition.triangle_segments)} triangle segments, "
+                         f"{len(self.partition.boundary_segments)} boundary segments")
+    
+    def apply_type1_switch_v2(self, component: Dict) -> bool:
+        """
+        Apply Type 1 switch to entire component using vertex-collapse strategy.
+        
+        Always adjusts TWO neighbors (regardless of component size):
+        - For 3-VP: Both neighbors are inside component (safe)
+        - For 2-VP: One inside, one outside (risky)
+        - For 1-VP: Both outside (very risky)
+        
+        CRITICAL: This function should only be called with components that contain
+        VPs NOT in triple points. The filtering is done at the workflow level.
+        
+        Args:
+            component: Component info dict from analyze_component() with 'vp_indices' field
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        component_vps = component['vp_indices']
+        
+        if not component_vps:
+            self.logger.warning("Empty component - cannot migrate")
+            return False
+        
+        # Step 1: Find migrating VP (closest to target vertex)
+        migrating_vp_idx = min(component_vps, 
+                              key=lambda vp: self.compute_boundary_distance(vp))
+        
+        migrating_vp = self.partition.variable_points[migrating_vp_idx]
+        old_edge = migrating_vp.edge
+        
+        self.logger.info(f"Migrating component with {len(component_vps)} VPs, "
+                        f"migrating VP {migrating_vp_idx} from edge {old_edge}")
+        
+        # Step 2: Get TWO neighbors (always two!)
+        try:
+            left_neighbor, right_neighbor = self._get_two_neighbors(migrating_vp_idx)
+        except ValueError as e:
+            self.logger.error(f"Failed to get neighbors: {e}")
+            return False
+        
+        # Step 3: Find target vertex
+        target_vertex = self._identify_target_vertex(migrating_vp)
+        if target_vertex is None:
+            self.logger.warning(f"VP {migrating_vp_idx}: Could not identify target vertex")
+            return False
+        
+        # Step 4: Find target edge (opposite edge)
+        target_edge = self._find_opposite_edge(old_edge, target_vertex)
+        if target_edge is None:
+            self.logger.warning(f"VP {migrating_vp_idx}: Could not find opposite edge "
+                              f"for {old_edge} through target vertex {target_vertex}")
+            return False
+        
+        self.logger.debug(f"VP {migrating_vp_idx}: Target edge {target_edge} found")
+        
+        # Step 4.5: Determine which cells the target vertex flips between
+        # CRITICAL: Must be done BEFORE moving VPs to capture original cell assignment
+        try:
+            old_cell, new_cell = self._determine_target_vertex_cell_flip(
+                target_vertex, migrating_vp_idx
+            )
+        except ValueError as e:
+            self.logger.error(f"Failed to determine cell flip: {e}")
+            return False
+        
+        # Step 5: Move migrating VP to target edge
+        self._move_variable_point(migrating_vp_idx, target_edge, 0.5)
+        self.logger.debug(f"VP {migrating_vp_idx}: Moved to edge {target_edge}")
+        
+        # Step 6: Adjust left neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
+        if not self._adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx):
+            self.logger.error(f"Failed to adjust left neighbor {left_neighbor}")
+            return False
+        
+        # Step 7: Adjust right neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
+        if not self._adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx):
+            self.logger.error(f"Failed to adjust right neighbor {right_neighbor}")
+            return False
+        
+        # Step 7.5: Update indicator_functions matrix (target vertex cell flip)
+        # CRITICAL: Must be done AFTER moving VPs but BEFORE rebuilding triangle_segments
+        self._update_indicator_functions_for_target_vertex(target_vertex, old_cell, new_cell)
+        
+        # Step 8: Update data structures (OPTIMIZED for Type 1)
+        # Only rebuilds 6 affected triangles, skips boundary_segments (connectivity unchanged)
+        # CRITICAL: This reads indicator_functions, so it must come AFTER Step 7.5
+        self.update_data_structures_after_type1_migration(target_vertex)
+        
+        self.logger.info(f"Successfully migrated component (VP {migrating_vp_idx} + 2 neighbors)")
+        return True
+    
+    def _get_conflict_for_component(self, component: Dict, conflicts: List[Dict]) -> Optional[Dict]:
+        """
+        Get the conflict (if any) for a given component.
+        
+        Args:
+            component: Component dict with 'index' field
+            conflicts: List of conflict dicts
+            
+        Returns:
+            Conflict dict if found, None otherwise
+        """
+        comp_idx = component['index']
+        for conflict in conflicts:
+            if conflict['component_i'] == comp_idx or conflict['component_j'] == comp_idx:
+                return conflict
+        return None
+    
+    def select_components_for_migration(self, components: List[Dict], 
+                                        conflicts: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Select which components to migrate and which to defer.
+        
+        CRITICAL PRINCIPLE:
+        - Components WITHOUT neighbor components → migrate immediately (no issues)
+        - Components WITH neighbor components → check for conflicts and risks
+        
+        CRITICAL CONSTRAINT:
+        - Components with < 3 VPs that are near triple points are EXCLUDED
+          (migrating them could damage triple point topology by adjusting neighbors
+          that connect to triple point VPs)
+        - 3-VP components are safe even if near triple points (internal neighbors)
+        
+        Deferral Criteria (ALL must be true):
+        1. Components share a non-boundary neighbor (conflict exists) ← MUST have neighbor!
+        2. Both components are near convergence (min_dist < 0.01)
+        3. At least one component has < 3 VPs (risky configuration)
+        
+        Selection Priority:
+        - Case 1: One component is 3-VP → migrate 3-VP, defer other
+        - Case 2: Both < 3-VP → migrate closest (distance-based)
+        
+        Returns:
+            (components_to_migrate, components_deferred)
+        """
+        to_migrate = []
+        deferred = []
+        processed = set()
+        
+        for component in components:
+            comp_idx = component['index']
+            if comp_idx in processed:
+                continue
+            
+            # CRITICAL: Exclude components with < 3 VPs that are near triple points
+            # (migrating them could damage triple point topology)
+            if component.get('near_triple_point', False):
+                self.logger.warning(
+                    f"Component {comp_idx} (size={component['size']}) is too close to triple point "
+                    f"(shared VPs: {component.get('triple_point_shared_vps', [])}) - EXCLUDED from migration"
+                )
+                deferred.append(component)
+                processed.add(comp_idx)
+                continue
+            
+            # Check if component is in a conflict (has neighbor components)
+            conflict = self._get_conflict_for_component(component, conflicts)
+            
+            if conflict is None:
+                # No conflict → Component has NO neighbor components
+                # → MIGRATE immediately (always safe, no issues possible)
+                to_migrate.append(component)
+                processed.add(comp_idx)
+            else:
+                # Conflict exists → Component HAS neighbor components
+                # → Need to check if risky before migrating
+                other_idx = conflict['component_j'] if conflict['component_i'] == comp_idx else conflict['component_i']
+                other_component = components[other_idx]
+                
+                # CRITICAL: Check if other component is near triple point (and < 3 VPs)
+                if other_component.get('near_triple_point', False):
+                    # Other component is excluded → migrate this one if safe
+                    if not component.get('near_triple_point', False):
+                        to_migrate.append(component)
+                        processed.add(comp_idx)
+                        processed.add(other_idx)
+                    else:
+                        # Both near triple points → defer both
+                        deferred.append(component)
+                        deferred.append(other_component)
+                        processed.add(comp_idx)
+                        processed.add(other_idx)
+                    continue
+                
+                # Check if at least one has < 3 VPs (risky)
+                is_risky = (component['size'] < 3) or (other_component['size'] < 3)
+                
+                if not is_risky:
+                    # Both are 3-VP → safe, migrate both (neighbors don't cause issues)
+                    if comp_idx < other_idx:  # Only process once per pair
+                        to_migrate.append(component)
+                        to_migrate.append(other_component)
+                        processed.add(comp_idx)
+                        processed.add(other_idx)
+                else:
+                    # Risky conflict → Neighbor components with < 3 VPs → defer one
+                    
+                    # Check if one component is 3-VP
+                    if component['size'] == 3 or other_component['size'] == 3:
+                        # Case 1: One is 3-VP → migrate 3-VP, defer other
+                        if component['size'] == 3:
+                            to_migrate.append(component)
+                            deferred.append(other_component)
+                        else:
+                            deferred.append(component)
+                            to_migrate.append(other_component)
+                    else:
+                        # Case 2: Both < 3-VP → distance is primary criterion
+                        if component['min_distance'] < other_component['min_distance']:
+                            # Component is closer → migrate it, defer the farther one
+                            to_migrate.append(component)
+                            deferred.append(other_component)
+                        else:
+                            # Other is closer → defer this one, migrate the other
+                            deferred.append(component)
+                            to_migrate.append(other_component)
+                    
+                    processed.add(comp_idx)
+                    processed.add(other_idx)
+        
+        return (to_migrate, deferred)
 

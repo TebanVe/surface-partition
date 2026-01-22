@@ -577,6 +577,81 @@ class PartitionContour:
         # visualization to render OLD boundary positions even though VPs have moved.
         self._build_segment_connectivity()
     
+    def rebuild_triangle_segments_for_affected_triangles(self, affected_triangles: List[int]):
+        """
+        Optimized rebuild for Type 1 migration - only updates specified triangles.
+        
+        This is much faster than rebuild_triangle_segments_from_current_vps() when only
+        a small number of triangles are affected (e.g., 6 triangles for Type 1 migration).
+        
+        CRITICAL: For Type 1 vertex-collapse migration:
+        - Only 6 triangles affected (those sharing the target vertex)
+        - 2 triangles GAIN segments (were empty → now have VPs)
+        - 2 triangles LOSE segments (had VPs → now empty)
+        - 2 triangles KEEP segments but TILT (VPs move to different edges)
+        
+        Args:
+            affected_triangles: List of triangle indices to rebuild
+        """
+        self.logger.info(f"Rebuilding triangle_segments for {len(affected_triangles)} affected triangles...")
+        
+        # Remove old entries for affected triangles
+        affected_set = set(affected_triangles)
+        self.triangle_segments = [
+            ts for ts in self.triangle_segments 
+            if ts.triangle_idx not in affected_set
+        ]
+        
+        # Create map: edge -> VP index for quick lookup
+        edge_to_vp = {}
+        for vp_idx, vp in enumerate(self.variable_points):
+            normalized_edge = tuple(sorted(vp.edge))
+            edge_to_vp[normalized_edge] = vp_idx
+        
+        # Get vertex labels (may be stale but only used for diagnostics)
+        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        
+        # Rebuild only affected triangles
+        for tri_idx in affected_triangles:
+            face = self.mesh.faces[tri_idx]
+            v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+            labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
+            
+            # Find VPs on this triangle's edges
+            tri_edges = [
+                tuple(sorted([v1, v2])),
+                tuple(sorted([v2, v3])),
+                tuple(sorted([v3, v1]))
+            ]
+            
+            boundary_edges = []
+            var_point_indices = []
+            
+            for edge in tri_edges:
+                if edge in edge_to_vp:
+                    boundary_edges.append(edge)
+                    var_point_indices.append(edge_to_vp[edge])
+            
+            # Include triangles with >= 1 VP
+            if len(var_point_indices) >= 1:
+                tri_seg = TriangleSegment(
+                    triangle_idx=tri_idx,
+                    vertex_indices=(v1, v2, v3),
+                    vertex_labels=tuple(labels),
+                    boundary_edges=boundary_edges,
+                    var_point_indices=var_point_indices
+                )
+                self.triangle_segments.append(tri_seg)
+        
+        # Log statistics
+        num_one_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 1)
+        num_two_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
+        num_three_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 3)
+        
+        self.logger.info(f"Rebuilt {len(affected_triangles)} affected triangles:")
+        self.logger.info(f"  Total triangle_segments: {len(self.triangle_segments)}")
+        self.logger.info(f"    {num_one_vp} with 1 VP, {num_two_vp} with 2 VPs, {num_three_vp} with 3 VPs")
+    
     def get_triangles_by_cell_involvement(self) -> Dict[int, Dict[str, List[int]]]:
         """
         Categorize triangles for each cell based on actual variable point positions.

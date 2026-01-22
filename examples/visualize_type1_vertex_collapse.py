@@ -416,20 +416,28 @@ def add_vp_visualization(
     mesh: TriMesh,
     partition: PartitionContour,
     vp_indices: List[int],
+    vp_labels: List[str],
     vp_size: float = 0.0005,
 ):
-    """Add variable points as colored spheres."""
+    """Add variable points as colored spheres with labels."""
     if not vp_indices:
         return
     
-    # Color scheme: migrating VP (yellow), neighbor 1 (blue), neighbor 2 (magenta)
-    colors = ['yellow', 'blue', 'magenta']
-    color_names = ['YELLOW', 'BLUE', 'MAGENTA']
+    # Color scheme for 5 VPs: migrating, 2 neighbors, 2 secondary neighbors
+    # Using distinct, easily distinguishable colors
+    colors = [
+        'yellow',      # Migrating VP
+        'blue',        # Neighbor 1
+        'magenta',     # Neighbor 2
+        'cyan',        # Secondary neighbor 1
+        'orange'       # Secondary neighbor 2
+    ]
+    color_names = ['YELLOW', 'BLUE', 'MAGENTA', 'CYAN', 'ORANGE']
     
     print(f"  Adding {len(vp_indices)} highlighted variable points (migration-related)...")
     print(f"    VP color scheme:")
     
-    for i, vp_idx in enumerate(vp_indices):
+    for i, (vp_idx, label) in enumerate(zip(vp_indices, vp_labels)):
         if vp_idx >= len(partition.variable_points):
             print(f"      WARNING: VP {vp_idx} out of range")
             continue
@@ -441,9 +449,8 @@ def add_vp_visualization(
         color = colors[i % len(colors)]
         color_name = color_names[i % len(color_names)]
         
-        print(f"      VP {vp_idx}: {color_name}")
+        print(f"      VP {vp_idx} ({label}): {color_name}")
         plotter.add_mesh(sphere, color=color, opacity=0.9)
-        print(f"      Added VP {vp_idx} at position {pos} with color {color}")
 
 
 def add_steiner_visualization(
@@ -511,6 +518,64 @@ def add_edge_visualization(
         target_line = pv.Line(v1_pos, v2_pos)
         plotter.add_mesh(target_line, color='lime', line_width=5, opacity=0.9)
         print(f"    Target edge: {target_edge} (GREEN)")
+
+
+def add_target_vertex_triangle_labels(plotter, mesh: TriMesh, target_vertex: int):
+    """
+    Add labels to all triangles that share the target vertex.
+    
+    These are the triangles involved in the Type 1 migration.
+    
+    Args:
+        plotter: PyVista plotter
+        mesh: TriMesh object
+        target_vertex: Index of the target vertex
+    """
+    if target_vertex is None:
+        return
+    
+    # Find all triangles that contain the target vertex
+    triangles_with_target = []
+    for tri_idx, face in enumerate(mesh.faces):
+        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+        if target_vertex in [v1, v2, v3]:
+            triangles_with_target.append(tri_idx)
+    
+    print(f"  Triangles sharing target vertex {target_vertex}: {len(triangles_with_target)} triangles")
+    print(f"  Triangle indices: {triangles_with_target}")
+    print()
+    
+    # Add labels to these triangles
+    for tri_idx in triangles_with_target:
+        face = mesh.faces[tri_idx]
+        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+        
+        # Compute triangle centroid
+        centroid = (mesh.vertices[v1] + mesh.vertices[v2] + mesh.vertices[v3]) / 3.0
+        
+        # Offset centroid slightly away from surface along triangle normal
+        # This ensures labels render on top of the surface
+        edge1 = mesh.vertices[v2] - mesh.vertices[v1]
+        edge2 = mesh.vertices[v3] - mesh.vertices[v1]
+        normal = np.cross(edge1, edge2)
+        normal_len = np.linalg.norm(normal)
+        if normal_len > 1e-12:
+            normal = normal / normal_len
+            # Offset by a small amount in the normal direction
+            centroid = centroid + normal * 0.0001
+        
+        # Add label with better visibility
+        plotter.add_point_labels(
+            centroid,
+            [f"T{tri_idx}"],
+            font_size=14,
+            text_color='black',
+            point_color='yellow',
+            point_size=12,
+            render_points_as_spheres=True,
+            shape_opacity=0.9,
+            always_visible=True
+        )
 
 
 def apply_camera_zoom(
@@ -620,6 +685,24 @@ def run_visualization(args):
     
     left_neighbor, right_neighbor = switcher._get_two_neighbors(migrating_vp_idx)
     
+    # Find secondary neighbors (neighbors of neighbors)
+    left_secondary = None
+    right_secondary = None
+    
+    # Get neighbor of left_neighbor (excluding migrating VP)
+    try:
+        left_n1, left_n2 = switcher._get_two_neighbors(left_neighbor)
+        left_secondary = left_n1 if left_n1 != migrating_vp_idx else left_n2
+    except:
+        pass
+    
+    # Get neighbor of right_neighbor (excluding migrating VP)
+    try:
+        right_n1, right_n2 = switcher._get_two_neighbors(right_neighbor)
+        right_secondary = right_n1 if right_n1 != migrating_vp_idx else right_n2
+    except:
+        pass
+    
     migrating_vp = partition.variable_points[migrating_vp_idx]
     current_edge = migrating_vp.edge
     target_vertex = switcher._identify_target_vertex(migrating_vp)
@@ -635,57 +718,175 @@ def run_visualization(args):
     print()
     print(f"  Migrating VP: {migrating_vp_idx}")
     print(f"  Neighbors: {left_neighbor}, {right_neighbor}")
+    if left_secondary is not None or right_secondary is not None:
+        print(f"  Secondary neighbors:")
+        if left_secondary is not None:
+            print(f"    VP {left_secondary} (neighbor of VP {left_neighbor})")
+        if right_secondary is not None:
+            print(f"    VP {right_secondary} (neighbor of VP {right_neighbor})")
     print(f"  Current edge: {current_edge}")
     print(f"  Lambda: {migrating_vp.lambda_param:.6f}")
     print()
     
+    # ========================================================================
+    # BEFORE STATE
+    # ========================================================================
+    
     # Initialize AreaCalculator
     print("  Initializing AreaCalculator BEFORE migration...")
-    area_calc = AreaCalculator(mesh, partition, use_vp_based=True)
+    area_calc_before = AreaCalculator(mesh, partition, use_vp_based=True)
     print()
     
     # Compute area
     lambda_vec = partition.get_variable_vector()
-    area_info = compute_region_area(area_calc, args.region, lambda_vec)
+    area_info_before = compute_region_area(area_calc_before, args.region, lambda_vec)
     
     print("="*60)
     print("BEFORE Type 1 Migration")
     print("="*60)
     print()
     print(f"Region {args.region} Geometry (BEFORE):")
-    print(f"  Interior triangles: {area_info['n_interior_triangles']:,} (area: {area_info['interior_area']:.4f})")
-    print(f"  Boundary triangles: {area_info['n_boundary_triangles']:,} (area: {area_info['boundary_area']:.4f})")
-    print(f"  TOTAL AREA: {area_info['total_area']:.6f}")
+    print(f"  Interior triangles: {area_info_before['n_interior_triangles']:,} (area: {area_info_before['interior_area']:.4f})")
+    print(f"  Boundary triangles: {area_info_before['n_boundary_triangles']:,} (area: {area_info_before['boundary_area']:.4f})")
+    print(f"  TOTAL AREA: {area_info_before['total_area']:.6f}")
     
-    # Create plotter
-    plotter = pv.Plotter()
+    # Create plotter for BEFORE
+    plotter_before = pv.Plotter()
     
     # Render regions
     render_regions(
-        plotter, mesh, partition, area_calc, steiner_handler,
+        plotter_before, mesh, partition, area_calc_before, steiner_handler,
         args.region, args.intense_color
     )
     
     # Add VPs if requested
     if args.show_vps:
+        # Build list of VPs to visualize with labels
         highlight_vps = [migrating_vp_idx, left_neighbor, right_neighbor]
-        add_vp_visualization(plotter, mesh, partition, highlight_vps, args.vp_size)
+        vp_labels = ['Migrating', f'Neighbor-L', f'Neighbor-R']
+        
+        # Add secondary neighbors if they exist
+        if left_secondary is not None:
+            highlight_vps.append(left_secondary)
+            vp_labels.append(f'Secondary-L')
+        if right_secondary is not None:
+            highlight_vps.append(right_secondary)
+            vp_labels.append(f'Secondary-R')
+        
+        add_vp_visualization(plotter_before, mesh, partition, highlight_vps, vp_labels, args.vp_size)
     
     # Add Steiner points if requested
     if args.show_steiner:
-        add_steiner_visualization(plotter, mesh, partition, steiner_handler, args.steiner_size)
+        add_steiner_visualization(plotter_before, mesh, partition, steiner_handler, args.steiner_size)
     
     # Add edge visualization
-    add_edge_visualization(plotter, mesh, current_edge, target_edge)
+    add_edge_visualization(plotter_before, mesh, current_edge, target_edge)
+    
+    # Add triangle labels for triangles sharing target vertex
+    add_target_vertex_triangle_labels(plotter_before, mesh, target_vertex)
     
     # Apply camera zoom if requested
     if args.apply_zoom:
         vp_pos = partition.evaluate_variable_point(migrating_vp_idx)
-        apply_camera_zoom(plotter, vp_pos, args.zoom_factor)
+        apply_camera_zoom(plotter_before, vp_pos, args.zoom_factor)
     
-    # Set title and show
-    plotter.add_title(f"Region {args.region} - BEFORE Type 1 (Component {args.component_index})", font_size=14)
-    plotter.show()
+    # Set title and show BEFORE (non-blocking, keeps window open while script continues)
+    plotter_before.add_title(f"Region {args.region} - BEFORE Type 1 (Component {args.component_index}, VP {migrating_vp_idx})", font_size=14)
+    plotter_before.show(interactive=False, auto_close=False)
+    
+    # ========================================================================
+    # PERFORM MIGRATION
+    # ========================================================================
+    
+    print("\n" + "="*60)
+    print("PERFORMING TYPE 1 MIGRATION")
+    print("="*60)
+    print(f"Migrating component {args.component_index} (VP {migrating_vp_idx})...")
+    print()
+    
+    # Perform the migration
+    success = switcher.apply_type1_switch_v2(selected_component)
+    
+    if not success:
+        print("❌ ERROR: Migration failed!")
+        return
+    
+    print("\n✓ Migration completed successfully!")
+    print()
+    
+    # ========================================================================
+    # AFTER STATE
+    # ========================================================================
+    
+    # Re-initialize AreaCalculator with updated data structures
+    print("  Initializing AreaCalculator AFTER migration...")
+    area_calc_after = AreaCalculator(mesh, partition, use_vp_based=True)
+    print()
+    
+    # Compute area after migration
+    lambda_vec_after = partition.get_variable_vector()
+    area_info_after = compute_region_area(area_calc_after, args.region, lambda_vec_after)
+    
+    print("="*60)
+    print("AFTER Type 1 Migration")
+    print("="*60)
+    print()
+    print(f"Region {args.region} Geometry (AFTER):")
+    print(f"  Interior triangles: {area_info_after['n_interior_triangles']:,} (area: {area_info_after['interior_area']:.4f})")
+    print(f"  Boundary triangles: {area_info_after['n_boundary_triangles']:,} (area: {area_info_after['boundary_area']:.4f})")
+    print(f"  TOTAL AREA: {area_info_after['total_area']:.6f}")
+    print()
+    print(f"Area change: {area_info_after['total_area'] - area_info_before['total_area']:.9f}")
+    print()
+    
+    # Get new VP positions after migration
+    migrating_vp_after = partition.variable_points[migrating_vp_idx]
+    left_neighbor_vp_after = partition.variable_points[left_neighbor]
+    right_neighbor_vp_after = partition.variable_points[right_neighbor]
+    
+    new_edge_migrating = migrating_vp_after.edge
+    new_edge_left = left_neighbor_vp_after.edge
+    new_edge_right = right_neighbor_vp_after.edge
+    
+    print(f"VP positions after migration:")
+    print(f"  Migrating VP {migrating_vp_idx}: {current_edge} → {new_edge_migrating}")
+    print(f"  Left neighbor {left_neighbor}: edge → {new_edge_left}")
+    print(f"  Right neighbor {right_neighbor}: edge → {new_edge_right}")
+    print()
+    
+    # Create plotter for AFTER
+    plotter_after = pv.Plotter()
+    
+    # Render regions with updated partition
+    render_regions(
+        plotter_after, mesh, partition, area_calc_after, steiner_handler,
+        args.region, args.intense_color
+    )
+    
+    # Add VPs if requested (at new positions)
+    if args.show_vps:
+        add_vp_visualization(plotter_after, mesh, partition, highlight_vps, vp_labels, args.vp_size)
+    
+    # Add Steiner points if requested
+    if args.show_steiner:
+        add_steiner_visualization(plotter_after, mesh, partition, steiner_handler, args.steiner_size)
+    
+    # Add edge visualization (show new edges)
+    # Current edge is now the new migrating VP edge
+    # Target edge was where it moved to
+    add_edge_visualization(plotter_after, mesh, new_edge_migrating, None)
+    
+    # Add triangle labels for triangles sharing target vertex
+    add_target_vertex_triangle_labels(plotter_after, mesh, target_vertex)
+    
+    # Apply camera zoom if requested (focus on target vertex)
+    if args.apply_zoom:
+        target_pos = mesh.vertices[target_vertex]
+        apply_camera_zoom(plotter_after, target_pos, args.zoom_factor)
+    
+    # Set title and show AFTER
+    plotter_after.add_title(f"Region {args.region} - AFTER Type 1 (Component {args.component_index}, VP {migrating_vp_idx})", font_size=14)
+    plotter_after.show()
 
 
 def main():

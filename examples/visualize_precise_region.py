@@ -88,7 +88,7 @@ from src.core.steiner_handler import SteinerHandler
 from src.core.area_calculator import AreaCalculator
 
 
-def load_partition_from_refined_file(refined_path):
+def load_partition_from_refined_file(refined_path, verbose=False):
     """
     Load partition from refined_contours.h5 file and base solution file.
     
@@ -105,12 +105,14 @@ def load_partition_from_refined_file(refined_path):
     """
     import h5py
     
-    print(f"Loading from refined contours file...")
-    print(f"  Refined: {refined_path}")
+    if verbose:
+        print(f"Loading from refined contours file...")
+        print(f"  Refined: {refined_path}")
     
     # Derive base solution path
     base_solution_path = refined_path.replace('_refined_contours.h5', '.h5')
-    print(f"  Base solution: {base_solution_path}")
+    if verbose:
+        print(f"  Base solution: {base_solution_path}")
     
     if not os.path.exists(base_solution_path):
         raise FileNotFoundError(
@@ -124,28 +126,33 @@ def load_partition_from_refined_file(refined_path):
     analyzer.load_results(use_initial_condition=False)
     
     mesh = TriMesh(analyzer.vertices, analyzer.faces)
-    print(f"  ✓ Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+    if verbose:
+        print(f"  ✓ Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
     
     # Compute indicator functions
     indicator_functions = analyzer.compute_indicator_functions()
     n_cells = indicator_functions.shape[1]
-    print(f"  ✓ Computed indicator functions: {n_cells} cells")
+    if verbose:
+        print(f"  ✓ Computed indicator functions: {n_cells} cells")
     
     # Extract boundary topology (efficient initialization)
     raw_contours, boundary_topology = analyzer.extract_contours_with_topology()
     n_boundary_triangles = sum(len(v) for v in boundary_topology.values())
-    print(f"  ✓ Extracted boundary topology: {n_boundary_triangles} boundary triangles")
+    if verbose:
+        print(f"  ✓ Extracted boundary topology: {n_boundary_triangles} boundary triangles")
     
     # Create partition (this initializes VPs with default λ=0.5)
     partition = PartitionContour(mesh, indicator_functions, boundary_topology=boundary_topology)
-    print(f"  ✓ Created partition: {len(partition.variable_points)} VPs")
+    if verbose:
+        print(f"  ✓ Created partition: {len(partition.variable_points)} VPs")
     
     # Load optimized λ parameters from refined file
     with h5py.File(refined_path, 'r') as f:
         if 'lambda_parameters' in f:
             lambda_opt = f['lambda_parameters'][:]
             partition.set_variable_vector(lambda_opt)
-            print(f"  ✓ Applied optimized λ values: {len(lambda_opt)} parameters")
+            if verbose:
+                print(f"  ✓ Applied optimized λ values: {len(lambda_opt)} parameters")
             
             # Verify match
             if len(lambda_opt) != len(partition.variable_points):
@@ -243,13 +250,16 @@ def filter_connected_boundary_vps(boundary_vps, partition):
     return vps_to_keep
 
 
-def debug_type1_convergence_analysis(mesh, partition, mesh_topology, vp_idx, boundary_tol=0.1):
+def debug_type1_convergence_analysis(mesh, partition, mesh_topology, vp_idx, boundary_tol=0.1, verbose=False):
     """
     DEBUG SECTION 7: Analyze VP convergence pattern BEFORE Type 1 migration.
     
     Tests the hypothesis that the migrating VP and its neighbors are all
     converging toward the same mesh vertex.
     """
+    if not verbose:
+        return {'target_vertex': None, 'target_pos': None, 'all_share_target': False, 'all_close': False}
+    
     print("\n" + "="*80)
     print("DEBUG SECTION 7: TYPE 1 VP CONVERGENCE ANALYSIS (BEFORE MIGRATION)")
     print("="*80)
@@ -420,7 +430,7 @@ def debug_type1_convergence_analysis(mesh, partition, mesh_topology, vp_idx, bou
     }
 
 
-def debug_all_type1_candidates_convergence(mesh, partition, boundary_tol=0.1):
+def debug_all_type1_candidates_convergence(mesh, partition, boundary_tol=0.1, verbose=False):
     """
     DEBUG SECTION 8: Test ALL Type 1 migration candidates for vertex convergence.
     
@@ -428,6 +438,9 @@ def debug_all_type1_candidates_convergence(mesh, partition, boundary_tol=0.1):
     Each component represents a group of VPs that are converging together.
     Tests if all VPs in each component share a common mesh vertex.
     """
+    if not verbose:
+        return {}
+    
     print("\n" + "="*80)
     print("DEBUG SECTION 8: CONNECTED COMPONENT VERTEX CONVERGENCE ANALYSIS")
     print("="*80)
@@ -660,12 +673,30 @@ def debug_all_type1_candidates_convergence(mesh, partition, boundary_tol=0.1):
     }
 
 
-def debug_orphaned_triangles(mesh, partition, area_calc, target_cell_idx):
+def debug_orphaned_triangles(mesh, partition, area_calc, target_cell_idx, verbose=False):
     """
     DEBUG SECTION 2: Identify triangles that are not claimed by ANY cell.
     
     These "orphaned" triangles would appear as white gaps in visualization.
     """
+    if not verbose:
+        # Still check for orphaned triangles but don't print details
+        n_triangles = len(mesh.faces)
+        n_cells = partition.n_cells
+        
+        # Track which triangles are claimed by each cell
+        all_claimed = set()
+        for cell_idx in range(n_cells):
+            interior = set(area_calc.cell_interior_triangles.get(cell_idx, []))
+            boundary = set(area_calc.cell_boundary_triangles.get(cell_idx, []))
+            all_claimed |= (interior | boundary)
+        
+        # Find orphaned triangles
+        all_triangles = set(range(n_triangles))
+        orphaned = list(all_triangles - all_claimed)
+        
+        return {'orphaned': len(orphaned) > 0, 'count': len(orphaned), 'orphaned_centroid': None}
+    
     print("\n" + "="*80)
     print("DEBUG SECTION 2: ORPHANED TRIANGLE ANALYSIS (AFTER MIGRATION)")
     print("="*80)
@@ -788,12 +819,15 @@ def debug_orphaned_triangles(mesh, partition, area_calc, target_cell_idx):
     }
 
 
-def debug_categorization_comparison(mesh, partition, area_calc_before, area_calc_after, target_cell_idx):
+def debug_categorization_comparison(mesh, partition, area_calc_before, area_calc_after, target_cell_idx, verbose=False):
     """
     DEBUG SECTION 1: Compare triangle categorization BEFORE vs AFTER migration.
     
     Identifies triangles that changed status (lost/gained boundary status).
     """
+    if not verbose:
+        return
+    
     print("\n" + "="*80)
     print("DEBUG SECTION 1: TRIANGLE CATEGORIZATION COMPARISON")
     print("="*80)
@@ -890,11 +924,14 @@ def debug_categorization_comparison(mesh, partition, area_calc_before, area_calc
     return changes
 
 
-def debug_migrated_vp(mesh, partition, mesh_topology, vp_idx, target_cell_idx):
+def debug_migrated_vp(mesh, partition, mesh_topology, vp_idx, target_cell_idx, verbose=False):
     """
     Debug function to analyze what's happening around a migrated VP.
+    
     Prints detailed information about crossing cache, triangles, and polygon computation.
     """
+    if not verbose:
+        return
     print("\n" + "="*80)
     print("DEBUG: ANALYZING MIGRATED VP AND SURROUNDING TRIANGULAR")
     print("="*80)
@@ -1718,6 +1755,7 @@ def render_region_precise(
     camera_zoom: float = None,         # Zoom level (distance from focus point)
     current_edge: Tuple[int, int] = None,  # Current edge (before migration)
     target_edge: Tuple[int, int] = None,  # Target edge (after migration)
+    verbose: bool = False,  # Control debug output
 ):
     """
     Render ALL regions with precise boundaries.
@@ -1762,7 +1800,8 @@ def render_region_precise(
     # Add VPs if requested (only highlight specific VPs for migrations)
     if show_vps and highlight_vp_indices is not None:
         n_vps = len(highlight_vp_indices)
-        print(f"  Adding {n_vps} highlighted variable points (migration-related)...")
+        if verbose:
+            print(f"  Adding {n_vps} highlighted variable points (migration-related)...")
         
         # Color scheme:
         # - First VP (index 0): YELLOW = migrated VP
@@ -1770,10 +1809,11 @@ def render_region_precise(
         # - Third VP (index 2): MAGENTA = neighbor 2
         # - Others: CYAN
         neighbor_colors = ['yellow', 'blue', 'magenta', 'cyan', 'orange', 'lime']
-        print(f"    VP color scheme:")
-        for i, vp_i in enumerate(highlight_vp_indices[:3]):
-            color_name = neighbor_colors[i] if i < len(neighbor_colors) else 'cyan'
-            print(f"      VP {vp_i}: {color_name.upper()}")
+        if verbose and n_vps > 0:
+            print(f"    VP color scheme:")
+            for i, vp_i in enumerate(highlight_vp_indices[:3]):
+                color_name = neighbor_colors[i] if i < len(neighbor_colors) else 'cyan'
+                print(f"      VP {vp_i}: {color_name.upper()}")
         
         if n_vps > 100:
             iterator = list(enumerate(tqdm(highlight_vp_indices, desc="  Drawing VPs", leave=False)))
@@ -1781,20 +1821,28 @@ def render_region_precise(
             iterator = list(enumerate(highlight_vp_indices))
         
         for i, vp_idx in iterator:
-            vp = partition.variable_points[vp_idx]
-            pos = vp.evaluate(mesh.vertices)
-            sphere = pv.Sphere(radius=vp_size, center=pos)
-            # Color by position in list (migrated VP first, then neighbors)
-            if i < len(neighbor_colors):
-                vp_color = neighbor_colors[i]
-            else:
-                vp_color = 'cyan'
-            plotter.add_mesh(sphere, color=vp_color, opacity=0.9)
+            try:
+                vp = partition.variable_points[vp_idx]
+                pos = vp.evaluate(mesh.vertices)
+                sphere = pv.Sphere(radius=vp_size, center=pos)
+                # Color by position in list (migrated VP first, then neighbors)
+                if i < len(neighbor_colors):
+                    vp_color = neighbor_colors[i]
+                else:
+                    vp_color = 'cyan'
+                plotter.add_mesh(sphere, color=vp_color, opacity=0.9)
+                if verbose:
+                    print(f"      Added VP {vp_idx} at position {pos} with color {vp_color}")
+            except (IndexError, KeyError) as e:
+                if verbose:
+                    print(f"      WARNING: Could not render VP {vp_idx}: {e}")
+                continue
     
     # Add Steiner points if requested
     if show_steiner:
         n_tps = len(steiner_handler.triple_points)
-        print(f"  Adding {n_tps} Steiner points and void triangles...")
+        if verbose:
+            print(f"  Adding {n_tps} Steiner points and void triangles...")
         
         if n_tps > 10:
             iterator = tqdm(steiner_handler.triple_points, 
@@ -1822,7 +1870,8 @@ def render_region_precise(
     
     # Visualize current and target edges for Type 1 migration
     if current_edge is not None or target_edge is not None:
-        print(f"  Adding edge visualization for migration...")
+        if verbose:
+            print(f"  Adding edge visualization for migration...")
         
         # Current edge (before migration) - RED
         if current_edge is not None:
@@ -1832,7 +1881,8 @@ def render_region_precise(
             current_line = pv.Line(v1_pos, v2_pos)
             plotter.add_mesh(current_line, color='red', line_width=5, opacity=0.9, 
                            label='Current Edge (before migration)')
-            print(f"    Current edge: {current_edge} (RED)")
+            if verbose:
+                print(f"    Current edge: {current_edge} (RED)")
         
         # Target edge (after migration) - GREEN
         if target_edge is not None:
@@ -1842,7 +1892,8 @@ def render_region_precise(
             target_line = pv.Line(v1_pos, v2_pos)
             plotter.add_mesh(target_line, color='lime', line_width=5, opacity=0.9,
                            label='Target Edge (after migration)')
-            print(f"    Target edge: {target_edge} (GREEN)")
+            if verbose:
+                print(f"    Target edge: {target_edge} (GREEN)")
     
     # NOTE: Mesh edges are already added at the beginning (line 617-632) efficiently
     # Don't duplicate here with individual line segments - it's VERY slow!
@@ -1922,9 +1973,10 @@ def run_visualization(args):
             return
     
     # Load partition from refined file
-    print("\nLoading partition data...")
+    if args.verbose:
+        print("\nLoading partition data...")
     try:
-        mesh, partition = load_partition_from_refined_file(args.solution)
+        mesh, partition = load_partition_from_refined_file(args.solution, verbose=args.verbose)
     except Exception as e:
         print(f"ERROR: Failed to load refined contours file")
         print(f"       {e}")
@@ -1932,7 +1984,8 @@ def run_visualization(args):
         traceback.print_exc()
         return
     
-    print(f"\n✓ Loaded partition state from refined file")
+    if args.verbose:
+        print(f"\n✓ Loaded partition state from refined file")
     
     # Initialize components
     mesh_topology = MeshTopology(mesh)
@@ -1973,7 +2026,8 @@ def run_visualization(args):
             target_only=args.target_only,
             highlight_vp_indices=None,  # No migration, no VPs to highlight
             camera_focus=None,          # No zoom for current state
-            camera_zoom=None
+            camera_zoom=None,
+            verbose=args.verbose
         )
         plotter.show()
         
@@ -1983,132 +2037,249 @@ def run_visualization(args):
     if args.switch_type == 'type1':
         print("\nAnalyzing Type 1 migration...")
         
-        # Find boundary VPs
-        boundary_vps = partition.get_boundary_variable_points(tol=args.boundary_tol)
+        # NEW: Component-based migration (vertex-collapse strategy)
+        # Initialize variables that will be used later (for scope)
+        migrating_vp_idx = None
+        left_neighbor = None
+        right_neighbor = None
+        component_idx = None
+        selected_component = None
         
-        # Filter out triple point VPs
-        steiner_handler = SteinerHandler(mesh, partition)
-        triple_point_vp_indices = set()
-        for tp in steiner_handler.triple_points:
-            triple_point_vp_indices.update(tp.var_point_indices)
-        
-        non_triple_boundary_vps = [vp for vp in boundary_vps 
-                                   if vp not in triple_point_vp_indices]
-        
-        if not non_triple_boundary_vps:
-            print("ERROR: No boundary VPs found for Type 1 migration")
-            return
-        
-        # Filter connected components
-        filtered_vps = filter_connected_boundary_vps(non_triple_boundary_vps, partition)
-        
-        # Sort by distance
-        filtered_vps_sorted = sorted(
-            filtered_vps,
-            key=lambda vp_idx: compute_boundary_distance(partition, vp_idx)
-        )
-        
-        # Find index for VP 765
-        if 765 in filtered_vps_sorted:
-            idx_765 = filtered_vps_sorted.index(765)
-            print(f"\nVP 765 is at index {idx_765} in filtered_vps_sorted")
+        if args.use_vertex_collapse:
+            print("Using vertex-collapse strategy (component-based migration)")
+            
+            # Initialize SteinerHandler (needed for visualization)
+            steiner_handler = SteinerHandler(mesh, partition)
+            
+            # Step 1: Get boundary VPs (excluding triple point VPs)
+            boundary_vps = switcher.get_non_triple_point_boundary_vps(boundary_tol=args.boundary_tol)
+            boundary_vps_set = set(boundary_vps)
+            
+            if not boundary_vps:
+                print("ERROR: No boundary VPs found for Type 1 migration")
+                return
+            
+            # Step 2: Find connected components
+            components = switcher.find_connected_components(boundary_vps_set)
+            print(f"\n✓ Found {len(components)} connected component(s)")
+            
+            # Step 3: Analyze each component
+            component_info = []
+            for i, comp_vps in enumerate(components):
+                info = switcher.analyze_component(comp_vps)
+                info['index'] = i
+                component_info.append(info)
+            
+            # Step 4: Detect conflicts
+            conflicts, chain_warnings = switcher.detect_proximity_conflicts(component_info)
+            
+            # Step 5: Select components for migration
+            to_migrate, deferred = switcher.select_components_for_migration(component_info, conflicts)
+            
+            # Step 6: Show all components and let user select
+            print("\n" + "="*80)
+            print("AVAILABLE COMPONENTS FOR MIGRATION")
+            print("="*80)
+            print(f"{'Idx':<5} {'Size':<6} {'Dist':<10} {'Status':<15} {'VPs':<30}")
+            print("-" * 80)
+            
+            for i, comp in enumerate(component_info):
+                status = "TO MIGRATE" if comp in to_migrate else "DEFERRED" if comp in deferred else "UNKNOWN"
+                vp_list = str(comp['vp_indices'][:5]) + ("..." if len(comp['vp_indices']) > 5 else "")
+                print(f"{i:<5} {comp['size']:<6} {comp['min_distance']:<10.6f} {status:<15} {vp_list:<30}")
+            
+            if chain_warnings:
+                print(f"\n⚠️  Found {len(chain_warnings)} component chain(s):")
+                for warning in chain_warnings:
+                    print(f"  {warning['warning']}")
+            
+            # Step 7: Select component to migrate
+            component_idx = args.component_index if args.component_index is not None else 0
+            if component_idx >= len(component_info):
+                print(f"ERROR: Component index {component_idx} out of range (max: {len(component_info)-1})")
+                return
+            
+            selected_component = component_info[component_idx]
+            print(f"\n✓ Selected Component {component_idx} for migration:")
+            print(f"  Size: {selected_component['size']} VPs")
+            print(f"  VPs: {selected_component['vp_indices']}")
+            print(f"  Target vertex: {selected_component['target_vertex']}")
+            print(f"  Min distance: {selected_component['min_distance']:.6f}")
+            print(f"  Status: {'TO MIGRATE' if selected_component in to_migrate else 'DEFERRED' if selected_component in deferred else 'UNKNOWN'}")
+            
+            # Find migrating VP (closest to target vertex)
+            migrating_vp_idx = min(selected_component['vp_indices'],
+                                  key=lambda vp: switcher.compute_boundary_distance(vp))
+            migrating_vp = partition.variable_points[migrating_vp_idx]
+            
+            # Get neighbors
+            left_neighbor, right_neighbor = switcher._get_two_neighbors(migrating_vp_idx)
+            
+            print(f"\n  Migrating VP: {migrating_vp_idx}")
+            print(f"  Neighbors: {left_neighbor}, {right_neighbor}")
+            print(f"  Current edge: {migrating_vp.edge}")
+            print(f"  Lambda: {migrating_vp.lambda_param:.6f}")
+            
+            # Store for visualization
+            vp_idx = migrating_vp_idx  # For compatibility with existing visualization code
+            vp = migrating_vp
+            highlight_vp_indices = [migrating_vp_idx, left_neighbor, right_neighbor]
+            
         else:
-            print(f"\nVP 765 is NOT in filtered_vps_sorted")
+            # OLD: VP-based migration (existing code)
+            # Find boundary VPs
+            boundary_vps = partition.get_boundary_variable_points(tol=args.boundary_tol)
+            
+            # Filter out triple point VPs
+            steiner_handler = SteinerHandler(mesh, partition)
+            triple_point_vp_indices = set()
+            for tp in steiner_handler.triple_points:
+                triple_point_vp_indices.update(tp.var_point_indices)
+            
+            non_triple_boundary_vps = [vp for vp in boundary_vps 
+                                       if vp not in triple_point_vp_indices]
+            
+            if not non_triple_boundary_vps:
+                print("ERROR: No boundary VPs found for Type 1 migration")
+                return
+            
+            # Filter connected components
+            filtered_vps = filter_connected_boundary_vps(non_triple_boundary_vps, partition)
+            
+            # Sort by distance
+            filtered_vps_sorted = sorted(
+                filtered_vps,
+                key=lambda vp_idx: compute_boundary_distance(partition, vp_idx)
+            )
+            
+            # Find index for VP 765
+            if 765 in filtered_vps_sorted:
+                idx_765 = filtered_vps_sorted.index(765)
+                print(f"\nVP 765 is at index {idx_765} in filtered_vps_sorted")
+            else:
+                print(f"\nVP 765 is NOT in filtered_vps_sorted")
+            
+            # Select closest VP
+            vp_idx = filtered_vps_sorted[43] #63 and 70 are the examples that display two VPs in the component. 68 Also
+            vp = partition.variable_points[vp_idx]
+            
+            print(f"\nSelected VP {vp_idx}:")
+            print(f"  Edge: {vp.edge}")
+            print(f"  Lambda: {vp.lambda_param:.6f}")
+            print(f"  Distance to vertex: {compute_boundary_distance(partition, vp_idx):.6f}")
+            
+            highlight_vp_indices = None  # Will be set later
         
-        # Select closest VP
-        vp_idx = filtered_vps_sorted[43] #63 and 70 are the examples that display two VPs in the component. 68 Also
-        vp = partition.variable_points[vp_idx]
+        # DEBUG SECTION 7: Analyze VP convergence BEFORE migration (only for old method)
+        if not args.use_vertex_collapse:
+            convergence_info = debug_type1_convergence_analysis(
+                mesh, partition, mesh_topology, vp_idx, boundary_tol=args.boundary_tol, verbose=args.verbose
+            )
+
+            # DEBUG SECTION 8: Test ALL Type 1 candidates for convergence pattern
+            all_convergence_stats = debug_all_type1_candidates_convergence(
+                mesh, partition, boundary_tol=args.boundary_tol, verbose=args.verbose
+            )
+
+            # DEBUG SECTION 9: Component Proximity Analysis (only if verbose)
+            if args.verbose:
+                from component_proximity_debug import debug_component_proximity_analysis
+                proximity_results = debug_component_proximity_analysis(
+                    mesh, partition, boundary_tol=args.boundary_tol,
+                    filtered_vps_sorted=filtered_vps_sorted
+                )
+            else:
+                proximity_results = {}
+        else:
+            # For vertex-collapse, we already have component info
+            convergence_info = {}
+            all_convergence_stats = {}
+            proximity_results = {}
         
-        print(f"\nSelected VP {vp_idx}:")
-        print(f"  Edge: {vp.edge}")
-        print(f"  Lambda: {vp.lambda_param:.6f}")
-        print(f"  Distance to vertex: {compute_boundary_distance(partition, vp_idx):.6f}")
-        
-        # DEBUG SECTION 7: Analyze VP convergence BEFORE migration
-        convergence_info = debug_type1_convergence_analysis(
-            mesh, partition, mesh_topology, vp_idx, boundary_tol=args.boundary_tol
-        )
-        
-        # DEBUG SECTION 8: Test ALL Type 1 candidates for convergence pattern
-        all_convergence_stats = debug_all_type1_candidates_convergence(
-            mesh, partition, boundary_tol=args.boundary_tol
-        )
-        
-        # DEBUG SECTION 9: Component Proximity Analysis
-        # Pass filtered_vps_sorted so it can show [idx=XX] for each VP
-        from component_proximity_debug import debug_component_proximity_analysis
-        proximity_results = debug_component_proximity_analysis(
-            mesh, partition, boundary_tol=args.boundary_tol,
-            filtered_vps_sorted=filtered_vps_sorted
-        )
-        
-        # Show ALL filtered VPs with their component sizes
-        print("\n" + "="*80)
-        print("ALL VPs IN filtered_vps_sorted WITH COMPONENT SIZES")
-        print("="*80)
+        # Show ALL filtered VPs with their component sizes (only if verbose)
+        if args.verbose:
+            print("\n" + "="*80)
+            print("ALL VPs IN filtered_vps_sorted WITH COMPONENT SIZES")
+            print("="*80)
         
         # Build map of VP -> component size from convergence stats
         vp_to_component_size = {}
-        for detail in all_convergence_stats['details']:
-            for vp_i in detail['vp_indices']:
-                vp_to_component_size[vp_i] = detail['n_vps']
+        if 'details' in all_convergence_stats:
+            for detail in all_convergence_stats['details']:
+                for vp_i in detail['vp_indices']:
+                    vp_to_component_size[vp_i] = detail['n_vps']
         
-        # Count by component size
-        single_count = 0
-        two_count = 0
-        three_count = 0
-        other_count = 0
+        # Show summary (always) - only for old method
+        if not args.use_vertex_collapse:
+            print(f"\nSelected VP {vp_idx} for migration")
+            print(f"  Component size: {vp_to_component_size.get(vp_idx, 'unknown')}")
+            print(f"  Distance to vertex: {compute_boundary_distance(partition, vp_idx):.6f}")
         
-        print(f"\nShowing all {len(filtered_vps_sorted)} VPs:")
-        print(f"  {'Index':<7} {'VP':<6} {'CompSize':<10} {'Lambda':<10} {'Distance':<10} {'Edge':<20}")
-        print(f"  {'-'*7} {'-'*6} {'-'*10} {'-'*10} {'-'*10} {'-'*20}")
-        
-        for idx, vp_i in enumerate(filtered_vps_sorted):
-            vp_temp = partition.variable_points[vp_i]
-            dist = compute_boundary_distance(partition, vp_i)
-            comp_size = vp_to_component_size.get(vp_i, 0)
+        # Show detailed output only if verbose (only for old method)
+        if args.verbose and not args.use_vertex_collapse:
+            single_count = 0
+            two_count = 0
+            three_count = 0
+            other_count = 0
             
-            # Count by size
-            if comp_size == 1:
-                size_label = "1-VP"
-                single_count += 1
-            elif comp_size == 2:
-                size_label = "2-VP"
-                two_count += 1
-            elif comp_size == 3:
-                size_label = "3-VP"
-                three_count += 1
-            else:
-                size_label = f"{comp_size}-VP"
-                other_count += 1
+            print(f"\nShowing all {len(filtered_vps_sorted)} VPs:")
+            print(f"  {'Index':<7} {'VP':<6} {'CompSize':<10} {'Lambda':<10} {'Distance':<10} {'Edge':<20}")
+            print(f"  {'-'*7} {'-'*6} {'-'*10} {'-'*10} {'-'*10} {'-'*20}")
             
-            edge_str = f"{vp_temp.edge}"
-            print(f"  [{idx:3d}]   {vp_i:<6d} {size_label:<10} {vp_temp.lambda_param:<10.6f} {dist:<10.6f} {edge_str:<20}")
-        
-        print(f"\n  Summary:")
-        print(f"    1-VP components: {single_count}")
-        print(f"    2-VP components: {two_count}")
-        print(f"    3-VP components: {three_count}")
-        if other_count > 0:
-            print(f"    Other: {other_count}")
-        
-        print(f"\n  To visualize any VP, use: filtered_vps_sorted[INDEX]")
-        print(f"  where INDEX is the value in brackets above.")
-        print("="*80)
-        
-        # Confirm selection (debug)
-        print(f"\n✓ Confirmed: Will visualize VP {vp_idx} (from line 2019)")
+            for idx, vp_i in enumerate(filtered_vps_sorted):
+                vp_temp = partition.variable_points[vp_i]
+                dist = compute_boundary_distance(partition, vp_i)
+                comp_size = vp_to_component_size.get(vp_i, 0)
+                
+                # Count by size
+                if comp_size == 1:
+                    size_label = "1-VP"
+                    single_count += 1
+                elif comp_size == 2:
+                    size_label = "2-VP"
+                    two_count += 1
+                elif comp_size == 3:
+                    size_label = "3-VP"
+                    three_count += 1
+                else:
+                    size_label = f"{comp_size}-VP"
+                    other_count += 1
+            
+                edge_str = f"{vp_temp.edge}"
+                print(f"  [{idx:3d}]   {vp_i:<6d} {size_label:<10} {vp_temp.lambda_param:<10.6f} {dist:<10.6f} {edge_str:<20}")
+            
+            print(f"\n  Summary:")
+            print(f"    1-VP components: {single_count}")
+            print(f"    2-VP components: {two_count}")
+            print(f"    3-VP components: {three_count}")
+            if other_count > 0:
+                print(f"    Other: {other_count}")
+            
+            print(f"\n  To visualize any VP, use: filtered_vps_sorted[INDEX]")
+            print(f"  where INDEX is the value in brackets above.")
+            print("="*80)
         
         # Get target edge BEFORE migration (for visualization)
         current_edge = vp.edge
-        target_edge = switcher.get_best_target_edge_for_type1(vp_idx, tol=args.boundary_tol)
+        if args.use_vertex_collapse:
+            # For vertex-collapse, find target edge using _find_opposite_edge
+            target_vertex = switcher._identify_target_vertex(vp)
+            if target_vertex is not None:
+                target_edge = switcher._find_opposite_edge(current_edge, target_vertex)
+            else:
+                target_edge = None
+        else:
+            # Old method
+            target_edge = switcher.get_best_target_edge_for_type1(vp_idx, tol=args.boundary_tol)
+        
         if target_edge is None:
             print("WARNING: Could not determine target edge for visualization")
             target_edge = None
         
         # BEFORE state
         # Always initialize area_calc_before for comparison (even if only showing 'after')
-        print("\n  Initializing AreaCalculator BEFORE migration...")
+        if args.verbose:
+            print("\n  Initializing AreaCalculator BEFORE migration...")
         area_calc_before = AreaCalculator(mesh, partition, use_vp_based=True)
         
         if args.state in ['before', 'both']:
@@ -2130,8 +2301,13 @@ def run_visualization(args):
             plotter = pv.Plotter()
             
             # Get neighbors to highlight
-            neighbors_before = get_neighbors_from_triangle_segments(partition, vp_idx)
-            highlight_vps_before = [vp_idx] + neighbors_before
+            if args.use_vertex_collapse and 'highlight_vp_indices' in locals():
+                # Use component VPs (migrating VP + 2 neighbors)
+                highlight_vps_before = highlight_vp_indices
+            else:
+                # Old method: get neighbors from triangle segments
+                neighbors_before = get_neighbors_from_triangle_segments(partition, vp_idx)
+                highlight_vps_before = [vp_idx] + neighbors_before
             
             # Calculate camera focus for Type 1 (VP position)
             vp_pos = partition.evaluate_variable_point(vp_idx)
@@ -2150,7 +2326,8 @@ def run_visualization(args):
                 camera_focus=vp_pos if args.apply_zoom else None,
                 camera_zoom=args.zoom_factor if args.apply_zoom else None,
                 current_edge=current_edge,
-                target_edge=target_edge
+                target_edge=target_edge,
+                verbose=args.verbose
             )
             
             if args.save_before:
@@ -2170,49 +2347,82 @@ def run_visualization(args):
             print("="*60)
             
             old_edge = vp.edge
-            success = switcher.apply_type1_switch(vp_idx, tol=args.boundary_tol)
+            if args.use_vertex_collapse:
+                # Use new vertex-collapse strategy (component-based)
+                print(f"  Using vertex-collapse strategy for Component {component_idx}")
+                success = switcher.apply_type1_switch_v2(selected_component)
+                if not success:
+                    print("ERROR: Component migration failed!")
+                    return
+                
+                # Get new edge from migrated VP
+                new_edge = partition.variable_points[migrating_vp_idx].edge
+                print(f"✓ Component {component_idx} migrated successfully")
+                print(f"  Migrating VP {migrating_vp_idx} moved: {old_edge} → {new_edge}")
+            else:
+                # Old VP-based strategy
+                success = switcher.apply_type1_switch(vp_idx, tol=args.boundary_tol)
+                if not success:
+                    print("ERROR: Type 1 switch failed!")
+                    return
+                
+                new_edge = vp.edge
+                print(f"✓ VP {vp_idx} moved: {old_edge} → {new_edge}")
             
-            if not success:
-                print("ERROR: Type 1 switch failed!")
-                return
-            
-            new_edge = vp.edge
-            print(f"✓ VP {vp_idx} moved: {old_edge} → {new_edge}")
+            # Update edges for AFTER state visualization
+            # After migration, the old edge is now "current" (where it was)
+            # and the new edge is where it moved to
+            current_edge_after = old_edge  # Where it was before
+            target_edge_after = new_edge   # Where it is now
             
             # Rebuild
-            print("  Rebuilding triangle segments...")
+            if args.verbose:
+                print("  Rebuilding triangle segments...")
             partition.rebuild_triangle_segments_from_current_vps()
-            print("  Classifying segments...")
+            if args.verbose:
+                print("  Classifying segments...")
             switcher.classify_all_segments()
             
             # Re-initialize with VP-based categorization
-            print("  Re-initializing AreaCalculator (VP-based)...")
+            if args.verbose:
+                print("  Re-initializing AreaCalculator (VP-based)...")
             area_calc = AreaCalculator(mesh, partition, use_vp_based=True)
             area_calc_after = area_calc  # Alias for clarity
-            print("  Re-initializing SteinerHandler...")
+            if args.verbose:
+                print("  Re-initializing SteinerHandler...")
             steiner_handler = SteinerHandler(mesh, partition)
             
             # DEBUG SECTION 1: Compare categorization BEFORE vs AFTER
             debug_categorization_comparison(
-                mesh, partition, area_calc_before, area_calc_after, args.region
+                mesh, partition, area_calc_before, area_calc_after, args.region, verbose=args.verbose
             )
-            
+
             # DEBUG SECTION 2: Find orphaned triangles
-            orphan_info = debug_orphaned_triangles(mesh, partition, area_calc, args.region)
+            orphan_info = debug_orphaned_triangles(mesh, partition, area_calc, args.region, verbose=args.verbose)
             
-            # If orphaned triangles found, check if they're near the convergence target
-            if orphan_info['orphaned'] and convergence_info.get('target_pos') is not None:
-                target_pos = convergence_info['target_pos']
-                orphan_centroid = orphan_info.get('orphaned_centroid')
-                if orphan_centroid is not None:
-                    dist = np.linalg.norm(orphan_centroid - target_pos)
-                    print(f"\n  ★ Distance from orphaned centroid to convergence target vertex: {dist:.6f}")
-                    if dist < 0.05:
-                        print(f"    → Orphaned triangles ARE near the target vertex!")
-                        print(f"    → This confirms they are 'left behind' by the migration.")
+            # Handle different return formats (verbose vs non-verbose)
+            if isinstance(orphan_info.get('orphaned'), list):
+                # Verbose mode: 'orphaned' is a list
+                orphan_count = len(orphan_info['orphaned'])
+                has_orphaned = orphan_count > 0
+            else:
+                # Non-verbose mode: 'orphaned' is a boolean, 'count' exists
+                has_orphaned = orphan_info.get('orphaned', False)
+                orphan_count = orphan_info.get('count', 0)
             
+            if has_orphaned:
+                print(f"⚠ Found {orphan_count} orphaned triangle(s)")
+                if args.verbose and convergence_info.get('target_pos') is not None:
+                    target_pos = convergence_info['target_pos']
+                    orphan_centroid = orphan_info.get('orphaned_centroid')
+                    if orphan_centroid is not None:
+                        dist = np.linalg.norm(orphan_centroid - target_pos)
+                        print(f"  Distance from orphaned centroid to convergence target vertex: {dist:.6f}")
+                        if dist < 0.05:
+                            print(f"  → Orphaned triangles ARE near the target vertex!")
+
             # DEBUG: Analyze what's happening around the migrated VP (existing debug)
-            debug_migrated_vp(mesh, partition, mesh_topology, vp_idx, args.region)
+            debug_migrated_vp(mesh, partition, mesh_topology, vp_idx, args.region, verbose=args.verbose)
             
             # AFTER state
             print("\n" + "="*60)
@@ -2240,8 +2450,27 @@ def run_visualization(args):
             plotter = pv.Plotter()
             
             # Get neighbors after migration to highlight
-            neighbors_after = get_neighbors_from_triangle_segments(partition, vp_idx)
-            highlight_vps_after = [vp_idx] + neighbors_after
+            if args.use_vertex_collapse:
+                # For vertex-collapse, use the same VPs we identified before migration
+                # (migrating VP + 2 neighbors) - they're still the same VPs, just moved
+                if migrating_vp_idx is not None and left_neighbor is not None and right_neighbor is not None:
+                    highlight_vps_after = [migrating_vp_idx, left_neighbor, right_neighbor]
+                elif 'highlight_vp_indices' in locals():
+                    highlight_vps_after = highlight_vp_indices
+                else:
+                    # Last resort: try to get from component
+                    if selected_component is not None:
+                        highlight_vps_after = selected_component['vp_indices']
+                    else:
+                        highlight_vps_after = [vp_idx]
+                
+                print(f"  Highlighting VPs after migration: {highlight_vps_after}")
+                print(f"    Expected: [migrating VP {migrating_vp_idx}, neighbor 1 {left_neighbor}, neighbor 2 {right_neighbor}]")
+            else:
+                # Old method: get neighbors from triangle segments
+                neighbors_after = get_neighbors_from_triangle_segments(partition, vp_idx)
+                highlight_vps_after = [vp_idx] + neighbors_after
+                print(f"  Highlighting VPs after migration: {highlight_vps_after}")
             
             # Calculate new VP position for camera focus
             new_vp_pos = partition.evaluate_variable_point(vp_idx)
@@ -2259,8 +2488,9 @@ def run_visualization(args):
                 highlight_vp_indices=highlight_vps_after if args.show_vps else None,
                 camera_focus=new_vp_pos if args.apply_zoom else None,
                 camera_zoom=args.zoom_factor if args.apply_zoom else None,
-                current_edge=current_edge,
-                target_edge=target_edge
+                current_edge=current_edge_after,  # Old edge (where VP was)
+                target_edge=target_edge_after,    # New edge (where VP is now)
+                verbose=args.verbose
             )
             
             if args.save_after:
@@ -2322,7 +2552,8 @@ def run_visualization(args):
                 target_only=args.target_only,
                 highlight_vp_indices=highlight_vps_before if args.show_vps else None,
                 camera_focus=steiner_pos if args.apply_zoom else None,
-                camera_zoom=args.zoom_factor if args.apply_zoom else None
+                camera_zoom=args.zoom_factor if args.apply_zoom else None,
+                verbose=args.verbose
             )
             
             if args.save_before:
@@ -2414,7 +2645,8 @@ def run_visualization(args):
                 target_only=args.target_only,
                 highlight_vp_indices=new_tp_vps if args.show_vps else None,
                 camera_focus=new_steiner_pos if args.apply_zoom and new_steiner_pos is not None else None,
-                camera_zoom=args.zoom_factor if args.apply_zoom else None
+                camera_zoom=args.zoom_factor if args.apply_zoom else None,
+                verbose=args.verbose
             )
             
             if args.save_after:
@@ -2463,6 +2695,13 @@ def main():
                        help='Path to save BEFORE state image')
     parser.add_argument('--save-after', type=str,
                        help='Path to save AFTER state image')
+    parser.add_argument('--verbose', action='store_true',
+                       help='Show detailed debug output (default: False)')
+    parser.add_argument('--use-vertex-collapse', action='store_true',
+                       help='Use new vertex-collapse strategy for Type 1 migration (default: False)')
+    parser.add_argument('--component-index', type=int, default=None,
+                       help='Index of component to migrate (only used with --use-vertex-collapse). '
+                            'If not specified, shows all components and uses component 0.')
     
     args = parser.parse_args()
     

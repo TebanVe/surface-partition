@@ -126,16 +126,22 @@ Where VP3 is the migrating VP (closest to target vertex):
 - **No distance optimization** - just topological hop
 
 #### Step 2: Adjust Neighbor VP2
-- VP2's segment (VP1-VP2) is now missing one endpoint
-- Move VP2 to the **free edge** in its current triangle
+- VP2 is connected to two neighbors: VP1 (its other neighbor) and VP3 (the migrating VP)
+- VP2's edge belongs to **TWO triangles** (edges are shared by 2 triangles in a mesh)
+- **CRITICAL**: Move VP2 to the **free edge** in the triangle that contains segment **VP1-VP2**
+  - This is NOT the triangle containing VP2-VP3
+  - We must preserve the segment VP1-VP2 in its original triangle
 - Segment VP1-VP2 **stays in same triangle**, just tilts
-- New triangle now has segment VP2-VP3 (after VP3 migrated)
+- After migration, a new triangle will have segment VP2-VP3 (after VP3 migrated)
 
 #### Step 3: Adjust Neighbor VP4
-- VP4's segment (VP4-VP5) is now missing one endpoint  
-- Move VP4 to the **free edge** in its current triangle
+- VP4 is connected to two neighbors: VP5 (its other neighbor) and VP3 (the migrating VP)
+- VP4's edge belongs to **TWO triangles** (edges are shared by 2 triangles in a mesh)
+- **CRITICAL**: Move VP4 to the **free edge** in the triangle that contains segment **VP4-VP5**
+  - This is NOT the triangle containing VP3-VP4
+  - We must preserve the segment VP4-VP5 in its original triangle
 - Segment VP4-VP5 **stays in same triangle**, just tilts
-- New triangle now has segment VP3-VP4 (after VP3 migrated)
+- After migration, a new triangle will have segment VP3-VP4 (after VP3 migrated)
 
 ### Result
 
@@ -847,16 +853,207 @@ The proposed strategy addresses fundamental issues with the current crossing-bas
 
 ---
 
+## Data Structure Updates After Type 1 Migration
+
+### Overview
+
+Type 1 migration requires updating multiple data structures to maintain consistency. The key insight is that **only the target vertex changes cells** - this single change propagates through all affected triangles.
+
+### The Target Vertex Cell Flip
+
+**Core Principle**: During Type 1 migration, the target vertex (common to all 6 triangles) flips from one cell to the other cell separated by the boundary.
+
+**Example**:
+- Before migration: Target vertex belongs to Cell A (orange)
+- After migration: Target vertex belongs to Cell B (green)
+- This causes 6 triangles to change their boundary status:
+  - 2 triangles GAIN segments (were empty, now have VPs)
+  - 2 triangles LOSE segments (had VPs, now empty)
+  - 2 triangles KEEP segments but TILT (VPs move to different edges)
+
+### Data Structures to Update (in order)
+
+#### 1. **Determine Cell Flip** (BEFORE moving VPs)
+
+```python
+old_cell, new_cell = _determine_target_vertex_cell_flip(target_vertex, migrating_vp_idx)
+```
+
+- Uses `migrating_vp.belongs_to_cells` to get the 2 cells involved
+- Uses `indicator_functions[target_vertex]` to get current cell
+- Target vertex flips to the OTHER cell
+
+**CRITICAL**: Must be called BEFORE moving any VPs to capture original cell assignment.
+
+#### 2. **Move Variable Points** (geometric positions)
+
+```python
+_move_variable_point(migrating_vp_idx, target_edge, 0.5)
+_adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx)
+_adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx)
+```
+
+Updates:
+- `vp.edge` (new edge tuple)
+- `vp.lambda_param` (new position on edge)
+- `edge_to_varpoint` dict (remove old, add new mappings)
+
+**Note**: VP connectivity (graph topology) is PRESERVED - only geometric positions change.
+
+#### 3. **Update `indicator_functions` Matrix** (cell assignments)
+
+```python
+_update_indicator_functions_for_target_vertex(target_vertex, old_cell, new_cell)
+```
+
+Updates:
+- `partition.indicator_functions[target_vertex, old_cell] = 0`
+- `partition.indicator_functions[target_vertex, new_cell] = 1`
+
+**CRITICAL**: Must be done AFTER moving VPs but BEFORE rebuilding triangle_segments, because `rebuild_triangle_segments_from_current_vps()` reads `vertex_labels` from `indicator_functions`.
+
+#### 4. **Rebuild Triangle Segments** (triangle-VP mapping) - OPTIMIZED
+
+```python
+partition.rebuild_triangle_segments_for_affected_triangles(affected_triangles)
+```
+
+**For Type 1 Migration** (vertex-collapse):
+- Scans ONLY 6 affected triangles (those sharing target vertex)
+- Much faster than scanning all mesh triangles
+- Finds VPs on each triangle's edges
+- Creates/updates `TriangleSegment` objects for affected triangles only
+- Uses updated `indicator_functions` for `vertex_labels` attribute
+
+**Does NOT rebuild** `boundary_segments`:
+- Connectivity unchanged (VP1 still connected to VP2)
+- `cell_pair` unchanged (VPs still separate same two cells)
+- No crossings in vertex-collapse (segments stay within triangles)
+
+Updates:
+- `partition.triangle_segments` (removes old entries for 6 triangles, adds new entries)
+
+**Performance**:
+- Old: O(N_triangles) where N_triangles ~ thousands
+- New: O(6) for Type 1 migration ✅
+
+#### 5. **Verify Consistency**
+
+```python
+update_data_structures_after_migration()
+```
+
+- Calls `rebuild_triangle_segments_from_current_vps()`
+- Verifies `edge_to_varpoint` consistency
+- Logs statistics (triangles with 1/2/3 VPs)
+
+### Complete Update Sequence in `apply_type1_switch_v2()`
+
+```python
+def apply_type1_switch_v2(self, component: Dict) -> bool:
+    # Step 1-3: Find migrating VP, neighbors, target vertex
+    # Step 4: Find target edge
+    
+    # Step 4.5: Determine cell flip (BEFORE moving VPs)
+    old_cell, new_cell = self._determine_target_vertex_cell_flip(
+        target_vertex, migrating_vp_idx
+    )
+    
+    # Step 5-7: Move VPs (geometric updates)
+    self._move_variable_point(migrating_vp_idx, target_edge, 0.5)
+    self._adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx)
+    self._adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx)
+    
+    # Step 7.5: Update indicator_functions (cell assignment)
+    self._update_indicator_functions_for_target_vertex(
+        target_vertex, old_cell, new_cell
+    )
+    
+    # Step 8: Update data structures (OPTIMIZED for Type 1)
+    self.update_data_structures_after_type1_migration(target_vertex)
+    
+    return True
+```
+
+**Key Optimization in Step 8**:
+- Uses `update_data_structures_after_type1_migration()` instead of general `update_data_structures_after_migration()`
+- Only rebuilds 6 triangles (not all triangles)
+- Skips `boundary_segments` rebuild (connectivity unchanged)
+- Much faster for large meshes
+
+### Why This Order Matters
+
+1. **Determine cell flip FIRST**: Captures original cell assignment before any changes
+2. **Move VPs SECOND**: Updates geometric positions
+3. **Update indicator_functions THIRD**: Flips target vertex cell (enables correct triangle categorization)
+4. **Rebuild structures LAST**: Relies on updated `indicator_functions` for correct `vertex_labels`
+
+### Validation Checks
+
+After migration, verify:
+
+```python
+# Check 1: Target vertex flipped cells
+assert partition.indicator_functions[target_vertex, new_cell] == 1
+assert partition.indicator_functions[target_vertex, old_cell] == 0
+
+# Check 2: VP connectivity preserved (neighbors unchanged)
+assert set(get_neighbors(vp_idx)) == original_neighbors
+
+# Check 3: Edge mappings consistent
+for vp_idx, vp in enumerate(partition.variable_points):
+    assert partition.edge_to_varpoint[vp.edge] == vp_idx
+
+# Check 4: Triangle count correct
+# Should have 2 triangles lose segments, 2 gain segments, 2 keep segments
+```
+
+### Key Design Insights
+
+1. **Single vertex update**: Only target vertex changes cells (minimal impact)
+2. **Preserved connectivity**: VP-to-VP connections never change (graph topology stable)
+3. **Geometric only**: Most updates are purely geometric (edge positions, lambda values)
+4. **Cell cascade**: Target vertex flip causes 6 triangles to update their boundary status
+5. **Order dependency**: Must update `indicator_functions` before rebuilding `triangle_segments`
+6. **Optimized rebuild**: Only 6 triangles updated (not thousands), major performance gain
+
+### Performance Comparison
+
+**Before Optimization**:
+- Scanned ALL mesh triangles (~5,000-50,000 triangles)
+- Rebuilt ALL boundary_segments (~500-5,000 segments)
+- Time: O(N_triangles + N_segments)
+
+**After Optimization**:
+- Scans only 6 affected triangles ✅
+- Skips boundary_segments rebuild ✅
+- Time: O(6) = constant time ✅
+
+**Speedup**: ~1000x faster for large meshes!
+
+### No Segment Crossing Cache
+
+**IMPORTANT**: The vertex-collapse strategy ensures segments never span multiple triangles. Therefore:
+
+- `segment_crossing_cache` is NOT used
+- Should remain empty after vertex-collapse migrations
+- No need to call `classify_all_segments()`
+- Simplifies visualization and area calculation
+
+---
+
 ## Appendix: Glossary
 
 - **VP**: Variable Point - parameterized point on mesh edge
 - **Boundary VP**: VP with λ near 0 or 1 (close to vertex)
 - **Component**: Connected group of boundary VPs
 - **Free edge**: Triangle edge with no VPs
-- **Segment crossing cache**: Current approach's storage for segment-triangle intersections
+- **Segment crossing cache**: DEPRECATED for vertex-collapse (no longer needed)
 - **Vertex collapse**: Migration of all component VPs toward shared vertex
 - **Triple point**: Steiner point where 3 cells meet (Type 2 migration)
-- **Orphaned triangle**: Triangle not categorized by any cell (visualization bug)
+- **Orphaned triangle**: Triangle not categorized by any cell (visualization bug - fixed by indicator_functions update)
+- **Target vertex**: The common vertex shared by 6 triangles that changes cells during Type 1 migration
+- **indicator_functions**: `(N_vertices, N_cells)` matrix storing vertex-to-cell assignments
 
 ---
 

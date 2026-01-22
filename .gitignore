@@ -41,6 +41,7 @@ examples/generate_optimization_report.py
 examples/test_fem_validation.py
 examples/test_interpolation_methods.py
 examples/test_area_optimization.py
+examples/test_stage0_component_analysis.py
 src/core/interpolation_improved.py 
 docs/
 auxiliary/
