@@ -245,14 +245,16 @@ def compute_triple_point_cell_portion(
     polygons = []
     
     # Polygon 1: Void interior wedge (Steiner + two VPs)
-    void_wedge = np.array([steiner_pos, vp1_pos, vp2_pos])
+    # REVERSED vertex order to make normal point outward
+    void_wedge = np.array([steiner_pos, vp2_pos, vp1_pos])
     polygons.append(void_wedge)
     
     # Polygon 2: Corner triangle (if cell has a mesh vertex)
     if cell_idx in triple_point.cell_to_mesh_vertex:
         mesh_vertex_idx = triple_point.cell_to_mesh_vertex[cell_idx]
         mesh_vertex_pos = mesh.vertices[mesh_vertex_idx]
-        corner_triangle = np.array([mesh_vertex_pos, vp1_pos, vp2_pos])
+        # REVERSED vertex order to make normal point outward
+        corner_triangle = np.array([mesh_vertex_pos, vp2_pos, vp1_pos])
         polygons.append(corner_triangle)
     
     return polygons
@@ -267,7 +269,7 @@ def render_single_region_simple(
     cell_idx: int,
     color: str,
     opacity: float = 1.0,
-    backface_culling: bool = True,
+    backface_culling: bool = False,
 ):
     """
     Render ONE region with precise boundaries (simplified for vertex-collapse).
@@ -278,7 +280,7 @@ def render_single_region_simple(
     - Faster, cleaner code for vertex-collapse strategy
     
     Args:
-        backface_culling: If True, hide back-facing triangles (clearer visualization)
+        backface_culling: If True, hide back-facing triangles (default: False to match Type 1)
     """
     # Pre-index triangle_segments for O(1) lookup
     tri_idx_to_segment = {}
@@ -345,12 +347,12 @@ def render_regions(
     steiner_handler: SteinerHandler,
     target_region: Optional[int] = None,
     target_color: str = '#FF8C42',  # Bright warm orange
-    backface_culling: bool = True,
+    backface_culling: bool = False,
 ):
     """Render all regions with precise boundaries (simplified for vertex-collapse).
     
     Args:
-        backface_culling: If True, hide back-facing triangles for clearer visualization
+        backface_culling: If True, hide back-facing triangles (default: False to match Type 1)
     """
     # Warm, vibrant color palette
     warm_palette = [
@@ -408,7 +410,7 @@ def add_steiner_visualization(
         
         # Add Steiner point as red sphere
         sphere = pv.Sphere(radius=steiner_size, center=steiner_pt)
-        plotter.add_mesh(sphere, color='red', opacity=0.9)
+        plotter.add_mesh(sphere, color='red', opacity=1.0)
         
         # Get VP positions for void triangle
         vp_positions = []
@@ -423,12 +425,7 @@ def add_steiner_visualization(
                 p1 = vp_positions[i]
                 p2 = vp_positions[(i + 1) % 3]
                 line = pv.Line(p1, p2)
-                plotter.add_mesh(line, color='cyan', line_width=3, opacity=0.8)
-            
-            # Draw Steiner tree branches (magenta)
-            for vp_pos in vp_positions:
-                line = pv.Line(steiner_pt, vp_pos)
-                plotter.add_mesh(line, color='magenta', line_width=2, opacity=0.7)
+                plotter.add_mesh(line, color='cyan', line_width=2, opacity=0.7)
 
 
 def add_vp_visualization(
@@ -645,7 +642,7 @@ def run_visualization(args):
     render_regions(
         plotter_before, mesh, partition, area_calc, steiner_handler,
         target_region=None,  # No special highlighting for Type 2
-        backface_culling=not args.show_backface
+        backface_culling=args.enable_backface_culling
     )
     
     # Add Steiner visualization if requested
@@ -731,8 +728,8 @@ def main():
                        help='Show variable points as spheres')
     parser.add_argument('--show-steiner', action='store_true',
                        help='Show Steiner points and void triangles')
-    parser.add_argument('--show-backface', action='store_true',
-                       help='Show back-facing triangles (default: hidden for clarity)')
+    parser.add_argument('--enable-backface-culling', action='store_true',
+                       help='Hide back-facing triangles (default: show all faces like Type 1)')
     
     # Camera/zoom options
     parser.add_argument('--apply-zoom', action='store_true',

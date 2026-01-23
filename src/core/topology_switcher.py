@@ -2539,8 +2539,73 @@ class TopologySwitcher:
                 return tri_seg.triangle_idx
         return None
     
+    def _compute_distance_to_vertex(self, vp_idx: int, target_vertex: int) -> float:
+        """
+        Compute distance of VP to target vertex along its edge.
+        
+        Distance is measured as the lambda parameter distance, where:
+        - λ=1 means at edge[0], λ=0 means at edge[1]
+        - Distance to vertex is min(λ, 1-λ) when vertex is an endpoint
+        
+        Args:
+            vp_idx: Variable point index
+            target_vertex: Vertex index to compute distance to
+            
+        Returns:
+            Distance in [0, 0.5] range (0 = at vertex, 0.5 = at midpoint)
+        """
+        vp = self.partition.variable_points[vp_idx]
+        edge = vp.edge
+        lambda_param = vp.lambda_param
+        
+        # Determine which endpoint is the target vertex
+        if edge[0] == target_vertex:
+            # λ=1 → at edge[0], so distance from target = 1 - lambda_param
+            distance = 1.0 - lambda_param
+        elif edge[1] == target_vertex:
+            # λ=0 → at edge[1], so distance from target = lambda_param
+            distance = lambda_param
+        else:
+            # Target vertex not on this edge (shouldn't happen for boundary VPs approaching target)
+            self.logger.warning(f"VP {vp_idx} on edge {edge} does not contain target vertex {target_vertex}")
+            return 0.5
+        
+        return distance
+    
+    def _compute_lambda_for_distance(self, new_edge: Tuple[int, int], 
+                                      target_vertex: int, 
+                                      target_distance: float) -> float:
+        """
+        Compute lambda parameter that places VP at target_distance from target_vertex.
+        
+        Args:
+            new_edge: The new edge (normalized)
+            target_vertex: The vertex to maintain distance to
+            target_distance: Desired distance in [0, 0.5] range
+            
+        Returns:
+            Lambda value in [0, 1] that achieves target_distance
+        """
+        # Clamp target_distance to valid range
+        target_distance = max(0.0, min(0.5, target_distance))
+        
+        # Determine which endpoint is the target vertex
+        if new_edge[0] == target_vertex:
+            # λ=1 → at edge[0], so we want: 1 - lambda = target_distance
+            # Therefore: lambda = 1 - target_distance
+            return 1.0 - target_distance
+        elif new_edge[1] == target_vertex:
+            # λ=0 → at edge[1], so we want: lambda = target_distance
+            return target_distance
+        else:
+            # Target vertex not on new edge (shouldn't happen)
+            self.logger.warning(f"New edge {new_edge} does not contain target vertex {target_vertex}, using midpoint")
+            return 0.5
+    
     def _adjust_neighbor_to_free_edge(self, neighbor_vp_idx: int, 
-                                      migrating_vp_idx: int) -> bool:
+                                      migrating_vp_idx: int,
+                                      target_vertex: Optional[int] = None,
+                                      target_distance: Optional[float] = None) -> bool:
         """
         Adjust neighbor VP to free edge in the triangle containing its segment with its OTHER neighbor.
         
@@ -2556,10 +2621,15 @@ class TopologySwitcher:
         Args:
             neighbor_vp_idx: VP to adjust (e.g., VP2)
             migrating_vp_idx: The migrating VP (e.g., VP3) - used to identify the other neighbor
+            target_vertex: The vertex to maintain distance to (optional)
+            target_distance: Desired distance from target_vertex (optional, default 0.5)
             
         Returns:
             True if successful, False otherwise
         """
+        # Use midpoint by default if no distance specified
+        if target_distance is None:
+            target_distance = 0.5
         # Step 1: Find the other neighbor of neighbor_vp (the one that's NOT migrating_vp)
         neighbor_vp_neighbors = []
         for segment in self.partition.boundary_segments:
@@ -2611,9 +2681,16 @@ class TopologySwitcher:
             # Skip the neighbor's current edge and any edge with a VP
             if edge_norm != tuple(sorted(neighbor_vp.edge)) and edge_norm not in self.partition.edge_to_varpoint:
                 # Found free edge in the correct triangle!
-                self._move_variable_point(neighbor_vp_idx, edge_norm, 0.5)
+                # Compute lambda to preserve distance to target vertex
+                if target_vertex is not None:
+                    lambda_param = self._compute_lambda_for_distance(edge_norm, target_vertex, target_distance)
+                else:
+                    lambda_param = 0.5  # Default to midpoint if no target vertex specified
+                
+                self._move_variable_point(neighbor_vp_idx, edge_norm, lambda_param)
                 self.logger.debug(f"Adjusted neighbor VP {neighbor_vp_idx} to free edge {edge_norm} "
-                                f"in triangle {target_triangle} (contains segment VP{other_neighbor}-VP{neighbor_vp_idx})")
+                                f"in triangle {target_triangle} (contains segment VP{other_neighbor}-VP{neighbor_vp_idx}) "
+                                f"with λ={lambda_param:.6f} (distance to target: {target_distance:.6f})")
                 return True
         
         self.logger.warning(f"Neighbor VP {neighbor_vp_idx}: No free edge found in triangle {target_triangle} "
@@ -2782,7 +2859,8 @@ class TopologySwitcher:
                          f"{len(self.partition.triangle_segments)} triangle segments, "
                          f"{len(self.partition.boundary_segments)} boundary segments")
     
-    def apply_type1_switch_v2(self, component: Dict) -> bool:
+    def apply_type1_switch_v2(self, component: Dict, 
+                              distance_preservation: str = 'preserve') -> bool:
         """
         Apply Type 1 switch to entire component using vertex-collapse strategy.
         
@@ -2796,6 +2874,10 @@ class TopologySwitcher:
         
         Args:
             component: Component info dict from analyze_component() with 'vp_indices' field
+            distance_preservation: Strategy for setting lambda after migration:
+                - 'preserve': Maintain original distance to target vertex (default)
+                - 'midpoint': Place at midpoint (λ=0.5)
+                - float as string: Use specific distance (e.g., '0.1' for close to target)
             
         Returns:
             True if successful, False otherwise
@@ -2848,17 +2930,41 @@ class TopologySwitcher:
             self.logger.error(f"Failed to determine cell flip: {e}")
             return False
         
-        # Step 5: Move migrating VP to target edge
-        self._move_variable_point(migrating_vp_idx, target_edge, 0.5)
-        self.logger.debug(f"VP {migrating_vp_idx}: Moved to edge {target_edge}")
+        # Step 4.6: Calculate distances to target vertex BEFORE migration
+        # This preserves the VP positions relative to target vertex
+        if distance_preservation == 'preserve':
+            dist_migrating = self._compute_distance_to_vertex(migrating_vp_idx, target_vertex)
+            dist_left = self._compute_distance_to_vertex(left_neighbor, target_vertex)
+            dist_right = self._compute_distance_to_vertex(right_neighbor, target_vertex)
+            self.logger.debug(f"Preserving distances to target vertex {target_vertex}: "
+                            f"migrating={dist_migrating:.6f}, left={dist_left:.6f}, right={dist_right:.6f}")
+        elif distance_preservation == 'midpoint':
+            dist_migrating = dist_left = dist_right = 0.5
+            self.logger.debug(f"Using midpoint placement (λ=0.5) for all VPs")
+        else:
+            # Custom distance provided as string
+            try:
+                custom_dist = float(distance_preservation)
+                dist_migrating = dist_left = dist_right = custom_dist
+                self.logger.debug(f"Using custom distance {custom_dist:.6f} for all VPs")
+            except ValueError:
+                self.logger.warning(f"Invalid distance_preservation value '{distance_preservation}', using midpoint")
+                dist_migrating = dist_left = dist_right = 0.5
+        
+        # Step 5: Move migrating VP to target edge with preserved distance
+        lambda_migrating = self._compute_lambda_for_distance(target_edge, target_vertex, dist_migrating)
+        self._move_variable_point(migrating_vp_idx, target_edge, lambda_migrating)
+        self.logger.debug(f"VP {migrating_vp_idx}: Moved to edge {target_edge} with λ={lambda_migrating:.6f}")
         
         # Step 6: Adjust left neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
-        if not self._adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx):
+        if not self._adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx, 
+                                                  target_vertex, dist_left):
             self.logger.error(f"Failed to adjust left neighbor {left_neighbor}")
             return False
         
         # Step 7: Adjust right neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
-        if not self._adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx):
+        if not self._adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx,
+                                                  target_vertex, dist_right):
             self.logger.error(f"Failed to adjust right neighbor {right_neighbor}")
             return False
         

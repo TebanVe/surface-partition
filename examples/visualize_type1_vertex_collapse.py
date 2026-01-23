@@ -298,6 +298,70 @@ def compute_cell_portion_in_triangle_simple(
     return _order_polygon_vertices(np.array(all_points), mesh, tri_idx)
 
 
+def compute_triple_point_cell_portion(
+    mesh: TriMesh,
+    partition: PartitionContour,
+    steiner_handler: SteinerHandler,
+    tri_idx: int,
+    cell_idx: int
+) -> Optional[List[np.ndarray]]:
+    """
+    Compute the portion of a triple point triangle belonging to cell_idx.
+    
+    Returns BOTH void interior AND corner region.
+    
+    Returns:
+        List of polygons (numpy arrays) or None if not found:
+        - [0]: Void interior wedge (VP1, VP2, steiner)
+        - [1]: Corner triangle (mesh_vertex, VP1, VP2) [if exists]
+    """
+    # Find the triple point for this triangle
+    triple_point = None
+    for tp in steiner_handler.triple_points:
+        if tp.triangle_idx == tri_idx:
+            triple_point = tp
+            break
+    
+    if not triple_point or cell_idx not in triple_point.cell_indices:
+        return None
+    
+    # Compute Steiner point
+    steiner_pos = triple_point.compute_steiner_point()
+    
+    # Get the two VPs that bound this cell (from triple point mapping)
+    if cell_idx not in triple_point.cell_to_varpoint_pair:
+        return None
+    
+    vp_idx1, vp_idx2 = triple_point.cell_to_varpoint_pair[cell_idx]
+    vp_pos1 = partition.evaluate_variable_point(vp_idx1)
+    vp_pos2 = partition.evaluate_variable_point(vp_idx2)
+    
+    # POLYGON 1: Void interior wedge
+    # The cell's portion of the void is bounded by the two VPs and Steiner point
+    void_wedge = np.array([
+        vp_pos1,
+        vp_pos2,
+        steiner_pos
+    ])
+    
+    # POLYGON 2: Corner triangle (if this cell has a mesh vertex)
+    polygons = [void_wedge]
+    
+    if cell_idx in triple_point.cell_to_mesh_vertex:
+        mesh_vertex_idx = triple_point.cell_to_mesh_vertex[cell_idx]
+        vertex_pos = mesh.vertices[mesh_vertex_idx]
+        
+        # Corner triangle: mesh vertex to the two adjacent VPs
+        corner_triangle = np.array([
+            vertex_pos,
+            vp_pos1,
+            vp_pos2
+        ])
+        polygons.append(corner_triangle)
+    
+    return polygons
+
+
 def render_single_region_simple(
     plotter: pv.Plotter,
     mesh: TriMesh,
@@ -313,7 +377,7 @@ def render_single_region_simple(
     
     SIMPLIFIED VERSION:
     - Uses compute_cell_portion_in_triangle_simple (no crossing cache)
-    - Skips triple point handling for now (can add later if needed)
+    - Includes triple point rendering (Steiner subdivisions)
     - Faster, cleaner code for vertex-collapse strategy
     """
     # Pre-index triangle_segments for O(1) lookup
@@ -347,6 +411,22 @@ def render_single_region_simple(
             face_indices = [n_verts] + list(range(vertex_offset, vertex_offset + n_verts))
             all_faces.extend(face_indices)
             vertex_offset += n_verts
+    
+    # Triple point triangles (Steiner subdivisions)
+    # Handles void interior wedge + corner triangle for each cell
+    for tp in steiner_handler.triple_points:
+        if cell_idx in tp.cell_indices:
+            polygons = compute_triple_point_cell_portion(
+                mesh, partition, steiner_handler, tp.triangle_idx, cell_idx
+            )
+            if polygons is not None:
+                # Add all polygons (void interior + corner)
+                for poly_vertices in polygons:
+                    n_verts = len(poly_vertices)
+                    all_vertices.append(poly_vertices)
+                    face_indices = [n_verts] + list(range(vertex_offset, vertex_offset + n_verts))
+                    all_faces.extend(face_indices)
+                    vertex_offset += n_verts
     
     # Create single mesh from all polygons
     if all_vertices:
@@ -804,8 +884,11 @@ def run_visualization(args):
     print(f"Migrating component {args.component_index} (VP {migrating_vp_idx})...")
     print()
     
-    # Perform the migration
-    success = switcher.apply_type1_switch_v2(selected_component)
+    # Perform the migration with distance preservation
+    success = switcher.apply_type1_switch_v2(
+        selected_component, 
+        distance_preservation=args.migration_distance
+    )
     
     if not success:
         print("❌ ERROR: Migration failed!")
@@ -850,8 +933,11 @@ def run_visualization(args):
     
     print(f"VP positions after migration:")
     print(f"  Migrating VP {migrating_vp_idx}: {current_edge} → {new_edge_migrating}")
+    print(f"    Lambda: {migrating_vp.lambda_param:.6f} → {migrating_vp_after.lambda_param:.6f}")
     print(f"  Left neighbor {left_neighbor}: edge → {new_edge_left}")
+    print(f"    Lambda: {left_neighbor_vp_after.lambda_param:.6f}")
     print(f"  Right neighbor {right_neighbor}: edge → {new_edge_right}")
+    print(f"    Lambda: {right_neighbor_vp_after.lambda_param:.6f}")
     print()
     
     # Create plotter for AFTER
@@ -906,6 +992,9 @@ def main():
                        help='Component index to migrate (default: 0)')
     parser.add_argument('--boundary-tol', type=float, default=0.1,
                        help='Boundary tolerance for VP detection (default: 0.1)')
+    parser.add_argument('--migration-distance', default='preserve',
+                       help='Distance preservation strategy: "preserve" (maintain original distance), '
+                            '"midpoint" (λ=0.5), or float value (e.g., "0.1" for close to target) (default: preserve)')
     
     # Visualization options
     parser.add_argument('--state', choices=['before', 'after', 'both'], default='before',
