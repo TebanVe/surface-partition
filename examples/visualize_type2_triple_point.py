@@ -408,9 +408,9 @@ def add_steiner_visualization(
         # Compute Steiner point
         steiner_pt = tp.compute_steiner_point()
         
-        # Add Steiner point as red sphere
+        # Add Steiner point as orange sphere
         sphere = pv.Sphere(radius=steiner_size, center=steiner_pt)
-        plotter.add_mesh(sphere, color='red', opacity=1.0)
+        plotter.add_mesh(sphere, color='orange', opacity=1.0)
         
         # Get VP positions for void triangle
         vp_positions = []
@@ -612,6 +612,98 @@ def run_visualization(args):
     print()
     
     # ========================================================================
+    # TYPE 2 MIGRATION ANALYSIS (New Strategy)
+    # ========================================================================
+    
+    print("="*80)
+    print("TYPE 2 MIGRATION ANALYSIS (Topological VP Selection)")
+    print("="*80)
+    print()
+    
+    # Perform migration analysis using new strategy
+    migration_result = switcher.apply_type2_switch_v3(steiner_handler, args.triple_point_index)
+    
+    if not migration_result['success']:
+        print(f"❌ ERROR: Migration analysis failed: {migration_result.get('error', 'Unknown error')}")
+        return
+    
+    if 'warning' in migration_result:
+        print(f"⚠️  WARNING: {migration_result['warning']}")
+        print()
+    
+    # Display migration analysis
+    print("Migration Analysis Results:")
+    print(f"  Triple triangle: {migration_result['triple_triangle_idx']}")
+    print(f"  Target triangle: {migration_result['target_triangle_idx']}")
+    print(f"  Shared edge (Steiner approaching): {migration_result['shared_edge']}")
+    print(f"  Target edge (free edge in target triangle): {migration_result['target_edge']}")
+    print()
+    
+    print("VP Classification:")
+    print(f"  Anchor VP: {migration_result['anchor_vp_idx']} (on shared edge)")
+    print(f"  Migrating VP: {migration_result['migrating_vp_idx']} (will move to target edge)")
+    print(f"    Edge: {migration_result['migrating_vp_edge']}")
+    if migration_result['shared_vertex'] is not None:
+        print(f"    Shared vertex with target edge: {migration_result['shared_vertex']}")
+    print(f"  Non-migrating VP: {migration_result['non_migrating_vp_idx']} (stays in place)")
+    print(f"    Edge: {migration_result['non_migrating_vp_edge']}")
+    print()
+    
+    print("Connectivity Analysis:")
+    for vp_idx, info in migration_result['connectivity_analysis'].items():
+        print(f"  VP {vp_idx}:")
+        print(f"    Edge: {info['edge']}")
+        print(f"    Shared vertices with target edge: {info['shared_vertices']} (count={info['num_shared']})")
+    print()
+    
+    # Find outer neighbors of migrating VP (two levels deep)
+    migrating_vp_idx = migration_result['migrating_vp_idx']
+    triple_vp_set = set(selected_tp.var_point_indices)
+    
+    def get_neighbors(vp_idx):
+        """Get all neighbors of a VP via boundary_segments."""
+        neighbors = []
+        for seg in partition.boundary_segments:
+            if vp_idx == seg.vp_idx_1:
+                neighbors.append(seg.vp_idx_2)
+            elif vp_idx == seg.vp_idx_2:
+                neighbors.append(seg.vp_idx_1)
+        return neighbors
+    
+    # Level 1: Direct outer neighbor (excluding triple triangle VPs)
+    all_neighbors = get_neighbors(migrating_vp_idx)
+    direct_outer_neighbors = [vp for vp in all_neighbors if vp not in triple_vp_set]
+    
+    # Level 2: Neighbors of the direct outer neighbor (excluding migrating VP)
+    second_level_neighbors = []
+    for direct_neighbor in direct_outer_neighbors:
+        neighbor_neighbors = get_neighbors(direct_neighbor)
+        # Exclude the migrating VP itself
+        second_level = [vp for vp in neighbor_neighbors if vp != migrating_vp_idx]
+        second_level_neighbors.extend(second_level)
+    
+    # Combine all outer neighbors for visualization
+    outer_neighbors = direct_outer_neighbors + second_level_neighbors
+    
+    print(f"Migrating VP {migrating_vp_idx} Neighbor Analysis:")
+    print(f"  All immediate neighbors: {all_neighbors}")
+    print(f"  Triple triangle VPs (excluded): {list(triple_vp_set)}")
+    print(f"  Direct outer neighbor (Level 1): {direct_outer_neighbors}")
+    print(f"  Second-level neighbors (Level 2): {second_level_neighbors}")
+    print(f"  Total outer neighbors to display: {outer_neighbors}")
+    print()
+    
+    if outer_neighbors:
+        print("Outer Neighbor Details:")
+        for i, vp_idx in enumerate(outer_neighbors):
+            vp = partition.variable_points[vp_idx]
+            level = "Level 1 (direct)" if vp_idx in direct_outer_neighbors else "Level 2 (indirect)"
+            print(f"  Outer Neighbor {i+1} [{level}]: VP {vp_idx}")
+            print(f"    Edge: {vp.edge}")
+            print(f"    Lambda: {vp.lambda_param:.6f}")
+        print()
+    
+    # ========================================================================
     # BEFORE STATE
     # ========================================================================
     
@@ -674,6 +766,57 @@ def run_visualization(args):
             vp_labels,
             args.vp_size
         )
+        
+        # Add outer neighbor VPs with color variations of migrating VP
+        if outer_neighbors:
+            # Determine migrating VP color
+            migrating_color_idx = None
+            for i, vp_idx in enumerate(selected_tp.var_point_indices):
+                if vp_idx == migrating_vp_idx:
+                    migrating_color_idx = i
+                    break
+            
+            # Color variations for outer neighbors (based on migrating VP color)
+            if migrating_color_idx == 0:  # Red migrating VP
+                outer_colors = ['darkred', 'indianred']
+            elif migrating_color_idx == 1:  # Blue migrating VP
+                outer_colors = ['darkblue', 'lightblue']
+            elif migrating_color_idx == 2:  # Green migrating VP
+                outer_colors = ['darkgreen', 'lightgreen']
+            else:
+                outer_colors = ['purple', 'violet']  # Fallback
+            
+            # Ensure we have enough colors
+            while len(outer_colors) < len(outer_neighbors):
+                outer_colors.append('gray')
+            
+            outer_labels = []
+            for i, vp_idx in enumerate(outer_neighbors):
+                vp = partition.variable_points[vp_idx]
+                outer_labels.append(f"Outer{i+1}\nidx={vp_idx}\nedge={vp.edge}")
+            
+            print("Outer Neighbor VPs (color variations of migrating VP):")
+            for i, vp_idx in enumerate(outer_neighbors):
+                print(f"  {outer_colors[i].capitalize()} VP: {vp_idx}")
+            print()
+            
+            add_vp_visualization(
+                plotter_before, partition, mesh,
+                outer_neighbors,
+                outer_colors[:len(outer_neighbors)],
+                outer_labels,
+                args.vp_size
+            )
+    
+    # Add target edge highlighting
+    target_edge = migration_result['target_edge']
+    v1_pos = mesh.vertices[target_edge[0]]
+    v2_pos = mesh.vertices[target_edge[1]]
+    target_edge_line = pv.Line(v1_pos, v2_pos)
+    plotter_before.add_mesh(target_edge_line, color='limegreen', line_width=5, opacity=1.0, 
+                           label='Target Edge')
+    print(f"Target edge {target_edge} highlighted in green")
+    print()
     
     # Add triangle labels
     add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, 

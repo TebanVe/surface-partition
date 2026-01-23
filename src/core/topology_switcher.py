@@ -3110,4 +3110,212 @@ class TopologySwitcher:
                     processed.add(other_idx)
         
         return (to_migrate, deferred)
+    
+    def apply_type2_switch_v3(self, steiner_handler, triple_point_idx: int) -> Dict:
+        """
+        Apply Type 2 switch using improved topological VP selection strategy.
+        
+        New Strategy:
+        1. Identify anchor VP (sits on edge between triple triangle and target triangle)
+        2. Identify target edge (free edge in target triangle)
+        3. Select migrating VP based on topological connectivity:
+           - Choose VP whose edge shares a vertex with target edge
+           - This is more "closely connected" than VP requiring multiple edges to reach target
+        
+        Args:
+            steiner_handler: SteinerHandler object containing triple points
+            triple_point_idx: Index of triple point to migrate
+            
+        Returns:
+            Dict with migration analysis information:
+            {
+                'success': bool,
+                'triple_triangle_idx': int,
+                'target_triangle_idx': int,
+                'shared_edge': tuple,
+                'target_edge': tuple,
+                'anchor_vp_idx': int,
+                'migrating_vp_idx': int,
+                'non_migrating_vp_idx': int,
+                'migrating_vp_edge': tuple,
+                'non_migrating_vp_edge': tuple,
+                'shared_vertex': int (vertex shared between migrating VP edge and target edge),
+                'connectivity_analysis': dict
+            }
+        """
+        result = {
+            'success': False,
+            'error': None
+        }
+        
+        # Step 1: Get triple point information
+        if triple_point_idx >= len(steiner_handler.triple_points):
+            result['error'] = f"Invalid triple point index {triple_point_idx}"
+            self.logger.error(result['error'])
+            return result
+        
+        triple_point = steiner_handler.triple_points[triple_point_idx]
+        triple_triangle_idx = triple_point.triangle_idx
+        triple_vp_indices = triple_point.var_point_indices
+        
+        if len(triple_vp_indices) != 3:
+            result['error'] = f"Triple point {triple_point_idx} does not have exactly 3 VPs"
+            self.logger.error(result['error'])
+            return result
+        
+        result['triple_triangle_idx'] = triple_triangle_idx
+        result['triple_vp_indices'] = triple_vp_indices
+        
+        self.logger.info(f"Analyzing Type 2 migration for triple point {triple_point_idx}")
+        self.logger.info(f"  Triple triangle: {triple_triangle_idx}")
+        self.logger.info(f"  VPs in triple: {triple_vp_indices}")
+        
+        # Step 2: Find target triangle - the adjacent triangle sharing edge that Steiner point approaches
+        # Use Steiner tree distances: the closest VP to Steiner point is the anchor VP
+        steiner_pt = triple_point.compute_steiner_point()
+        
+        # Calculate distances from Steiner point to each VP
+        vp_distances = {}
+        for vp_idx in triple_vp_indices:
+            vp_pos = self.partition.evaluate_variable_point(vp_idx)
+            dist = np.linalg.norm(steiner_pt - vp_pos)
+            vp_distances[vp_idx] = dist
+        
+        # The anchor VP is the one CLOSEST to the Steiner point (Steiner approaching that edge)
+        anchor_vp_idx = min(vp_distances.keys(), key=lambda k: vp_distances[k])
+        anchor_vp = self.partition.variable_points[anchor_vp_idx]
+        shared_edge = tuple(sorted(anchor_vp.edge))
+        
+        self.logger.info(f"  Steiner point distances to VPs:")
+        for vp_idx in sorted(vp_distances.keys()):
+            marker = " ← ANCHOR" if vp_idx == anchor_vp_idx else ""
+            self.logger.info(f"    VP {vp_idx}: {vp_distances[vp_idx]:.6f}{marker}")
+        
+        # Find target triangle: adjacent triangle sharing the anchor edge
+        target_triangle_idx = None
+        if shared_edge in self.mesh_topology.edge_to_triangles:
+            adj_triangles = self.mesh_topology.edge_to_triangles[shared_edge]
+            for adj_tri in adj_triangles:
+                if adj_tri != triple_triangle_idx:
+                    target_triangle_idx = adj_tri
+                    break
+        
+        if not shared_edge or target_triangle_idx is None or anchor_vp_idx is None:
+            result['error'] = "Could not identify shared edge, target triangle, or anchor VP"
+            self.logger.error(result['error'])
+            return result
+        
+        result['shared_edge'] = shared_edge
+        result['target_triangle_idx'] = target_triangle_idx
+        result['anchor_vp_idx'] = anchor_vp_idx
+        
+        self.logger.info(f"  Shared edge (Steiner approaching): {shared_edge}")
+        self.logger.info(f"  Target triangle: {target_triangle_idx}")
+        self.logger.info(f"  Anchor VP: {anchor_vp_idx} (on shared edge)")
+        
+        # Step 3: Identify the two candidate VPs (not the anchor)
+        candidate_vps = [vp_idx for vp_idx in triple_vp_indices if vp_idx != anchor_vp_idx]
+        
+        if len(candidate_vps) != 2:
+            result['error'] = f"Expected 2 candidate VPs, found {len(candidate_vps)}"
+            self.logger.error(result['error'])
+            return result
+        
+        self.logger.info(f"  Candidate VPs for migration: {candidate_vps}")
+        
+        # Step 4: Find target edge (free edge in target triangle)
+        target_tri_vertices = self.mesh.faces[target_triangle_idx]
+        target_tri_edges = [
+            tuple(sorted([target_tri_vertices[0], target_tri_vertices[1]])),
+            tuple(sorted([target_tri_vertices[1], target_tri_vertices[2]])),
+            tuple(sorted([target_tri_vertices[2], target_tri_vertices[0]]))
+        ]
+        
+        target_edge = None
+        for edge in target_tri_edges:
+            # Skip shared edge
+            if edge == shared_edge:
+                continue
+            # Check if edge is free (no VPs)
+            if edge not in self.partition.edge_to_varpoint:
+                target_edge = edge
+                break
+        
+        if not target_edge:
+            result['error'] = "Could not find free edge in target triangle"
+            self.logger.error(result['error'])
+            return result
+        
+        result['target_edge'] = target_edge
+        self.logger.info(f"  Target edge (free): {target_edge}")
+        
+        # Step 5: Topological selection - find VP whose edge shares a vertex with target edge
+        connectivity_analysis = {}
+        
+        for vp_idx in candidate_vps:
+            vp = self.partition.variable_points[vp_idx]
+            vp_edge = tuple(sorted(vp.edge))
+            
+            # Find shared vertices between VP edge and target edge
+            shared_vertices = set(vp_edge) & set(target_edge)
+            num_shared = len(shared_vertices)
+            
+            connectivity_analysis[vp_idx] = {
+                'edge': vp_edge,
+                'shared_vertices': list(shared_vertices),
+                'num_shared': num_shared
+            }
+            
+            self.logger.info(f"  VP {vp_idx}: edge={vp_edge}, shared vertices with target={list(shared_vertices)} (count={num_shared})")
+        
+        result['connectivity_analysis'] = connectivity_analysis
+        
+        # Select migrating VP: the one with exactly 1 shared vertex
+        migrating_vp_idx = None
+        non_migrating_vp_idx = None
+        
+        vps_with_one_shared = [vp for vp, info in connectivity_analysis.items() if info['num_shared'] == 1]
+        vps_with_zero_shared = [vp for vp, info in connectivity_analysis.items() if info['num_shared'] == 0]
+        
+        if len(vps_with_one_shared) == 1 and len(vps_with_zero_shared) == 1:
+            # Perfect case: one VP shares 1 vertex, other shares 0
+            migrating_vp_idx = vps_with_one_shared[0]
+            non_migrating_vp_idx = vps_with_zero_shared[0]
+            result['success'] = True
+        elif len(vps_with_one_shared) == 2:
+            # WARNING: Both VPs share a vertex with target edge
+            self.logger.warning(f"⚠️  UNUSUAL: Both candidate VPs share a vertex with target edge!")
+            self.logger.warning(f"    VP {candidate_vps[0]}: {connectivity_analysis[candidate_vps[0]]['shared_vertices']}")
+            self.logger.warning(f"    VP {candidate_vps[1]}: {connectivity_analysis[candidate_vps[1]]['shared_vertices']}")
+            self.logger.warning(f"    This requires special treatment - using first VP for now")
+            migrating_vp_idx = candidate_vps[0]
+            non_migrating_vp_idx = candidate_vps[1]
+            result['success'] = True
+            result['warning'] = "Both VPs share vertex with target edge"
+        elif len(vps_with_one_shared) == 0:
+            # WARNING: Neither VP shares a vertex with target edge
+            self.logger.warning(f"⚠️  UNUSUAL: Neither candidate VP shares a vertex with target edge!")
+            self.logger.warning(f"    VP {candidate_vps[0]}: {connectivity_analysis[candidate_vps[0]]['shared_vertices']}")
+            self.logger.warning(f"    VP {candidate_vps[1]}: {connectivity_analysis[candidate_vps[1]]['shared_vertices']}")
+            self.logger.warning(f"    This requires special treatment - using first VP for now")
+            migrating_vp_idx = candidate_vps[0]
+            non_migrating_vp_idx = candidate_vps[1]
+            result['success'] = True
+            result['warning'] = "No VP shares vertex with target edge"
+        else:
+            result['error'] = f"Unexpected connectivity pattern: {connectivity_analysis}"
+            self.logger.error(result['error'])
+            return result
+        
+        result['migrating_vp_idx'] = migrating_vp_idx
+        result['non_migrating_vp_idx'] = non_migrating_vp_idx
+        result['migrating_vp_edge'] = connectivity_analysis[migrating_vp_idx]['edge']
+        result['non_migrating_vp_edge'] = connectivity_analysis[non_migrating_vp_idx]['edge']
+        result['shared_vertex'] = connectivity_analysis[migrating_vp_idx]['shared_vertices'][0] if connectivity_analysis[migrating_vp_idx]['num_shared'] == 1 else None
+        
+        self.logger.info(f"✓ Selected migrating VP: {migrating_vp_idx}")
+        self.logger.info(f"  Reason: Edge {result['migrating_vp_edge']} shares vertex with target edge {target_edge}")
+        self.logger.info(f"  Non-migrating VP: {non_migrating_vp_idx}")
+        
+        return result
 
