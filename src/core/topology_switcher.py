@@ -3478,4 +3478,743 @@ class TopologySwitcher:
         self.logger.info("✓ Successfully identified all key triangles")
         
         return result
+    
+    # ============================================================================
+    # Type 2 Migration Implementation (v4 - New Strategy)
+    # ============================================================================
+    
+    def _identify_vp_close_to_steiner(
+        self, 
+        steiner_handler, 
+        triple_point_idx: int
+    ) -> Optional[int]:
+        """
+        Identify VP closest to Steiner point (vp_close_to_steiner).
+        
+        This VP sits on the shared edge between triple triangle and target triangle,
+        and is the one the Steiner point is approaching.
+        
+        Strategy: Use Steiner point distances already computed in SteinerHandler.
+        
+        Args:
+            steiner_handler: SteinerHandler object
+            triple_point_idx: Index of triple point
+            
+        Returns:
+            VP index closest to Steiner point, or None if error
+        """
+        if triple_point_idx >= len(steiner_handler.triple_points):
+            self.logger.error(f"Invalid triple point index {triple_point_idx}")
+            return None
+        
+        triple_point = steiner_handler.triple_points[triple_point_idx]
+        vp_indices = triple_point['vp_indices']
+        steiner_pt = triple_point['steiner_point']
+        
+        # Get Steiner distances (already computed in triple_point structure)
+        # These are the distances from Steiner point to each VP position
+        vp_distances = triple_point.get('vp_distances', {})
+        
+        if not vp_distances:
+            # Fallback: compute distances manually
+            self.logger.debug("Computing VP distances to Steiner point manually")
+            vp_distances = {}
+            for vp_idx in vp_indices:
+                vp = self.partition.variable_points[vp_idx]
+                vp_pos = self._get_vp_position(vp)
+                dist = np.linalg.norm(vp_pos - steiner_pt)
+                vp_distances[vp_idx] = dist
+        
+        # Find VP with minimum distance to Steiner point
+        vp_close_to_steiner_idx = min(vp_distances.keys(), key=lambda k: vp_distances[k])
+        min_dist = vp_distances[vp_close_to_steiner_idx]
+        
+        self.logger.info(f"VP close to Steiner: VP {vp_close_to_steiner_idx} "
+                        f"(distance={min_dist:.6f})")
+        
+        return vp_close_to_steiner_idx
+    
+    def _get_vp_position(self, vp) -> np.ndarray:
+        """
+        Get 3D position of a variable point.
+        
+        Args:
+            vp: VariablePoint object
+            
+        Returns:
+            3D position (x, y, z)
+        """
+        edge = vp.edge
+        lambda_param = vp.lambda_param
+        
+        # position = λ * edge[0] + (1-λ) * edge[1]
+        v0 = self.mesh.vertices[edge[0]]
+        v1 = self.mesh.vertices[edge[1]]
+        
+        return lambda_param * v0 + (1 - lambda_param) * v1
+    
+    def _identify_migrating_and_stationary_vps(
+        self,
+        triple_vp_indices: List[int],
+        vp_close_to_steiner_idx: int,
+        target_edge: Tuple[int, int]
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Identify migrating_VP and stationary_VP from triple triangle VPs.
+        
+        Selection criteria:
+        - Candidates: The two VPs that are NOT vp_close_to_steiner
+        - migrating_VP: VP whose edge shares a vertex with target_edge (topologically connected)
+        - stationary_VP: The remaining VP
+        
+        Args:
+            triple_vp_indices: List of 3 VP indices in triple triangle
+            vp_close_to_steiner_idx: Index of vp_close_to_steiner
+            target_edge: Target edge (free edge in target triangle)
+            
+        Returns:
+            (migrating_vp_idx, stationary_vp_idx) or (None, None) if error
+        """
+        # Get the two candidate VPs (exclude vp_close_to_steiner)
+        candidates = [vp_idx for vp_idx in triple_vp_indices 
+                     if vp_idx != vp_close_to_steiner_idx]
+        
+        if len(candidates) != 2:
+            self.logger.error(f"Expected 2 candidate VPs, found {len(candidates)}")
+            return None, None
+        
+        # Check which candidate's edge shares a vertex with target_edge
+        target_vertices = set(target_edge)
+        
+        migrating_vp_idx = None
+        stationary_vp_idx = None
+        
+        for vp_idx in candidates:
+            vp = self.partition.variable_points[vp_idx]
+            vp_edge_vertices = set(vp.edge)
+            
+            # Check if edges share exactly 1 vertex
+            shared_vertices = vp_edge_vertices & target_vertices
+            
+            if len(shared_vertices) == 1:
+                # This VP's edge shares a vertex with target edge
+                migrating_vp_idx = vp_idx
+            elif len(shared_vertices) == 0:
+                # This VP's edge does NOT share a vertex
+                stationary_vp_idx = vp_idx
+            else:
+                # Should not happen: edge shares 2 vertices means same edge
+                self.logger.warning(f"VP {vp_idx} edge {vp.edge} shares 2 vertices "
+                                   f"with target edge {target_edge} - unusual!")
+        
+        # Verify we found both
+        if migrating_vp_idx is None or stationary_vp_idx is None:
+            self.logger.error(f"Failed to identify migrating/stationary VPs. "
+                            f"Candidates: {candidates}, target_edge: {target_edge}")
+            return None, None
+        
+        # WARNING check: Both VPs share a vertex with target edge (should not happen)
+        vp1 = self.partition.variable_points[candidates[0]]
+        vp2 = self.partition.variable_points[candidates[1]]
+        if (set(vp1.edge) & target_vertices) and (set(vp2.edge) & target_vertices):
+            self.logger.warning(f"⚠️  BOTH candidate VPs share vertices with target edge! "
+                              f"VP {candidates[0]} edge {vp1.edge}, "
+                              f"VP {candidates[1]} edge {vp2.edge}, "
+                              f"target edge {target_edge}. Unusual topology!")
+        
+        self.logger.info(f"Migrating VP: {migrating_vp_idx}, Stationary VP: {stationary_vp_idx}")
+        
+        return migrating_vp_idx, stationary_vp_idx
+    
+    def _identify_outer_neighbors(
+        self,
+        migrating_vp_idx: int,
+        triple_vp_indices: List[int]
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Identify first_level_VP and second_level_VP (outer neighbors of migrating_VP).
+        
+        Strategy:
+        1. Find direct neighbor of migrating_VP (excluding triple triangle VPs) = first_level
+        2. Find neighbor of first_level (excluding migrating_VP) = second_level
+        
+        Args:
+            migrating_vp_idx: Index of migrating VP
+            triple_vp_indices: List of 3 VP indices in triple triangle
+            
+        Returns:
+            (first_level_vp_idx, second_level_vp_idx) or (None, None) if error
+        """
+        triple_vp_set = set(triple_vp_indices)
+        
+        # Step 1: Find first_level_VP (direct neighbor, excluding triple VPs)
+        neighbors_of_migrating = []
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 == migrating_vp_idx:
+                neighbor = segment.vp_idx_2
+                if neighbor not in triple_vp_set:
+                    neighbors_of_migrating.append(neighbor)
+            elif segment.vp_idx_2 == migrating_vp_idx:
+                neighbor = segment.vp_idx_1
+                if neighbor not in triple_vp_set:
+                    neighbors_of_migrating.append(neighbor)
+        
+        if len(neighbors_of_migrating) != 1:
+            self.logger.error(f"Expected 1 outer neighbor for migrating VP {migrating_vp_idx}, "
+                            f"found {len(neighbors_of_migrating)}: {neighbors_of_migrating}")
+            return None, None
+        
+        first_level_vp_idx = neighbors_of_migrating[0]
+        
+        # Step 2: Find second_level_VP (neighbor of first_level, excluding migrating_VP)
+        neighbors_of_first_level = []
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 == first_level_vp_idx:
+                neighbor = segment.vp_idx_2
+                if neighbor != migrating_vp_idx and neighbor not in triple_vp_set:
+                    neighbors_of_first_level.append(neighbor)
+            elif segment.vp_idx_2 == first_level_vp_idx:
+                neighbor = segment.vp_idx_1
+                if neighbor != migrating_vp_idx and neighbor not in triple_vp_set:
+                    neighbors_of_first_level.append(neighbor)
+        
+        if len(neighbors_of_first_level) != 1:
+            self.logger.error(f"Expected 1 second-level neighbor for first_level VP {first_level_vp_idx}, "
+                            f"found {len(neighbors_of_first_level)}: {neighbors_of_first_level}")
+            return None, None
+        
+        second_level_vp_idx = neighbors_of_first_level[0]
+        
+        self.logger.info(f"Outer neighbors: first_level={first_level_vp_idx}, "
+                        f"second_level={second_level_vp_idx}")
+        
+        return first_level_vp_idx, second_level_vp_idx
+    
+    def _find_common_vertex_all_triangles(
+        self,
+        triple_tri: int,
+        target_tri: int,
+        t_first: int,
+        t_second: int,
+        t_adjacent: int,
+        t_shared: int
+    ) -> Optional[int]:
+        """
+        Find vertex shared by ALL 6 triangles.
+        
+        This vertex forms a "fan" of triangles around it and will change cell
+        during migration (like target_vertex in Type 1).
+        
+        Args:
+            triple_tri: Triple point triangle
+            target_tri: Target triangle
+            t_first: T_first_VP triangle
+            t_second: T_second_VP triangle
+            t_adjacent: T_adjacent_to_T_second triangle
+            t_shared: T_shared_edge_with_target triangle
+            
+        Returns:
+            Common vertex index, or None if not found
+        """
+        triangles = [triple_tri, target_tri, t_first, t_second, t_adjacent, t_shared]
+        
+        # Get vertices from first triangle
+        face0 = self.mesh.faces[triangles[0]]
+        candidate_vertices = set(face0)
+        
+        # Check which vertices appear in ALL triangles
+        for tri_idx in triangles[1:]:
+            face = self.mesh.faces[tri_idx]
+            candidate_vertices &= set(face)
+        
+        if len(candidate_vertices) == 0:
+            self.logger.error(f"No common vertex found among 6 triangles")
+            return None
+        
+        if len(candidate_vertices) > 1:
+            self.logger.warning(f"Multiple common vertices found: {candidate_vertices}. "
+                              f"Using first one.")
+        
+        common_vertex = int(list(candidate_vertices)[0])
+        
+        # Verify using _get_all_triangles_at_vertex
+        triangles_at_vertex = self._get_all_triangles_at_vertex(common_vertex)
+        
+        all_present = all(t in triangles_at_vertex for t in triangles)
+        
+        if not all_present:
+            missing = [t for t in triangles if t not in triangles_at_vertex]
+            self.logger.warning(f"Common vertex {common_vertex} not present in all triangles. "
+                              f"Missing: {missing}")
+        
+        self.logger.info(f"Common vertex (all 6 triangles): {common_vertex}")
+        
+        return common_vertex
+    
+    def _determine_cells_for_edge(self, edge: Tuple[int, int]) -> Set[int]:
+        """
+        Determine which two cells are separated by an edge.
+        
+        Uses triangle labeling on both sides of the edge.
+        
+        Args:
+            edge: Edge tuple (v1, v2)
+            
+        Returns:
+            Set of 2 cell indices separated by this edge
+        """
+        # Get two triangles sharing this edge
+        triangles_on_edge = self.mesh_topology.edge_to_triangles.get(edge, [])
+        
+        if len(triangles_on_edge) != 2:
+            self.logger.error(f"Edge {edge} should be shared by 2 triangles, "
+                            f"found {len(triangles_on_edge)}")
+            # Fallback: return empty set
+            return set()
+        
+        tri1_idx, tri2_idx = triangles_on_edge
+        
+        # Use vertex labels from indicator_functions
+        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        
+        # Get cells from both triangles (majority vote)
+        cells = set()
+        for tri_idx in [tri1_idx, tri2_idx]:
+            face = self.mesh.faces[tri_idx]
+            # Get cell labels for all 3 vertices of triangle
+            tri_cells = [vertex_labels[int(v)] for v in face]
+            # Use majority cell (most common)
+            majority_cell = max(set(tri_cells), key=tri_cells.count)
+            cells.add(majority_cell)
+        
+        if len(cells) != 2:
+            self.logger.warning(f"Edge {edge} expected to separate 2 cells, found {len(cells)}: {cells}")
+        
+        self.logger.debug(f"Edge {edge} separates cells: {cells}")
+        
+        return cells
+    
+    def _create_steiner_vp(
+        self,
+        old_edge: Tuple[int, int],
+        old_lambda: float
+    ) -> int:
+        """
+        Create new VP (steiner_VP) at the exact position where vp_close_to_steiner was.
+        
+        Args:
+            old_edge: Edge where vp_close_to_steiner was before moving
+            old_lambda: Lambda value vp_close_to_steiner had before moving
+            
+        Returns:
+            Index of newly created steiner_VP
+        """
+        from src.core.contour_partition import VariablePoint
+        
+        # Determine which cells are separated by this edge
+        cells_on_edge = self._determine_cells_for_edge(old_edge)
+        
+        # Create new VariablePoint
+        steiner_VP = VariablePoint(
+            edge=old_edge,
+            lambda_param=old_lambda,
+            global_idx=len(self.partition.variable_points),  # New index
+            belongs_to_cells=cells_on_edge
+        )
+        
+        # Append to partition
+        self.partition.variable_points.append(steiner_VP)
+        steiner_VP_idx = steiner_VP.global_idx
+        
+        # Update edge_to_varpoint (old_edge now has steiner_VP)
+        self.partition.edge_to_varpoint[old_edge] = steiner_VP_idx
+        
+        self.logger.info(f"Created steiner_VP {steiner_VP_idx} at edge {old_edge} "
+                        f"with λ={old_lambda:.6f}, cells={cells_on_edge}")
+        
+        return steiner_VP_idx
+    
+    def apply_type2_switch_v4(
+        self,
+        steiner_handler,
+        triple_point_idx: int,
+        distance_preservation: str = 'preserve'
+    ) -> Dict:
+        """
+        Apply Type 2 triple point collapse migration (NEW STRATEGY).
+        
+        Converts Steiner point into a new VP, migrates VPs, and forms new triple point.
+        
+        14-Step Process:
+        Phase 1: Identification (Steps 1-6)
+        Phase 2: VP Migrations (Steps 7-10)
+        Phase 3: Cell Update (Step 11)
+        Phase 4: Segment Updates (Steps 12-14)
+        
+        Args:
+            steiner_handler: SteinerHandler object
+            triple_point_idx: Index of triple point to collapse
+            distance_preservation: 'preserve', 'midpoint', or custom distance string
+            
+        Returns:
+            Dict with migration result:
+            {
+                'success': bool,
+                'vp_count_change': int (+1),
+                'segment_count_change': int (+1),
+                'steiner_vp_idx': int,
+                'common_vertex': int,
+                ...
+            }
+        """
+        self.logger.info("="*80)
+        self.logger.info(f"TYPE 2 MIGRATION v4 (Triple Point {triple_point_idx})")
+        self.logger.info("="*80)
+        
+        result = {
+            'success': False,
+            'vp_count_change': 0,
+            'segment_count_change': 0
+        }
+        
+        # Validate triple point
+        if triple_point_idx >= len(steiner_handler.triple_points):
+            self.logger.error(f"Invalid triple point index {triple_point_idx}")
+            return result
+        
+        triple_point = steiner_handler.triple_points[triple_point_idx]
+        triple_triangle_idx = triple_point['triangle_idx']
+        triple_vp_indices = triple_point['vp_indices']
+        
+        self.logger.info(f"Triple triangle: {triple_triangle_idx}")
+        self.logger.info(f"Triple VPs: {triple_vp_indices}")
+        
+        # ========================================================================
+        # PHASE 1: IDENTIFICATION (Steps 1-6)
+        # ========================================================================
+        
+        # Step 1: Identify vp_close_to_steiner
+        vp_close_to_steiner_idx = self._identify_vp_close_to_steiner(
+            steiner_handler, triple_point_idx
+        )
+        if vp_close_to_steiner_idx is None:
+            return result
+        
+        vp_close_to_steiner = self.partition.variable_points[vp_close_to_steiner_idx]
+        shared_edge = vp_close_to_steiner.edge
+        
+        # Step 2: Identify target triangle and target edge
+        triangles_on_shared_edge = self.mesh_topology.edge_to_triangles.get(shared_edge, [])
+        if len(triangles_on_shared_edge) != 2:
+            self.logger.error(f"Shared edge {shared_edge} not shared by exactly 2 triangles")
+            return result
+        
+        target_triangle_idx = [t for t in triangles_on_shared_edge if t != triple_triangle_idx][0]
+        
+        # Find target edge (free edge in target triangle)
+        target_face = self.mesh.faces[target_triangle_idx]
+        target_edges = [
+            tuple(sorted([target_face[0], target_face[1]])),
+            tuple(sorted([target_face[1], target_face[2]])),
+            tuple(sorted([target_face[2], target_face[0]]))
+        ]
+        
+        target_edge = None
+        for edge in target_edges:
+            if edge not in self.partition.edge_to_varpoint:
+                target_edge = edge
+                break
+        
+        if target_edge is None:
+            self.logger.error(f"No free edge found in target triangle {target_triangle_idx}")
+            return result
+        
+        self.logger.info(f"Target triangle: {target_triangle_idx}")
+        self.logger.info(f"Target edge: {target_edge}")
+        
+        # Step 3: Identify migrating_VP and stationary_VP
+        migrating_vp_idx, stationary_vp_idx = self._identify_migrating_and_stationary_vps(
+            triple_vp_indices, vp_close_to_steiner_idx, target_edge
+        )
+        if migrating_vp_idx is None or stationary_vp_idx is None:
+            return result
+        
+        # Step 4: Identify outer neighbors
+        first_level_vp_idx, second_level_vp_idx = self._identify_outer_neighbors(
+            migrating_vp_idx, triple_vp_indices
+        )
+        if first_level_vp_idx is None or second_level_vp_idx is None:
+            return result
+        
+        # Step 5: Identify triangles (using segment_to_triangle map)
+        seg_migrating_first = tuple(sorted([migrating_vp_idx, first_level_vp_idx]))
+        seg_first_second = tuple(sorted([first_level_vp_idx, second_level_vp_idx]))
+        
+        T_first_VP_idx = self.partition.segment_to_triangle.get(seg_migrating_first)
+        T_second_VP_idx = self.partition.segment_to_triangle.get(seg_first_second)
+        
+        if T_first_VP_idx is None or T_second_VP_idx is None:
+            self.logger.error(f"Failed to find T_first_VP or T_second_VP using segment_to_triangle map")
+            return result
+        
+        # Find T_second_VP free edge
+        face_t_second = self.mesh.faces[T_second_VP_idx]
+        edges_t_second = [
+            tuple(sorted([face_t_second[0], face_t_second[1]])),
+            tuple(sorted([face_t_second[1], face_t_second[2]])),
+            tuple(sorted([face_t_second[2], face_t_second[0]]))
+        ]
+        
+        t_second_free_edge = None
+        for edge in edges_t_second:
+            if edge not in self.partition.edge_to_varpoint:
+                t_second_free_edge = edge
+                break
+        
+        if t_second_free_edge is None:
+            self.logger.error(f"No free edge in T_second_VP {T_second_VP_idx}")
+            return result
+        
+        # Find T_adjacent_to_T_second
+        triangles_on_t_second_free = self.mesh_topology.edge_to_triangles.get(t_second_free_edge, [])
+        T_adjacent_to_T_second_idx = [t for t in triangles_on_t_second_free if t != T_second_VP_idx]
+        if len(T_adjacent_to_T_second_idx) != 1:
+            self.logger.error(f"Could not find unique T_adjacent_to_T_second")
+            return result
+        T_adjacent_to_T_second_idx = T_adjacent_to_T_second_idx[0]
+        
+        # Find T_shared_edge_with_target
+        triangles_on_target_edge = self.mesh_topology.edge_to_triangles.get(target_edge, [])
+        T_shared_edge_with_target_idx = [t for t in triangles_on_target_edge if t != target_triangle_idx]
+        if len(T_shared_edge_with_target_idx) != 1:
+            self.logger.error(f"Could not find unique T_shared_edge_with_target")
+            return result
+        T_shared_edge_with_target_idx = T_shared_edge_with_target_idx[0]
+        
+        self.logger.info(f"T_first_VP: {T_first_VP_idx}")
+        self.logger.info(f"T_second_VP: {T_second_VP_idx}")
+        self.logger.info(f"T_adjacent_to_T_second: {T_adjacent_to_T_second_idx}")
+        self.logger.info(f"T_shared_edge_with_target: {T_shared_edge_with_target_idx}")
+        
+        # Step 6: Find common_vertex_all_triangles
+        common_vertex = self._find_common_vertex_all_triangles(
+            triple_triangle_idx, target_triangle_idx,
+            T_first_VP_idx, T_second_VP_idx,
+            T_adjacent_to_T_second_idx, T_shared_edge_with_target_idx
+        )
+        if common_vertex is None:
+            return result
+        
+        result['common_vertex'] = common_vertex
+        
+        # ========================================================================
+        # PHASE 2: VP MIGRATIONS (Steps 7-10)
+        # ========================================================================
+        
+        self.logger.info("-" * 80)
+        self.logger.info("PHASE 2: VP MIGRATIONS")
+        self.logger.info("-" * 80)
+        
+        # Step 7: Move vp_close_to_steiner to target edge
+        old_edge_vp_close = vp_close_to_steiner.edge
+        old_lambda_vp_close = vp_close_to_steiner.lambda_param
+        
+        self.logger.info(f"Step 7: Moving vp_close_to_steiner {vp_close_to_steiner_idx} "
+                        f"from {old_edge_vp_close} to target edge {target_edge}")
+        
+        new_lambda_vp_close = 0.5  # Can be optimized later
+        self._move_variable_point(vp_close_to_steiner_idx, target_edge, new_lambda_vp_close)
+        
+        # Step 8: Create steiner_VP at old position
+        self.logger.info(f"Step 8: Creating steiner_VP at {old_edge_vp_close} λ={old_lambda_vp_close:.6f}")
+        steiner_vp_idx = self._create_steiner_vp(old_edge_vp_close, old_lambda_vp_close)
+        result['steiner_vp_idx'] = steiner_vp_idx
+        result['vp_count_change'] = 1
+        
+        # Step 9: Move migrating_VP along mesh line (opposite to common_vertex)
+        self.logger.info(f"Step 9: Moving migrating_VP {migrating_vp_idx} opposite to vertex {common_vertex}")
+        
+        migrating_vp = self.partition.variable_points[migrating_vp_idx]
+        target_edge_migrating = self._find_opposite_edge(migrating_vp.edge, common_vertex)
+        
+        if target_edge_migrating is None:
+            self.logger.error(f"Could not find opposite edge for migrating VP")
+            return result
+        
+        if distance_preservation == 'preserve':
+            dist_migrating = self._compute_distance_to_vertex(migrating_vp_idx, common_vertex)
+            lambda_migrating = self._compute_lambda_for_distance(
+                target_edge_migrating, common_vertex, dist_migrating
+            )
+        else:
+            lambda_migrating = 0.5
+        
+        self._move_variable_point(migrating_vp_idx, target_edge_migrating, lambda_migrating)
+        
+        # Step 10: Move first_level_VP to free edge in T_second_VP
+        self.logger.info(f"Step 10: Moving first_level_VP {first_level_vp_idx} "
+                        f"to free edge in T_second_VP")
+        
+        if distance_preservation == 'preserve':
+            dist_first_level = self._compute_distance_to_vertex(first_level_vp_idx, common_vertex)
+            lambda_first_level = self._compute_lambda_for_distance(
+                t_second_free_edge, common_vertex, dist_first_level
+            )
+        else:
+            lambda_first_level = 0.5
+        
+        self._move_variable_point(first_level_vp_idx, t_second_free_edge, lambda_first_level)
+        
+        # ========================================================================
+        # PHASE 3: CELL UPDATE (Step 11)
+        # ========================================================================
+        
+        self.logger.info("-" * 80)
+        self.logger.info("PHASE 3: CELL UPDATE")
+        self.logger.info("-" * 80)
+        
+        # Step 11: Determine cell flip BEFORE migration for common_vertex
+        # But we need to do this AFTER determining common_vertex but BEFORE moving VPs
+        # Since we already moved VPs, we'll use the migrating VP's original cell info
+        
+        old_cell, new_cell = self._determine_target_vertex_cell_flip(
+            common_vertex, migrating_vp_idx
+        )
+        
+        self._update_indicator_functions_for_target_vertex(
+            common_vertex, old_cell, new_cell
+        )
+        
+        # ========================================================================
+        # PHASE 4: SEGMENT UPDATES (Steps 12-14)
+        # ========================================================================
+        
+        self.logger.info("-" * 80)
+        self.logger.info("PHASE 4: SEGMENT UPDATES")
+        self.logger.info("-" * 80)
+        
+        # Step 12: Delete void triangle segments
+        self.logger.info(f"Step 12: Deleting 2 void triangle segments")
+        
+        seg1_key = tuple(sorted([migrating_vp_idx, stationary_vp_idx]))
+        seg2_key = tuple(sorted([vp_close_to_steiner_idx, stationary_vp_idx]))
+        segments_to_remove = [seg1_key, seg2_key]
+        
+        original_seg_count = len(self.partition.boundary_segments)
+        
+        self.partition.boundary_segments = [
+            seg for seg in self.partition.boundary_segments
+            if tuple(sorted([seg.vp_idx_1, seg.vp_idx_2])) not in segments_to_remove
+        ]
+        
+        deleted_count = original_seg_count - len(self.partition.boundary_segments)
+        self.logger.info(f"Deleted {deleted_count} segments")
+        
+        # Step 13: Create new segments for new triple point
+        self.logger.info(f"Step 13: Creating 3 new segments for new triple point")
+        
+        # Need to find outer_neighbor_of_vp_close_to_steiner in target triangle
+        # This is a neighbor of vp_close_to_steiner that is NOT in triple_vp_indices
+        outer_neighbor_vp_close_idx = None
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 == vp_close_to_steiner_idx:
+                neighbor = segment.vp_idx_2
+                if neighbor not in triple_vp_indices:
+                    outer_neighbor_vp_close_idx = neighbor
+                    break
+            elif segment.vp_idx_2 == vp_close_to_steiner_idx:
+                neighbor = segment.vp_idx_1
+                if neighbor not in triple_vp_indices:
+                    outer_neighbor_vp_close_idx = neighbor
+                    break
+        
+        if outer_neighbor_vp_close_idx is None:
+            self.logger.error(f"Could not find outer_neighbor of vp_close_to_steiner")
+            return result
+        
+        from src.core.contour_partition import BoundarySegment
+        
+        # Helper to determine cell pair
+        def determine_seg_cells(vp_idx1, vp_idx2):
+            vp1 = self.partition.variable_points[vp_idx1]
+            vp2 = self.partition.variable_points[vp_idx2]
+            cells = vp1.belongs_to_cells & vp2.belongs_to_cells
+            if len(cells) != 2:
+                cells = vp1.belongs_to_cells if len(vp1.belongs_to_cells) == 2 else vp2.belongs_to_cells
+            return tuple(sorted(cells))
+        
+        new_segments = [
+            BoundarySegment(
+                vp_idx_1=steiner_vp_idx,
+                vp_idx_2=vp_close_to_steiner_idx,
+                cell_pair=determine_seg_cells(steiner_vp_idx, vp_close_to_steiner_idx),
+                segment_type="normal"
+            ),
+            BoundarySegment(
+                vp_idx_1=outer_neighbor_vp_close_idx,
+                vp_idx_2=steiner_vp_idx,
+                cell_pair=determine_seg_cells(outer_neighbor_vp_close_idx, steiner_vp_idx),
+                segment_type="normal"
+            ),
+            BoundarySegment(
+                vp_idx_1=steiner_vp_idx,
+                vp_idx_2=stationary_vp_idx,
+                cell_pair=determine_seg_cells(steiner_vp_idx, stationary_vp_idx),
+                segment_type="normal"
+            )
+        ]
+        
+        self.partition.boundary_segments.extend(new_segments)
+        
+        created_count = len(new_segments)
+        new_seg_count = len(self.partition.boundary_segments)
+        result['segment_count_change'] = new_seg_count - original_seg_count
+        
+        self.logger.info(f"Created {created_count} new segments (net change: {result['segment_count_change']})")
+        
+        # Step 14: Rebuild data structures
+        self.logger.info(f"Step 14: Rebuilding data structures")
+        
+        # Collect affected triangles
+        affected_triangles = [
+            triple_triangle_idx, target_triangle_idx,
+            T_first_VP_idx, T_second_VP_idx,
+            T_adjacent_to_T_second_idx, T_shared_edge_with_target_idx
+        ]
+        
+        # Add triangles at common_vertex
+        common_vertex_triangles = self._get_all_triangles_at_vertex(common_vertex)
+        affected_triangles.extend(common_vertex_triangles)
+        affected_triangles = list(set(affected_triangles))  # Deduplicate
+        
+        # Rebuild triangle_segments (optimized)
+        self.partition.rebuild_triangle_segments_for_affected_triangles(affected_triangles)
+        self.logger.info(f"Rebuilt triangle_segments for {len(affected_triangles)} affected triangles")
+        
+        # Rebuild segment_to_triangle map
+        self.partition.rebuild_segment_to_triangle_map()
+        self.logger.info(f"Rebuilt segment_to_triangle map")
+        
+        # ========================================================================
+        # COMPLETE
+        # ========================================================================
+        
+        result['success'] = True
+        result['affected_triangles'] = affected_triangles
+        result['triple_triangle_idx'] = triple_triangle_idx
+        result['target_triangle_idx'] = target_triangle_idx
+        result['vp_close_to_steiner_idx'] = vp_close_to_steiner_idx
+        result['migrating_vp_idx'] = migrating_vp_idx
+        result['stationary_vp_idx'] = stationary_vp_idx
+        result['steiner_vp_idx'] = steiner_vp_idx
+        result['outer_neighbor_vp_close_idx'] = outer_neighbor_vp_close_idx
+        
+        self.logger.info("="*80)
+        self.logger.info(f"✓ TYPE 2 MIGRATION COMPLETE")
+        self.logger.info(f"  VP count change: +{result['vp_count_change']}")
+        self.logger.info(f"  Segment count change: +{result['segment_count_change']}")
+        self.logger.info(f"  New triple point in triangle: {target_triangle_idx}")
+        self.logger.info("="*80)
+        
+        return result
 
