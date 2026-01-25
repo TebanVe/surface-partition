@@ -754,169 +754,325 @@ def run_visualization(args):
     # Get Steiner position for camera focus
     steiner_pos = selected_tp.compute_steiner_point()
     
-    print("Rendering BEFORE state...")
-    print()
+    # ========================================================================
+    # DETERMINE WHICH STATES TO SHOW
+    # ========================================================================
     
-    # Create plotter
-    plotter_before = pv.Plotter()
-    plotter_before.add_title(
-        f"Type 2 BEFORE: Triple Point at Triangle {selected_tp.triangle_idx} (triple-point-index={args.triple_point_index})",
-        font_size=12
-    )
+    show_before = args.state in ['before', 'both']
+    show_after = args.state in ['after', 'both']
     
-    # Render all regions with precise boundaries (same as Type 1)
-    render_regions(
-        plotter_before, mesh, partition, area_calc, steiner_handler,
-        target_region=None,  # No special highlighting for Type 2
-        backface_culling=args.enable_backface_culling
-    )
+    # ========================================================================
+    # BEFORE STATE
+    # ========================================================================
     
-    # Add Steiner visualization if requested
-    if args.show_steiner:
-        add_steiner_visualization(plotter_before, steiner_handler, partition, mesh, 
-                                args.steiner_size)
-    
-    # Add VP visualization if requested
-    if args.show_vps:
-        vp_colors = ['red', 'blue', 'green']
-        vp_labels = [
-            f"VP{i+1}\nidx={vp_idx}\nedge={vp_edges[i]}"
-            for i, vp_idx in enumerate(selected_tp.var_point_indices)
-        ]
+    if show_before:
+        print("="*80)
+        print("RENDERING BEFORE STATE")
+        print("="*80)
         
-        print("Triple Point VPs:")
-        for i, vp_idx in enumerate(selected_tp.var_point_indices):
-            color_name = vp_colors[i].capitalize()
-            print(f"  {color_name} VP: {vp_idx}")
-            print(f"    Edge: {vp_edges[i]}")
-            vp = partition.variable_points[vp_idx]
-            print(f"    Lambda: {vp.lambda_param:.6f}")
-        print()
+        # Create plotter
+        if args.state == 'both':
+            plotter_before = pv.Plotter(shape=(1, 2), border=False)
+            plotter_before.subplot(0, 0)
+        else:
+            plotter_before = pv.Plotter()
         
-        add_vp_visualization(
-            plotter_before, partition, mesh,
-            selected_tp.var_point_indices,
-            vp_colors,
-            vp_labels,
-            args.vp_size
+        plotter_before.add_title(
+            f"Type 2 BEFORE: Triple Point at Triangle {selected_tp.triangle_idx} (triple-point-index={args.triple_point_index})",
+            font_size=12
         )
         
-        # Add outer neighbor VPs with color variations of migrating VP
-        if outer_neighbors:
-            # Determine migrating VP color
-            migrating_color_idx = None
+        # Render all regions with precise boundaries
+        render_regions(
+            plotter_before, mesh, partition, area_calc, steiner_handler,
+            target_region=None,
+            backface_culling=args.enable_backface_culling
+        )
+        
+        # Add Steiner visualization if requested
+        if args.show_steiner:
+            add_steiner_visualization(plotter_before, steiner_handler, partition, mesh, 
+                                    args.steiner_size)
+        
+        # Add VP visualization if requested
+        if args.show_vps:
+            vp_colors = ['red', 'blue', 'green']
+            vp_labels = [
+                f"VP{i+1}\nidx={vp_idx}\nedge={vp_edges[i]}"
+                for i, vp_idx in enumerate(selected_tp.var_point_indices)
+            ]
+            
+            print("Triple Point VPs:")
             for i, vp_idx in enumerate(selected_tp.var_point_indices):
-                if vp_idx == migrating_vp_idx:
-                    migrating_color_idx = i
-                    break
-            
-            # Color variations for outer neighbors (based on migrating VP color)
-            if migrating_color_idx == 0:  # Red migrating VP
-                outer_colors = ['darkred', 'indianred']
-            elif migrating_color_idx == 1:  # Blue migrating VP
-                outer_colors = ['darkblue', 'lightblue']
-            elif migrating_color_idx == 2:  # Green migrating VP
-                outer_colors = ['darkgreen', 'lightgreen']
-            else:
-                outer_colors = ['purple', 'violet']  # Fallback
-            
-            # Ensure we have enough colors
-            while len(outer_colors) < len(outer_neighbors):
-                outer_colors.append('gray')
-            
-            outer_labels = []
-            for i, vp_idx in enumerate(outer_neighbors):
+                color_name = vp_colors[i].capitalize()
+                print(f"  {color_name} VP: {vp_idx}")
+                print(f"    Edge: {vp_edges[i]}")
                 vp = partition.variable_points[vp_idx]
-                outer_labels.append(f"Outer{i+1}\nidx={vp_idx}\nedge={vp.edge}")
-            
-            print("Outer Neighbor VPs (color variations of migrating VP):")
-            for i, vp_idx in enumerate(outer_neighbors):
-                print(f"  {outer_colors[i].capitalize()} VP: {vp_idx}")
+                print(f"    Lambda: {vp.lambda_param:.6f}")
             print()
             
             add_vp_visualization(
                 plotter_before, partition, mesh,
-                outer_neighbors,
-                outer_colors[:len(outer_neighbors)],
-                outer_labels,
+                selected_tp.var_point_indices,
+                vp_colors,
+                vp_labels,
                 args.vp_size
             )
-    
-    # Add target edge highlighting
-    target_edge = migration_result['target_edge']
-    v1_pos = mesh.vertices[target_edge[0]]
-    v2_pos = mesh.vertices[target_edge[1]]
-    target_edge_line = pv.Line(v1_pos, v2_pos)
-    plotter_before.add_mesh(target_edge_line, color='limegreen', line_width=5, opacity=1.0, 
-                           label='Target Edge')
-    print(f"Target edge {target_edge} highlighted in green")
-    print()
-    
-    # Add T_second_VP free edge highlighting (yellow)
-    if triangle_result['success']:
-        free_edge = triangle_result['T_second_VP_free_edge']
-        v1_pos_free = mesh.vertices[free_edge[0]]
-        v2_pos_free = mesh.vertices[free_edge[1]]
-        free_edge_line = pv.Line(v1_pos_free, v2_pos_free)
-        plotter_before.add_mesh(free_edge_line, color='gold', line_width=4, opacity=1.0,
-                               label='T_second_VP Free Edge')
-        print(f"T_second_VP free edge {free_edge} highlighted in yellow/gold")
+            
+            # Add outer neighbor VPs
+            if outer_neighbors:
+                migrating_color_idx = None
+                for i, vp_idx in enumerate(selected_tp.var_point_indices):
+                    if vp_idx == migrating_vp_idx:
+                        migrating_color_idx = i
+                        break
+                
+                if migrating_color_idx == 0:
+                    outer_colors = ['darkred', 'indianred']
+                elif migrating_color_idx == 1:
+                    outer_colors = ['darkblue', 'lightblue']
+                elif migrating_color_idx == 2:
+                    outer_colors = ['darkgreen', 'lightgreen']
+                else:
+                    outer_colors = ['purple', 'violet']
+                
+                while len(outer_colors) < len(outer_neighbors):
+                    outer_colors.append('gray')
+                
+                outer_labels = []
+                for i, vp_idx in enumerate(outer_neighbors):
+                    vp = partition.variable_points[vp_idx]
+                    outer_labels.append(f"Outer{i+1}\nidx={vp_idx}\nedge={vp.edge}")
+                
+                print("Outer Neighbor VPs:")
+                for i, vp_idx in enumerate(outer_neighbors):
+                    print(f"  {outer_colors[i].capitalize()} VP: {vp_idx}")
+                print()
+                
+                add_vp_visualization(
+                    plotter_before, partition, mesh,
+                    outer_neighbors,
+                    outer_colors[:len(outer_neighbors)],
+                    outer_labels,
+                    args.vp_size
+                )
+        
+        # Add target edge highlighting
+        target_edge = migration_result['target_edge']
+        v1_pos = mesh.vertices[target_edge[0]]
+        v2_pos = mesh.vertices[target_edge[1]]
+        target_edge_line = pv.Line(v1_pos, v2_pos)
+        plotter_before.add_mesh(target_edge_line, color='limegreen', line_width=5, opacity=1.0)
+        print(f"Target edge {target_edge} highlighted in green")
+        print()
+        
+        # Add T_second_VP free edge highlighting
+        if triangle_result['success']:
+            free_edge = triangle_result['T_second_VP_free_edge']
+            v1_pos_free = mesh.vertices[free_edge[0]]
+            v2_pos_free = mesh.vertices[free_edge[1]]
+            free_edge_line = pv.Line(v1_pos_free, v2_pos_free)
+            plotter_before.add_mesh(free_edge_line, color='gold', line_width=4, opacity=1.0)
+            print(f"T_second_VP free edge {free_edge} highlighted in yellow/gold")
+            print()
+        
+        # Add triangle labels
+        print("Adding triangle labels...")
+        add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, selected_tp, partition)
+        
+        if triangle_result['success']:
+            already_labeled = set()
+            already_labeled.add(selected_tp.triangle_idx)
+            for vp_idx in selected_tp.var_point_indices:
+                vp = partition.variable_points[vp_idx]
+                vp_edge = tuple(sorted(vp.edge))
+                triangles_at_edge = mesh_topology.get_triangles_sharing_edge(vp_edge)
+                already_labeled.update(triangles_at_edge)
+            
+            if triangle_result['T_second_VP'] not in already_labeled:
+                add_triangle_label(plotter_before, mesh, triangle_result['T_second_VP'],
+                                  f"T{triangle_result['T_second_VP']}", 
+                                  color='black', font_size=12)
+            
+            if triangle_result['T_adjacent_to_T_second'] not in already_labeled:
+                add_triangle_label(plotter_before, mesh, triangle_result['T_adjacent_to_T_second'],
+                                  f"T{triangle_result['T_adjacent_to_T_second']}", 
+                                  color='black', font_size=12)
+            
+            if triangle_result['T_shared_edge_with_target'] not in already_labeled:
+                add_triangle_label(plotter_before, mesh, triangle_result['T_shared_edge_with_target'],
+                                  f"T{triangle_result['T_shared_edge_with_target']}", 
+                                  color='black', font_size=12)
+        
+        print("Triangle labels added")
+        print()
+        
+        # Apply zoom
+        if args.apply_zoom:
+            print(f"  Applying zoom to Steiner point at {steiner_pos}")
+            camera_offset = np.array([args.zoom_factor, args.zoom_factor * 0.5, args.zoom_factor * 0.5])
+            camera_position = steiner_pos + camera_offset
+            
+            plotter_before.camera_position = [
+                camera_position,
+                steiner_pos,
+                (0, 0, 1)
+            ]
+            plotter_before.camera.clipping_range = (args.zoom_factor * 0.1, args.zoom_factor * 10)
+        
+        print("✓ BEFORE state rendered")
         print()
     
-    # Add triangle labels for all key triangles (gray boxes with black text)
-    print("Adding triangle labels...")
+    # ========================================================================
+    # AFTER STATE
+    # ========================================================================
     
-    # First, label the triple triangle and all 3 adjacent triangles (original functionality)
-    add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, selected_tp, partition)
-    
-    # Then, add labels for the additional methodology triangles (if not already labeled)
-    if triangle_result['success']:
-        # Get the set of triangles already labeled by add_triple_point_triangle_labels
-        already_labeled = set()
-        already_labeled.add(selected_tp.triangle_idx)
-        for vp_idx in selected_tp.var_point_indices:
-            vp = partition.variable_points[vp_idx]
-            vp_edge = tuple(sorted(vp.edge))
-            triangles_at_edge = mesh_topology.get_triangles_sharing_edge(vp_edge)
-            already_labeled.update(triangles_at_edge)
+    if show_after:
+        print("="*80)
+        print("RENDERING AFTER STATE (Applying Type 2 Migration)")
+        print("="*80)
         
-        # Label T_second_VP (if not already labeled)
-        if triangle_result['T_second_VP'] not in already_labeled:
-            add_triangle_label(plotter_before, mesh, triangle_result['T_second_VP'],
-                              f"T{triangle_result['T_second_VP']}", 
-                              color='black', font_size=12)
+        # Deep copy the partition for AFTER state
+        import copy
+        partition_after = copy.deepcopy(partition)
+        mesh_topology_after = MeshTopology(mesh)
+        switcher_after = TopologySwitcher(mesh, partition_after, mesh_topology_after)
+        steiner_handler_after = SteinerHandler(mesh, partition_after)
         
-        # Label T_adjacent_to_T_second (if not already labeled)
-        if triangle_result['T_adjacent_to_T_second'] not in already_labeled:
-            add_triangle_label(plotter_before, mesh, triangle_result['T_adjacent_to_T_second'],
-                              f"T{triangle_result['T_adjacent_to_T_second']}", 
-                              color='black', font_size=12)
+        # Apply Type 2 migration v4
+        print("Applying apply_type2_switch_v4()...")
+        migration_v4_result = switcher_after.apply_type2_switch_v4(
+            steiner_handler_after,
+            args.triple_point_index,
+            distance_preservation='preserve'
+        )
         
-        # Label T_shared_edge_with_target (if not already labeled)
-        if triangle_result['T_shared_edge_with_target'] not in already_labeled:
-            add_triangle_label(plotter_before, mesh, triangle_result['T_shared_edge_with_target'],
-                              f"T{triangle_result['T_shared_edge_with_target']}", 
-                              color='black', font_size=12)
-    
-    print("Triangle labels added")
-    print()
-    
-    # Apply zoom if requested
-    if args.apply_zoom:
-        print(f"  Applying zoom to Steiner point at {steiner_pos}")
-        camera_offset = np.array([args.zoom_factor, args.zoom_factor * 0.5, args.zoom_factor * 0.5])
-        camera_position = steiner_pos + camera_offset
+        if not migration_v4_result['success']:
+            print("ERROR: Type 2 migration failed!")
+            print(migration_v4_result)
+            return
         
-        plotter_before.camera_position = [
-            camera_position,
-            steiner_pos,
-            (0, 0, 1)
-        ]
-        plotter_before.camera.clipping_range = (args.zoom_factor * 0.1, args.zoom_factor * 10)
+        print()
+        print("✓ Type 2 migration applied successfully")
+        print(f"  VP count change: +{migration_v4_result['vp_count_change']}")
+        print(f"  Segment count change: +{migration_v4_result['segment_count_change']}")
+        print(f"  New triple point in triangle: {migration_v4_result['target_triangle_idx']}")
+        print()
+        
+        # Reinitialize area calculator for updated partition
+        area_calc_after = AreaCalculator(mesh, partition_after, use_vp_based=True)
+        
+        # Create plotter
+        if args.state == 'both':
+            plotter_after = plotter_before  # Same plotter object
+            plotter_after.subplot(0, 1)
+        else:
+            plotter_after = pv.Plotter()
+        
+        plotter_after.add_title(
+            f"Type 2 AFTER: New Triple Point at Triangle {migration_v4_result['target_triangle_idx']}",
+            font_size=12
+        )
+        
+        # Render all regions with updated partition
+        render_regions(
+            plotter_after, mesh, partition_after, area_calc_after, steiner_handler_after,
+            target_region=None,
+            backface_culling=args.enable_backface_culling
+        )
+        
+        # Add Steiner visualization (new triple point)
+        if args.show_steiner:
+            add_steiner_visualization(plotter_after, steiner_handler_after, partition_after, mesh, 
+                                    args.steiner_size)
+        
+        # Add VP visualization for AFTER state
+        if args.show_vps:
+            # Show key VPs with updated positions
+            # New triple point VPs: vp_close_to_steiner, steiner_VP, outer_neighbor
+            vp_close_idx = migration_v4_result['vp_close_to_steiner_idx']
+            steiner_vp_idx = migration_v4_result['steiner_vp_idx']
+            outer_neighbor_idx = migration_v4_result['outer_neighbor_vp_close_idx']
+            stationary_idx = migration_v4_result['stationary_vp_idx']
+            migrated_idx = migration_v4_result['migrating_vp_idx']
+            
+            # Show new triple point VPs in new triple triangle
+            new_triple_vps = [vp_close_idx, steiner_vp_idx, outer_neighbor_idx]
+            new_triple_colors = ['blue', 'orange', 'cyan']
+            new_triple_labels = [
+                f"VP_close\nidx={vp_close_idx}\n(moved)",
+                f"Steiner_VP\nidx={steiner_vp_idx}\n(NEW!)",
+                f"Outer\nidx={outer_neighbor_idx}"
+            ]
+            
+            print("New Triple Point VPs:")
+            for i, vp_idx in enumerate(new_triple_vps):
+                print(f"  {new_triple_colors[i].capitalize()} VP: {vp_idx}")
+                vp = partition_after.variable_points[vp_idx]
+                print(f"    Edge: {vp.edge}")
+                print(f"    Lambda: {vp.lambda_param:.6f}")
+            print()
+            
+            add_vp_visualization(
+                plotter_after, partition_after, mesh,
+                new_triple_vps,
+                new_triple_colors,
+                new_triple_labels,
+                args.vp_size
+            )
+            
+            # Show other key VPs
+            other_vps = [stationary_idx, migrated_idx]
+            other_colors = ['red', 'green']
+            other_labels = [
+                f"Stationary\nidx={stationary_idx}",
+                f"Migrated\nidx={migrated_idx}\n(moved)"
+            ]
+            
+            print("Other Key VPs:")
+            for i, vp_idx in enumerate(other_vps):
+                print(f"  {other_colors[i].capitalize()} VP: {vp_idx}")
+                vp = partition_after.variable_points[vp_idx]
+                print(f"    Edge: {vp.edge}")
+            print()
+            
+            add_vp_visualization(
+                plotter_after, partition_after, mesh,
+                other_vps,
+                other_colors,
+                other_labels,
+                args.vp_size
+            )
+        
+        # Apply zoom (same as BEFORE)
+        if args.apply_zoom:
+            camera_offset = np.array([args.zoom_factor, args.zoom_factor * 0.5, args.zoom_factor * 0.5])
+            camera_position = steiner_pos + camera_offset
+            
+            plotter_after.camera_position = [
+                camera_position,
+                steiner_pos,
+                (0, 0, 1)
+            ]
+            plotter_after.camera.clipping_range = (args.zoom_factor * 0.1, args.zoom_factor * 10)
+        
+        print("✓ AFTER state rendered")
+        print()
     
-    print()
-    print("Opening PyVista window (BEFORE state)...")
-    plotter_before.show()
+    # ========================================================================
+    # SHOW PLOT(S)
+    # ========================================================================
+    
+    print("="*80)
+    if args.state == 'both':
+        print("Opening PyVista window (BEFORE and AFTER side-by-side)...")
+        plotter_before.show()  # Shows both subplots
+    elif args.state == 'before':
+        print("Opening PyVista window (BEFORE state)...")
+        plotter_before.show()
+    else:  # after
+        print("Opening PyVista window (AFTER state)...")
+        plotter_after.show()
     
     print("\n" + "="*80)
     print("Visualization complete!")
