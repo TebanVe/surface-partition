@@ -1066,6 +1066,8 @@ def run_visualization(args):
     print("="*80)
     if args.state == 'both':
         print("Opening PyVista window (BEFORE and AFTER side-by-side)...")
+        # Link the camera views so they rotate/zoom together
+        plotter_before.link_views()
         plotter_before.show()  # Shows both subplots
     elif args.state == 'before':
         print("Opening PyVista window (BEFORE state)...")
