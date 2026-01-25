@@ -2804,6 +2804,9 @@ class TopologySwitcher:
         # Step 2: Rebuild only affected triangle_segments
         self.partition.rebuild_triangle_segments_for_affected_triangles(affected_triangles)
         
+        # Step 2.5: Rebuild segment_to_triangle map (after triangle_segments updated)
+        self.partition.rebuild_segment_to_triangle_map()
+        
         # Step 3: Verify edge_to_varpoint consistency
         for vp_idx, vp in enumerate(self.partition.variable_points):
             edge_norm = tuple(sorted(vp.edge))
@@ -3316,6 +3319,163 @@ class TopologySwitcher:
         self.logger.info(f"✓ Selected migrating VP: {migrating_vp_idx}")
         self.logger.info(f"  Reason: Edge {result['migrating_vp_edge']} shares vertex with target edge {target_edge}")
         self.logger.info(f"  Non-migrating VP: {non_migrating_vp_idx}")
+        
+        return result
+    
+    def _identify_type2_migration_triangles(self, migration_result: Dict) -> Dict:
+        """
+        Identify all key triangles for Type 2 migration using new methodology.
+        
+        Triangles identified:
+        1. T_second_VP: Triangle containing segment between direct and second-level neighbors
+        2. T_adjacent_to_T_second: Triangle adjacent to T_second_VP via its free edge
+        3. T_shared_edge_with_target: Triangle adjacent to target triangle via target edge
+        
+        Args:
+            migration_result: Result dict from apply_type2_switch_v3() containing:
+                - migrating_vp_idx
+                - target_triangle_idx
+                - target_edge
+                
+        Returns:
+            Dict with triangle identification results:
+            {
+                'success': bool,
+                'T_second_VP': int,
+                'T_second_VP_free_edge': tuple,
+                'T_adjacent_to_T_second': int,
+                'T_shared_edge_with_target': int,
+                'vp_context': {
+                    'direct_outer_neighbor': int,
+                    'second_level_neighbor': int
+                }
+            }
+        """
+        result = {
+            'success': False,
+            'error': None
+        }
+        
+        migrating_vp_idx = migration_result['migrating_vp_idx']
+        triple_vp_set = set(migration_result['triple_vp_indices'])
+        target_triangle_idx = migration_result['target_triangle_idx']
+        target_edge = migration_result['target_edge']
+        
+        self.logger.info(f"Identifying key triangles for Type 2 migration...")
+        
+        # Helper function to get neighbors
+        def get_neighbors(vp_idx):
+            neighbors = []
+            for seg in self.partition.boundary_segments:
+                if vp_idx == seg.vp_idx_1:
+                    neighbors.append(seg.vp_idx_2)
+                elif vp_idx == seg.vp_idx_2:
+                    neighbors.append(seg.vp_idx_1)
+            return neighbors
+        
+        # Step 1: Find direct outer neighbor (Level 1)
+        all_neighbors = get_neighbors(migrating_vp_idx)
+        direct_outer_neighbors = [vp for vp in all_neighbors if vp not in triple_vp_set]
+        
+        if len(direct_outer_neighbors) != 1:
+            result['error'] = f"Expected 1 direct outer neighbor, found {len(direct_outer_neighbors)}: {direct_outer_neighbors}"
+            self.logger.error(result['error'])
+            return result
+        
+        direct_outer_neighbor = direct_outer_neighbors[0]
+        self.logger.info(f"  Direct outer neighbor (Level 1): VP {direct_outer_neighbor}")
+        
+        # Step 2: Find second-level neighbor (Level 2)
+        neighbor_neighbors = get_neighbors(direct_outer_neighbor)
+        # Filter out migrating VP and all triple triangle VPs
+        second_level_neighbors = [vp for vp in neighbor_neighbors 
+                                 if vp != migrating_vp_idx and vp not in triple_vp_set]
+        
+        if len(second_level_neighbors) != 1:
+            result['error'] = f"Expected 1 second-level neighbor, found {len(second_level_neighbors)}: {second_level_neighbors}"
+            self.logger.error(result['error'])
+            return result
+        
+        second_level_neighbor = second_level_neighbors[0]
+        self.logger.info(f"  Second-level neighbor (Level 2): VP {second_level_neighbor}")
+        
+        result['vp_context'] = {
+            'direct_outer_neighbor': direct_outer_neighbor,
+            'second_level_neighbor': second_level_neighbor
+        }
+        
+        # Step 3: Find T_second_VP (triangle containing segment Level1--Level2)
+        seg_key = tuple(sorted([direct_outer_neighbor, second_level_neighbor]))
+        T_second_VP = self.partition.segment_to_triangle.get(seg_key)
+        
+        if T_second_VP is None:
+            result['error'] = f"Could not find triangle containing segment {seg_key}"
+            self.logger.error(result['error'])
+            return result
+        
+        result['T_second_VP'] = T_second_VP
+        self.logger.info(f"  T_second_VP: {T_second_VP} (contains segment VP{direct_outer_neighbor}--VP{second_level_neighbor})")
+        
+        # Step 4: Find free edge in T_second_VP
+        tri_vertices = self.mesh.faces[T_second_VP]
+        tri_edges = [
+            tuple(sorted([tri_vertices[0], tri_vertices[1]])),
+            tuple(sorted([tri_vertices[1], tri_vertices[2]])),
+            tuple(sorted([tri_vertices[2], tri_vertices[0]]))
+        ]
+        
+        free_edge = None
+        for edge in tri_edges:
+            if edge not in self.partition.edge_to_varpoint:
+                free_edge = edge
+                break
+        
+        if free_edge is None:
+            result['error'] = f"Could not find free edge in T_second_VP {T_second_VP}"
+            self.logger.error(result['error'])
+            return result
+        
+        result['T_second_VP_free_edge'] = free_edge
+        self.logger.info(f"  T_second_VP free edge: {free_edge}")
+        
+        # Step 5: Find T_adjacent_to_T_second
+        if free_edge not in self.mesh_topology.edge_to_triangles:
+            result['error'] = f"Free edge {free_edge} not in mesh topology"
+            self.logger.error(result['error'])
+            return result
+        
+        adj_triangles = self.mesh_topology.edge_to_triangles[free_edge]
+        T_adjacent_candidates = [tri for tri in adj_triangles if tri != T_second_VP]
+        
+        if len(T_adjacent_candidates) != 1:
+            result['error'] = f"Expected 1 adjacent triangle, found {len(T_adjacent_candidates)}"
+            self.logger.error(result['error'])
+            return result
+        
+        T_adjacent_to_T_second = T_adjacent_candidates[0]
+        result['T_adjacent_to_T_second'] = T_adjacent_to_T_second
+        self.logger.info(f"  T_adjacent_to_T_second: {T_adjacent_to_T_second}")
+        
+        # Step 6: Find T_shared_edge_with_target
+        if target_edge not in self.mesh_topology.edge_to_triangles:
+            result['error'] = f"Target edge {target_edge} not in mesh topology"
+            self.logger.error(result['error'])
+            return result
+        
+        adj_to_target = self.mesh_topology.edge_to_triangles[target_edge]
+        T_shared_candidates = [tri for tri in adj_to_target if tri != target_triangle_idx]
+        
+        if len(T_shared_candidates) != 1:
+            result['error'] = f"Expected 1 triangle sharing target edge, found {len(T_shared_candidates)}"
+            self.logger.error(result['error'])
+            return result
+        
+        T_shared_edge_with_target = T_shared_candidates[0]
+        result['T_shared_edge_with_target'] = T_shared_edge_with_target
+        self.logger.info(f"  T_shared_edge_with_target: {T_shared_edge_with_target}")
+        
+        result['success'] = True
+        self.logger.info("✓ Successfully identified all key triangles")
         
         return result
 

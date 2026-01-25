@@ -428,6 +428,35 @@ def add_steiner_visualization(
                 plotter.add_mesh(line, color='cyan', line_width=2, opacity=0.7)
 
 
+def add_triangle_label(
+    plotter: pv.Plotter,
+    mesh: TriMesh,
+    tri_idx: int,
+    label_text: str,
+    color: str = 'black',
+    font_size: int = 12
+):
+    """Add a text label at the centroid of a triangle with gray background."""
+    # Get triangle vertices
+    face = mesh.faces[tri_idx]
+    v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
+    
+    # Compute centroid
+    centroid = (v0 + v1 + v2) / 3.0
+    
+    # Add text at centroid with gray box background
+    plotter.add_point_labels(
+        [centroid],
+        [label_text],
+        font_size=font_size,
+        text_color=color,
+        font_family='arial',
+        shape_color='gray',
+        shape_opacity=0.8,  # Gray background
+        always_visible=True
+    )
+
+
 def add_vp_visualization(
     plotter: pv.Plotter,
     partition: PartitionContour,
@@ -451,7 +480,7 @@ def add_vp_visualization(
             label_pos = vp_pos + np.array([0, 0, vp_size * 3])
             plotter.add_point_labels(
                 [label_pos], [label],
-                font_size=10, text_color='black',
+                font_size=9, text_color='black',
                 shape_color='white', shape_opacity=0.7,
                 always_visible=True, point_size=8
             )
@@ -485,28 +514,9 @@ def add_triple_point_triangle_labels(
     
     print(f"  Labeling {len(triangles_to_label)} triangles: {sorted(triangles_to_label)}")
     
-    # Add labels
+    # Add labels using the standard add_triangle_label function
     for tri_idx in triangles_to_label:
-        face = mesh.faces[tri_idx]
-        tri_vertices = mesh.vertices[face]
-        centroid = np.mean(tri_vertices, axis=0)
-        
-        # Offset slightly along normal for visibility
-        v1, v2, v3 = tri_vertices
-        normal = np.cross(v2 - v1, v3 - v1)
-        normal = normal / (np.linalg.norm(normal) + 1e-12)
-        label_pos = centroid + normal * 0.00005
-        
-        plotter.add_point_labels(
-            points=[label_pos],
-            labels=[f"T{tri_idx}"],
-            font_size=14,
-            text_color='black',
-            render_points_as_spheres=True,
-            point_size=12,
-            point_color='yellow',
-            always_visible=True
-        )
+        add_triangle_label(plotter, mesh, tri_idx, f"T{tri_idx}", color='black', font_size=12)
 
 
 def compute_steiner_distance_to_boundary(triple_point: TriplePoint, mesh: TriMesh) -> float:
@@ -703,6 +713,30 @@ def run_visualization(args):
             print(f"    Lambda: {vp.lambda_param:.6f}")
         print()
     
+    # Identify key triangles for Type 2 migration
+    print("="*80)
+    print("KEY TRIANGLES FOR TYPE 2 MIGRATION")
+    print("="*80)
+    print()
+    
+    triangle_result = switcher._identify_type2_migration_triangles(migration_result)
+    
+    if not triangle_result['success']:
+        print(f"❌ ERROR: Triangle identification failed: {triangle_result.get('error', 'Unknown error')}")
+        return
+    
+    print("Triangle Identification Results:")
+    print(f"  T_second_VP: {triangle_result['T_second_VP']}")
+    print(f"    Contains segment: VP{triangle_result['vp_context']['direct_outer_neighbor']} -- VP{triangle_result['vp_context']['second_level_neighbor']}")
+    print(f"    Free edge: {triangle_result['T_second_VP_free_edge']}")
+    print()
+    print(f"  T_adjacent_to_T_second: {triangle_result['T_adjacent_to_T_second']}")
+    print(f"    Shares free edge {triangle_result['T_second_VP_free_edge']} with T_second_VP")
+    print()
+    print(f"  T_shared_edge_with_target: {triangle_result['T_shared_edge_with_target']}")
+    print(f"    Shares target edge {migration_result['target_edge']} with target triangle")
+    print()
+    
     # ========================================================================
     # BEFORE STATE
     # ========================================================================
@@ -818,9 +852,54 @@ def run_visualization(args):
     print(f"Target edge {target_edge} highlighted in green")
     print()
     
-    # Add triangle labels
-    add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, 
-                                     selected_tp, partition)
+    # Add T_second_VP free edge highlighting (yellow)
+    if triangle_result['success']:
+        free_edge = triangle_result['T_second_VP_free_edge']
+        v1_pos_free = mesh.vertices[free_edge[0]]
+        v2_pos_free = mesh.vertices[free_edge[1]]
+        free_edge_line = pv.Line(v1_pos_free, v2_pos_free)
+        plotter_before.add_mesh(free_edge_line, color='gold', line_width=4, opacity=1.0,
+                               label='T_second_VP Free Edge')
+        print(f"T_second_VP free edge {free_edge} highlighted in yellow/gold")
+        print()
+    
+    # Add triangle labels for all key triangles (gray boxes with black text)
+    print("Adding triangle labels...")
+    
+    # First, label the triple triangle and all 3 adjacent triangles (original functionality)
+    add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, selected_tp, partition)
+    
+    # Then, add labels for the additional methodology triangles (if not already labeled)
+    if triangle_result['success']:
+        # Get the set of triangles already labeled by add_triple_point_triangle_labels
+        already_labeled = set()
+        already_labeled.add(selected_tp.triangle_idx)
+        for vp_idx in selected_tp.var_point_indices:
+            vp = partition.variable_points[vp_idx]
+            vp_edge = tuple(sorted(vp.edge))
+            triangles_at_edge = mesh_topology.get_triangles_sharing_edge(vp_edge)
+            already_labeled.update(triangles_at_edge)
+        
+        # Label T_second_VP (if not already labeled)
+        if triangle_result['T_second_VP'] not in already_labeled:
+            add_triangle_label(plotter_before, mesh, triangle_result['T_second_VP'],
+                              f"T{triangle_result['T_second_VP']}", 
+                              color='black', font_size=12)
+        
+        # Label T_adjacent_to_T_second (if not already labeled)
+        if triangle_result['T_adjacent_to_T_second'] not in already_labeled:
+            add_triangle_label(plotter_before, mesh, triangle_result['T_adjacent_to_T_second'],
+                              f"T{triangle_result['T_adjacent_to_T_second']}", 
+                              color='black', font_size=12)
+        
+        # Label T_shared_edge_with_target (if not already labeled)
+        if triangle_result['T_shared_edge_with_target'] not in already_labeled:
+            add_triangle_label(plotter_before, mesh, triangle_result['T_shared_edge_with_target'],
+                              f"T{triangle_result['T_shared_edge_with_target']}", 
+                              color='black', font_size=12)
+    
+    print("Triangle labels added")
+    print()
     
     # Apply zoom if requested
     if args.apply_zoom:

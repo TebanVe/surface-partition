@@ -223,7 +223,10 @@ class PartitionContour:
         triangle_segments: List of TriangleSegment objects (triangle-based storage)
         indicator_functions: (N, n_cells) array of φ_i from equation (5.1)
         edge_to_varpoint: Map from mesh triangle edge tuple to variable point index
+        segment_to_triangle: Map from (vp1, vp2) tuple to triangle_idx for O(1) lookup
         triple_points: List of detected triple points (computed on demand)
+        
+    IMPORTANT: segment_to_triangle must be rebuilt after topology switches (Type 1 or Type 2)
     """
     
     def __init__(self, mesh: TriMesh, indicator_functions: np.ndarray, 
@@ -247,6 +250,7 @@ class PartitionContour:
         self.variable_points: List[VariablePoint] = []
         self.triangle_segments: List[TriangleSegment] = []  # Triangle-centric storage
         self.edge_to_varpoint: Dict[Tuple[int, int], int] = {}
+        self.segment_to_triangle: Dict[Tuple[int, int], int] = {}  # Inverse map: (vp1, vp2) -> triangle
         self.triple_points: Optional[List] = None  # Computed on demand
         
         # Phase 4: Explicit segment connectivity (for cross-triangle segments)
@@ -260,6 +264,9 @@ class PartitionContour:
         else:
             self.logger.info("Initializing from indicator functions (scanning all triangles)")
             self._initialize_from_indicators()
+        
+        # Build segment-to-triangle inverse map for efficient lookups
+        self._build_segment_to_triangle_map()
         
         self.logger.info(f"Initialized PartitionContour: {len(self.variable_points)} variable points, "
                         f"{self.n_cells} partition cells")
@@ -576,6 +583,9 @@ class PartitionContour:
         # Without this rebuild, boundary_segments becomes stale after switches, causing
         # visualization to render OLD boundary positions even though VPs have moved.
         self._build_segment_connectivity()
+        
+        # Rebuild segment_to_triangle map (after triangle_segments updated)
+        self._build_segment_to_triangle_map()
     
     def rebuild_triangle_segments_for_affected_triangles(self, affected_triangles: List[int]):
         """
@@ -854,6 +864,72 @@ class PartitionContour:
     def evaluate_variable_point(self, var_point_idx: int) -> np.ndarray:
         """Get 3D/2D coordinates of a variable point."""
         return self.variable_points[var_point_idx].evaluate(self.mesh.vertices)
+    
+    def _build_segment_to_triangle_map(self) -> None:
+        """
+        Build inverse map: segment (vp1, vp2) -> triangle_idx.
+        
+        This map provides O(1) lookup for finding which triangle contains
+        a given segment between two variable points.
+        
+        IMPORTANT: This map must be rebuilt after ANY topology switch operation:
+        - Type 1 (vertex collapse): VPs move to new edges, segments change
+        - Type 2 (triple point collapse): Steiner point removed, segments reorganized
+        
+        Call rebuild_segment_to_triangle_map() after any migration.
+        """
+        self.segment_to_triangle = {}
+        
+        for tri_seg in self.triangle_segments:
+            # Only create mapping for triangles with exactly 2 VPs (normal segments)
+            # Triple points (3 VPs) and partial segments (1 VP) are not included
+            if len(tri_seg.var_point_indices) == 2:
+                # Normalize segment key (min, max) for consistent lookup
+                seg_key = tuple(sorted(tri_seg.var_point_indices))
+                
+                # Store mapping
+                self.segment_to_triangle[seg_key] = tri_seg.triangle_idx
+            
+        self.logger.debug(f"Built segment_to_triangle map with {len(self.segment_to_triangle)} entries")
+    
+    def rebuild_segment_to_triangle_map(self) -> None:
+        """
+        Public method to rebuild the segment-to-triangle map.
+        
+        Call this after:
+        - Type 1 topology switches
+        - Type 2 topology switches  
+        - Any manual modification to triangle_segments
+        """
+        self._build_segment_to_triangle_map()
+        self.logger.info("Rebuilt segment_to_triangle map")
+    
+    def validate_segment_to_triangle_map(self) -> bool:
+        """
+        Validate that segment_to_triangle map is consistent with triangle_segments.
+        
+        Returns:
+            True if consistent, False otherwise
+        """
+        # Count how many 2-VP segments we should have
+        expected_count = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
+        
+        # Check sizes match
+        if len(self.segment_to_triangle) != expected_count:
+            self.logger.error(f"Map size mismatch: {len(self.segment_to_triangle)} vs {expected_count} (2-VP segments)")
+            return False
+        
+        # Check each 2-VP entry
+        for tri_seg in self.triangle_segments:
+            if len(tri_seg.var_point_indices) == 2:
+                seg_key = tuple(sorted(tri_seg.var_point_indices))
+                mapped_tri = self.segment_to_triangle.get(seg_key)
+                
+                if mapped_tri != tri_seg.triangle_idx:
+                    self.logger.error(f"Inconsistency: segment {seg_key} maps to {mapped_tri}, expected {tri_seg.triangle_idx}")
+                    return False
+        
+        return True
     
     def get_triangle_based_segments(self) -> List[Tuple[int, int]]:
         """
