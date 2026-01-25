@@ -3508,22 +3508,16 @@ class TopologySwitcher:
             return None
         
         triple_point = steiner_handler.triple_points[triple_point_idx]
-        vp_indices = triple_point['vp_indices']
-        steiner_pt = triple_point['steiner_point']
+        vp_indices = triple_point.var_point_indices
+        steiner_pt = triple_point.compute_steiner_point()
         
-        # Get Steiner distances (already computed in triple_point structure)
-        # These are the distances from Steiner point to each VP position
-        vp_distances = triple_point.get('vp_distances', {})
-        
-        if not vp_distances:
-            # Fallback: compute distances manually
-            self.logger.debug("Computing VP distances to Steiner point manually")
-            vp_distances = {}
-            for vp_idx in vp_indices:
-                vp = self.partition.variable_points[vp_idx]
-                vp_pos = self._get_vp_position(vp)
-                dist = np.linalg.norm(vp_pos - steiner_pt)
-                vp_distances[vp_idx] = dist
+        # Compute distances from Steiner point to each VP
+        vp_distances = {}
+        for vp_idx in vp_indices:
+            vp = self.partition.variable_points[vp_idx]
+            vp_pos = self._get_vp_position(vp)
+            dist = np.linalg.norm(vp_pos - steiner_pt)
+            vp_distances[vp_idx] = dist
         
         # Find VP with minimum distance to Steiner point
         vp_close_to_steiner_idx = min(vp_distances.keys(), key=lambda k: vp_distances[k])
@@ -3883,8 +3877,8 @@ class TopologySwitcher:
             return result
         
         triple_point = steiner_handler.triple_points[triple_point_idx]
-        triple_triangle_idx = triple_point['triangle_idx']
-        triple_vp_indices = triple_point['vp_indices']
+        triple_triangle_idx = triple_point.triangle_idx
+        triple_vp_indices = triple_point.var_point_indices
         
         self.logger.info(f"Triple triangle: {triple_triangle_idx}")
         self.logger.info(f"Triple VPs: {triple_vp_indices}")
