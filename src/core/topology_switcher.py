@@ -825,6 +825,10 @@ class TopologySwitcher:
         - vp.lambda_param
         - partition.edge_to_varpoint dict
         
+        NOTE: This does NOT update vp.belongs_to_cells. For Type 2 migrations,
+        belongs_to_cells is updated in a batch AFTER the cell flip (Step 11b)
+        to ensure it uses the final indicator_functions state.
+        
         Args:
             vp_idx: Variable point index
             new_edge: New edge tuple
@@ -842,6 +846,7 @@ class TopologySwitcher:
         # Update variable point
         vp.edge = new_edge
         vp.lambda_param = new_lambda
+        # NOTE: belongs_to_cells NOT updated here - see docstring
     
     def _find_closest_edge_to_steiner(self, triple_point: TriplePoint) -> Tuple[Optional[Tuple[int, int]], float]:
         """
@@ -3749,40 +3754,29 @@ class TopologySwitcher:
         """
         Determine which two cells are separated by an edge.
         
-        Uses triangle labeling on both sides of the edge.
+        An edge separates exactly the cells of its two endpoint vertices.
+        This is the most direct and correct approach, especially after cell flips.
         
         Args:
             edge: Edge tuple (v1, v2)
             
         Returns:
-            Set of 2 cell indices separated by this edge
+            Set of cell indices separated by this edge (typically 2, or 1 if interior)
         """
-        # Get two triangles sharing this edge
-        triangles_on_edge = self.mesh_topology.edge_to_triangles.get(edge, [])
-        
-        if len(triangles_on_edge) != 2:
-            self.logger.error(f"Edge {edge} should be shared by 2 triangles, "
-                            f"found {len(triangles_on_edge)}")
-            # Fallback: return empty set
-            return set()
-        
-        tri1_idx, tri2_idx = triangles_on_edge
-        
-        # Use vertex labels from indicator_functions
+        # Get vertex labels directly from the edge vertices
         vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
         
-        # Get cells from both triangles (majority vote)
-        cells = set()
-        for tri_idx in [tri1_idx, tri2_idx]:
-            face = self.mesh.faces[tri_idx]
-            # Get cell labels for all 3 vertices of triangle
-            tri_cells = [vertex_labels[int(v)] for v in face]
-            # Use majority cell (most common)
-            majority_cell = max(set(tri_cells), key=tri_cells.count)
-            cells.add(majority_cell)
+        v1, v2 = edge
+        cell1 = int(vertex_labels[v1])
+        cell2 = int(vertex_labels[v2])
         
-        if len(cells) != 2:
-            self.logger.warning(f"Edge {edge} expected to separate 2 cells, found {len(cells)}: {cells}")
+        # Edge separates the cells of its two vertices
+        cells = {cell1, cell2}
+        
+        if len(cells) == 1:
+            # Both vertices have same cell - edge is interior to that cell
+            # This shouldn't happen for edges with VPs, but handle gracefully
+            self.logger.debug(f"Edge {edge} has both vertices in same cell {cells}")
         
         self.logger.debug(f"Edge {edge} separates cells: {cells}")
         
@@ -4078,6 +4072,34 @@ class TopologySwitcher:
         self._update_indicator_functions_for_target_vertex(
             common_vertex, old_cell, new_cell
         )
+        
+        self.logger.info(f"Step 11: Common vertex {common_vertex} flipped: "
+                        f"cell {old_cell} → cell {new_cell}")
+        
+        # Step 11b: Update belongs_to_cells for all moved VPs
+        # CRITICAL: This must happen AFTER the cell flip (Step 11) so that
+        # _determine_cells_for_edge() uses the FINAL indicator_functions state
+        self.logger.info(f"Step 11b: Updating belongs_to_cells for moved VPs")
+        
+        moved_vps = [
+            (vp_close_to_steiner_idx, "vp_close_to_steiner"),
+            (migrating_vp_idx, "migrating_VP"),
+            (first_level_vp_idx, "first_level_VP"),
+            (steiner_vp_idx, "steiner_VP")  # Also verify steiner_VP
+        ]
+        
+        for vp_idx, vp_name in moved_vps:
+            vp = self.partition.variable_points[vp_idx]
+            old_cells = vp.belongs_to_cells.copy()
+            new_cells = self._determine_cells_for_edge(vp.edge)
+            vp.belongs_to_cells = new_cells
+            
+            if old_cells != new_cells:
+                self.logger.info(f"  {vp_name} (VP{vp_idx}): "
+                                f"belongs_to_cells updated {old_cells} → {new_cells}")
+            else:
+                self.logger.debug(f"  {vp_name} (VP{vp_idx}): "
+                                 f"belongs_to_cells unchanged {new_cells}")
         
         # ========================================================================
         # PHASE 4: SEGMENT UPDATES (Steps 12-14)
