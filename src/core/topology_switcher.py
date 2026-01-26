@@ -4190,6 +4190,84 @@ class TopologySwitcher:
         self.logger.info(f"Rebuilt segment_to_triangle map")
         
         # ========================================================================
+        # DEBUG: Inspect rebuilt triangle_segments for the 6 methodology triangles
+        # ========================================================================
+        self.logger.info("="*80)
+        self.logger.info("DEBUG: Inspecting rebuilt triangle_segments (6 methodology triangles)")
+        self.logger.info("="*80)
+        
+        methodology_triangles = [
+            triple_triangle_idx, target_triangle_idx,
+            T_first_VP_idx, T_second_VP_idx,
+            T_adjacent_to_T_second_idx, T_shared_edge_with_target_idx
+        ]
+        
+        for tri_idx in sorted(methodology_triangles):
+            # Find the triangle_segment for this triangle
+            tri_segs = [ts for ts in self.partition.triangle_segments if ts.triangle_idx == tri_idx]
+            
+            if tri_segs:
+                ts = tri_segs[0]
+                self.logger.info(f"Triangle {tri_idx}:")
+                self.logger.info(f"  VP indices: {ts.var_point_indices}")
+                self.logger.info(f"  Boundary edges: {ts.boundary_edges}")
+                self.logger.info(f"  Vertex labels: {ts.vertex_labels}")
+                
+                # Check if VPs are actually on those edges
+                for vp_idx in ts.var_point_indices:
+                    vp = self.partition.variable_points[vp_idx]
+                    self.logger.info(f"    VP {vp_idx}: edge={vp.edge}, λ={vp.lambda_param:.6f}")
+                    
+                    # Verify edge is in boundary_edges
+                    if vp.edge not in ts.boundary_edges:
+                        self.logger.warning(f"      ⚠️  VP edge {vp.edge} NOT in triangle's boundary_edges!")
+            else:
+                self.logger.warning(f"Triangle {tri_idx}: NO triangle_segment found!")
+        
+        self.logger.info("="*80)
+        
+        # ========================================================================
+        # DEBUG: Check edge_to_varpoint consistency for migrated VPs
+        # ========================================================================
+        self.logger.info("DEBUG: Checking edge_to_varpoint consistency")
+        self.logger.info("="*80)
+        
+        key_vps = [
+            (vp_close_to_steiner_idx, "vp_close_to_steiner"),
+            (steiner_vp_idx, "steiner_VP"),
+            (migrating_vp_idx, "migrating_VP"),
+            (first_level_vp_idx, "first_level_VP"),
+            (stationary_vp_idx, "stationary_VP")
+        ]
+        
+        for vp_idx, vp_name in key_vps:
+            vp = self.partition.variable_points[vp_idx]
+            mapped_vp = self.partition.edge_to_varpoint.get(vp.edge)
+            
+            if mapped_vp == vp_idx:
+                self.logger.info(f"✓ {vp_name} (VP{vp_idx}): edge {vp.edge} → VP{mapped_vp}")
+            else:
+                self.logger.error(f"✗ {vp_name} (VP{vp_idx}): edge {vp.edge} → VP{mapped_vp} (MISMATCH!)")
+        
+        self.logger.info("="*80)
+        
+        # ========================================================================
+        # DEBUG: Verify new segments
+        # ========================================================================
+        self.logger.info("DEBUG: New segments verification")
+        self.logger.info("="*80)
+        
+        for i, seg in enumerate(new_segments):
+            vp1 = self.partition.variable_points[seg.vp_idx_1]
+            vp2 = self.partition.variable_points[seg.vp_idx_2]
+            self.logger.info(f"New segment {i+1}: VP{seg.vp_idx_1}--VP{seg.vp_idx_2}")
+            self.logger.info(f"  VP{seg.vp_idx_1}: edge={vp1.edge}, λ={vp1.lambda_param:.6f}")
+            self.logger.info(f"  VP{seg.vp_idx_2}: edge={vp2.edge}, λ={vp2.lambda_param:.6f}")
+            self.logger.info(f"  Cells: {seg.cell_pair}")
+        
+        self.logger.info("="*80)
+        
+        # ========================================================================
         # COMPLETE
         # ========================================================================
         

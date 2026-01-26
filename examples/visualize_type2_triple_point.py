@@ -136,7 +136,8 @@ def compute_cell_portion_in_triangle_simple(
     partition: PartitionContour,
     tri_idx: int,
     cell_idx: int,
-    tri_idx_to_segment: Optional[Dict] = None
+    tri_idx_to_segment: Optional[Dict] = None,
+    debug: bool = False
 ) -> Optional[np.ndarray]:
     """
     Compute polygon for cell portion of boundary triangle (simplified - no crossing cache).
@@ -150,18 +151,41 @@ def compute_cell_portion_in_triangle_simple(
     vertex_labels = np.argmax(partition.indicator_functions, axis=1)
     labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
     
+    if debug and tri_idx in [18150, 18152]:
+        print(f"\n{'='*60}")
+        print(f"DEBUG: compute_cell_portion for Triangle {tri_idx}, Cell {cell_idx}")
+        print(f"{'='*60}")
+        print(f"Triangle vertices: {v1}, {v2}, {v3}")
+        print(f"Vertex labels: {labels}")
+    
     # Check if triangle is boundary via VPs (only path - no crossing cache)
     is_boundary = False
     vp_positions = []
+    vp_indices_in_tri = []
     
     if tri_idx_to_segment is not None:
         tri_seg = tri_idx_to_segment.get(tri_idx)
         if tri_seg:
+            if debug and tri_idx in [18150, 18152]:
+                print(f"Triangle segment found with VPs: {tri_seg.var_point_indices}")
+            
             for vp_idx in tri_seg.var_point_indices:
                 vp = partition.variable_points[vp_idx]
+                
+                if debug and tri_idx in [18150, 18152]:
+                    print(f"  VP {vp_idx}:")
+                    print(f"    edge: {vp.edge}")
+                    print(f"    belongs_to_cells: {vp.belongs_to_cells}")
+                    print(f"    cell {cell_idx} in belongs_to_cells? {cell_idx in vp.belongs_to_cells}")
+                
                 if cell_idx in vp.belongs_to_cells:
                     is_boundary = True
-                    vp_positions.append(vp.evaluate(mesh.vertices))
+                    vp_pos = vp.evaluate(mesh.vertices)
+                    vp_positions.append(vp_pos)
+                    vp_indices_in_tri.append(vp_idx)
+                    
+                    if debug and tri_idx in [18150, 18152]:
+                        print(f"    → INCLUDED (position: {vp_pos})")
     else:
         for tri_seg in partition.triangle_segments:
             if tri_seg.triangle_idx == tri_idx:
@@ -170,7 +194,12 @@ def compute_cell_portion_in_triangle_simple(
                     if cell_idx in vp.belongs_to_cells:
                         is_boundary = True
                         vp_positions.append(vp.evaluate(mesh.vertices))
+                        vp_indices_in_tri.append(vp_idx)
                 break
+    
+    if debug and tri_idx in [18150, 18152]:
+        print(f"Is boundary for cell {cell_idx}? {is_boundary}")
+        print(f"VP positions collected: {len(vp_positions)} (VPs: {vp_indices_in_tri})")
     
     if not is_boundary:
         return None
@@ -183,19 +212,45 @@ def compute_cell_portion_in_triangle_simple(
         vp_pos1 = vp_positions[0]
         vp_pos2 = vp_positions[1]
         
+        if debug and tri_idx in [18150, 18152]:
+            print(f"Using VP-based vertex selection (2+ VPs)")
+            print(f"Checking which triangle vertices are on cell {cell_idx} side:")
+        
         for v in [v1, v2, v3]:
             v_pos = mesh.vertices[v]
-            if _vertex_on_cell_side_for_viz(v_pos, vp_pos1, vp_pos2, cell_idx, 
-                                           mesh, tri_idx, partition):
+            is_inside = _vertex_on_cell_side_for_viz(v_pos, vp_pos1, vp_pos2, cell_idx, 
+                                           mesh, tri_idx, partition)
+            
+            if debug and tri_idx in [18150, 18152]:
+                print(f"  Vertex {v} (cell {vertex_labels[v]}): {'INSIDE' if is_inside else 'OUTSIDE'}")
+            
+            if is_inside:
                 vertices_inside.append(v_pos)
     else:
         # Fallback to indicator_functions
+        if debug and tri_idx in [18150, 18152]:
+            print(f"Using indicator_functions fallback (< 2 VPs)")
+        
         for v, lab in zip([v1, v2, v3], labels):
             if lab == cell_idx:
                 vertices_inside.append(mesh.vertices[v])
+                
+                if debug and tri_idx in [18150, 18152]:
+                    print(f"  Vertex {v} included (label matches cell {cell_idx})")
     
     # Construct polygon
     all_points = vertices_inside + vp_positions
+    
+    if debug and tri_idx in [18150, 18152]:
+        print(f"Final polygon construction:")
+        print(f"  Vertices inside: {len(vertices_inside)}")
+        print(f"  VP positions: {len(vp_positions)}")
+        print(f"  Total points: {len(all_points)}")
+        
+        if len(all_points) < 3:
+            print(f"  ❌ RETURNING None - not enough points for polygon!")
+        else:
+            print(f"  ✓ Returning polygon with {len(all_points)} vertices")
     
     if len(all_points) < 3:
         return None
@@ -304,8 +359,11 @@ def render_single_region_simple(
     # Boundary triangles (partial)
     boundary_tris = area_calc.cell_boundary_triangles.get(cell_idx, [])
     for tri_idx in boundary_tris:
+        # Enable debug for problematic triangles
+        debug_enabled = tri_idx in [18150, 18152]
+        
         poly_vertices = compute_cell_portion_in_triangle_simple(
-            mesh, partition, tri_idx, cell_idx, tri_idx_to_segment
+            mesh, partition, tri_idx, cell_idx, tri_idx_to_segment, debug=debug_enabled
         )
         if poly_vertices is not None:
             n_verts = len(poly_vertices)
@@ -770,13 +828,8 @@ def run_visualization(args):
         print("RENDERING BEFORE STATE")
         print("="*80)
         
-        # Create plotter
-        if args.state == 'both':
-            plotter_before = pv.Plotter(shape=(1, 2), border=False)
-            plotter_before.subplot(0, 0)
-        else:
-            plotter_before = pv.Plotter()
-        
+        # Create separate plotter for BEFORE
+        plotter_before = pv.Plotter()
         plotter_before.add_title(
             f"Type 2 BEFORE: Triple Point at Triangle {selected_tp.triangle_idx} (triple-point-index={args.triple_point_index})",
             font_size=12
@@ -878,31 +931,32 @@ def run_visualization(args):
         
         # Add triangle labels
         print("Adding triangle labels...")
-        add_triple_point_triangle_labels(plotter_before, mesh, mesh_topology, selected_tp, partition)
         
+        # Label the 6 methodology triangles explicitly (not using add_triple_point_triangle_labels)
         if triangle_result['success']:
-            already_labeled = set()
-            already_labeled.add(selected_tp.triangle_idx)
-            for vp_idx in selected_tp.var_point_indices:
-                vp = partition.variable_points[vp_idx]
-                vp_edge = tuple(sorted(vp.edge))
-                triangles_at_edge = mesh_topology.get_triangles_sharing_edge(vp_edge)
-                already_labeled.update(triangles_at_edge)
+            # Find T_first_VP using segment_to_triangle map
+            migrating_vp_idx = migration_result['migrating_vp_idx']
+            # Get first_level neighbor from outer_neighbors list
+            first_level_vp_idx = outer_neighbors[0] if outer_neighbors else None
             
-            if triangle_result['T_second_VP'] not in already_labeled:
-                add_triangle_label(plotter_before, mesh, triangle_result['T_second_VP'],
-                                  f"T{triangle_result['T_second_VP']}", 
-                                  color='black', font_size=12)
+            T_first_VP = None
+            if first_level_vp_idx is not None:
+                seg_key = tuple(sorted([migrating_vp_idx, first_level_vp_idx]))
+                T_first_VP = partition.segment_to_triangle.get(seg_key)
             
-            if triangle_result['T_adjacent_to_T_second'] not in already_labeled:
-                add_triangle_label(plotter_before, mesh, triangle_result['T_adjacent_to_T_second'],
-                                  f"T{triangle_result['T_adjacent_to_T_second']}", 
-                                  color='black', font_size=12)
+            methodology_triangles = {
+                migration_result['triple_triangle_idx']: f"T{migration_result['triple_triangle_idx']}",
+                migration_result['target_triangle_idx']: f"T{migration_result['target_triangle_idx']}",
+                triangle_result['T_second_VP']: f"T{triangle_result['T_second_VP']}",
+                triangle_result['T_adjacent_to_T_second']: f"T{triangle_result['T_adjacent_to_T_second']}",
+                triangle_result['T_shared_edge_with_target']: f"T{triangle_result['T_shared_edge_with_target']}"
+            }
             
-            if triangle_result['T_shared_edge_with_target'] not in already_labeled:
-                add_triangle_label(plotter_before, mesh, triangle_result['T_shared_edge_with_target'],
-                                  f"T{triangle_result['T_shared_edge_with_target']}", 
-                                  color='black', font_size=12)
+            if T_first_VP is not None:
+                methodology_triangles[T_first_VP] = f"T{T_first_VP}"
+            
+            for tri_idx, label in methodology_triangles.items():
+                add_triangle_label(plotter_before, mesh, tri_idx, label, color='black', font_size=12)
         
         print("Triangle labels added")
         print()
@@ -922,6 +976,17 @@ def run_visualization(args):
         
         print("✓ BEFORE state rendered")
         print()
+        
+        # Show BEFORE window
+        if args.state == 'both':
+            # Non-blocking: keep window open while showing AFTER
+            print("Opening PyVista window (BEFORE state)...")
+            plotter_before.show(interactive=False, auto_close=False)
+        else:
+            # Blocking: only showing BEFORE
+            print("Opening PyVista window (BEFORE state)...")
+            plotter_before.show()
+
     
     # ========================================================================
     # AFTER STATE
@@ -959,16 +1024,17 @@ def run_visualization(args):
         print(f"  New triple point in triangle: {migration_v4_result['target_triangle_idx']}")
         print()
         
+        # CRITICAL: Reinitialize SteinerHandler to detect NEW triple points
+        print("Reinitializing SteinerHandler to detect new triple points...")
+        steiner_handler_after = SteinerHandler(mesh, partition_after)
+        print(f"✓ Detected {len(steiner_handler_after.triple_points)} triple points after migration")
+        print()
+        
         # Reinitialize area calculator for updated partition
         area_calc_after = AreaCalculator(mesh, partition_after, use_vp_based=True)
         
-        # Create plotter
-        if args.state == 'both':
-            plotter_after = plotter_before  # Same plotter object
-            plotter_after.subplot(0, 1)
-        else:
-            plotter_after = pv.Plotter()
-        
+        # Create separate plotter for AFTER
+        plotter_after = pv.Plotter()
         plotter_after.add_title(
             f"Type 2 AFTER: New Triple Point at Triangle {migration_v4_result['target_triangle_idx']}",
             font_size=12
@@ -988,17 +1054,40 @@ def run_visualization(args):
         
         # Add VP visualization for AFTER state
         if args.show_vps:
-            # Show key VPs with updated positions
-            # New triple point VPs: vp_close_to_steiner, steiner_VP, outer_neighbor
+            # Get VP indices from migration result
             vp_close_idx = migration_v4_result['vp_close_to_steiner_idx']
             steiner_vp_idx = migration_v4_result['steiner_vp_idx']
             outer_neighbor_idx = migration_v4_result['outer_neighbor_vp_close_idx']
             stationary_idx = migration_v4_result['stationary_vp_idx']
             migrated_idx = migration_v4_result['migrating_vp_idx']
             
+            # Map VP indices to their BEFORE colors (preserve identity)
+            # BEFORE: triple_vp_indices = [vp1, vp2, vp3] with colors ['red', 'blue', 'green']
+            # Need to find which VP is which
+            original_triple_vps = selected_tp.var_point_indices
+            vp_color_map = {}
+            original_colors = ['red', 'blue', 'green']
+            for i, vp_idx in enumerate(original_triple_vps):
+                vp_color_map[vp_idx] = original_colors[i]
+            
+            # Get colors for each VP based on original identity
+            vp_close_color = vp_color_map.get(vp_close_idx, 'yellow')
+            migrated_color = vp_color_map.get(migrated_idx, 'blue')
+            stationary_color = vp_color_map.get(stationary_idx, 'red')
+            
+            # Determine color for outer_neighbor based on vp_close_to_steiner color
+            if vp_close_color == 'red':
+                outer_neighbor_color = 'darkred'
+            elif vp_close_color == 'blue':
+                outer_neighbor_color = 'darkblue'
+            elif vp_close_color == 'green':
+                outer_neighbor_color = 'darkgreen'
+            else:
+                outer_neighbor_color = 'purple'
+            
             # Show new triple point VPs in new triple triangle
             new_triple_vps = [vp_close_idx, steiner_vp_idx, outer_neighbor_idx]
-            new_triple_colors = ['blue', 'orange', 'cyan']
+            new_triple_colors = [vp_close_color, 'orange', outer_neighbor_color]
             new_triple_labels = [
                 f"VP_close\nidx={vp_close_idx}\n(moved)",
                 f"Steiner_VP\nidx={steiner_vp_idx}\n(NEW!)",
@@ -1021,13 +1110,31 @@ def run_visualization(args):
                 args.vp_size
             )
             
-            # Show other key VPs
+            # Show other key VPs (stationary and migrated)
             other_vps = [stationary_idx, migrated_idx]
-            other_colors = ['red', 'green']
+            other_colors = [stationary_color, migrated_color]
             other_labels = [
                 f"Stationary\nidx={stationary_idx}",
                 f"Migrated\nidx={migrated_idx}\n(moved)"
             ]
+            
+            # Also show the outer neighbors of migrated VP if available
+            if outer_neighbors:
+                # Color variations based on migrated VP color
+                if migrated_color == 'red':
+                    outer_migrated_colors = ['darkred', 'indianred']
+                elif migrated_color == 'blue':
+                    outer_migrated_colors = ['darkblue', 'lightblue']
+                elif migrated_color == 'green':
+                    outer_migrated_colors = ['darkgreen', 'lightgreen']
+                else:
+                    outer_migrated_colors = ['purple', 'violet']
+                
+                # Add outer neighbors to visualization
+                for i, vp_idx in enumerate(outer_neighbors[:2]):  # Show up to 2
+                    other_vps.append(vp_idx)
+                    other_colors.append(outer_migrated_colors[i] if i < len(outer_migrated_colors) else 'gray')
+                    other_labels.append(f"Outer{i+1}\nidx={vp_idx}")
             
             print("Other Key VPs:")
             for i, vp_idx in enumerate(other_vps):
@@ -1044,6 +1151,151 @@ def run_visualization(args):
                 args.vp_size
             )
         
+        # ========================================================================
+        # DEBUG: Check for white regions (triangles without proper cell assignment)
+        # ========================================================================
+        
+        print("="*80)
+        print("DEBUG: Checking for rendering issues (white polygons)")
+        print("="*80)
+        
+        # Check triangle_segments consistency
+        triangles_with_vps = set()
+        for tri_seg in partition_after.triangle_segments:
+            if len(tri_seg.var_point_indices) > 0:
+                triangles_with_vps.add(tri_seg.triangle_idx)
+        
+        print(f"Triangles with VPs: {len(triangles_with_vps)}")
+        
+        # Check indicator_functions for ambiguous vertices
+        vertex_labels = np.argmax(partition_after.indicator_functions, axis=1)
+        indicator_max_values = np.max(partition_after.indicator_functions, axis=1)
+        ambiguous_vertices = np.where(indicator_max_values < 0.9)[0]  # Vertices with weak cell assignment
+        
+        if len(ambiguous_vertices) > 0:
+            print(f"⚠️  Found {len(ambiguous_vertices)} vertices with weak cell assignment:")
+            for v_idx in ambiguous_vertices[:10]:  # Show first 10
+                print(f"  Vertex {v_idx}: max value = {indicator_max_values[v_idx]:.3f}")
+        else:
+            print("✓ All vertices have strong cell assignments")
+        
+        # Check for triangles near the migration area
+        affected_tri_set = set(migration_v4_result.get('affected_triangles', []))
+        print(f"Affected triangles (rebuilt): {len(affected_tri_set)}")
+        
+        # Check for boundary triangles that might not be fully categorized
+        boundary_tri_count = 0
+        for tri_seg in partition_after.triangle_segments:
+            if 0 < len(tri_seg.var_point_indices) < 3:
+                boundary_tri_count += 1
+        
+        print(f"Boundary triangles (with 1-2 VPs): {boundary_tri_count}")
+        print("="*80)
+        print()
+        
+        # ========================================================================
+        # DEBUG: Check which cells include problematic triangles as boundaries
+        # ========================================================================
+        print("="*80)
+        print("DEBUG: Which cells claim triangles 18150 and 18152 as boundaries?")
+        print("="*80)
+        
+        for tri_idx in [18150, 18152]:
+            cells_with_this_tri = []
+            for cell_idx in range(partition_after.n_cells):
+                boundary_tris = area_calc_after.cell_boundary_triangles.get(cell_idx, [])
+                if tri_idx in boundary_tris:
+                    cells_with_this_tri.append(cell_idx)
+            print(f"Triangle {tri_idx}: claimed by cells {cells_with_this_tri}")
+        
+        print("="*80)
+        print()
+        
+        # ========================================================================
+        # DEBUG: Inspect the 6 methodology triangles in detail
+        # ========================================================================
+        print("="*80)
+        print("DEBUG: Inspecting 6 methodology triangles in AFTER state")
+        print("="*80)
+        
+        # Build methodology triangles list
+        methodology_tris = [
+            migration_result['triple_triangle_idx'],
+            migration_result['target_triangle_idx'],
+            triangle_result['T_second_VP'],
+            triangle_result['T_adjacent_to_T_second'],
+            triangle_result['T_shared_edge_with_target']
+        ]
+        
+        # Add T_first_VP if we found it
+        if T_first_VP is not None:
+            methodology_tris.append(T_first_VP)
+        
+        for tri_idx in sorted(methodology_tris):
+            tri_segs = [ts for ts in partition_after.triangle_segments if ts.triangle_idx == tri_idx]
+            if tri_segs:
+                ts = tri_segs[0]
+                print(f"Triangle {tri_idx}:")
+                print(f"  VP indices: {ts.var_point_indices}")
+                print(f"  Boundary edges: {ts.boundary_edges}")
+                print(f"  Vertex labels: {ts.vertex_labels}")
+                
+                # Check each VP
+                for vp_idx in ts.var_point_indices:
+                    vp = partition_after.variable_points[vp_idx]
+                    print(f"    VP {vp_idx}: edge={vp.edge}, λ={vp.lambda_param:.6f}")
+                    print(f"      belongs_to_cells: {vp.belongs_to_cells}")
+                    
+                    # Check if edge is in triangle
+                    if vp.edge not in ts.boundary_edges:
+                        print(f"      ⚠️  WARNING: VP edge {vp.edge} NOT in triangle's boundary_edges!")
+            else:
+                print(f"Triangle {tri_idx}: NO triangle_segment entry!")
+        
+        print("="*80)
+        print()
+        
+        # Add triangle labels (same as BEFORE state)
+        if triangle_result['success']:
+            print("Adding triangle labels...")
+            
+            # Find T_first_VP using segment_to_triangle map from BEFORE partition
+            # (not AFTER, because the segment moved during migration!)
+            migrating_vp_idx = migration_result['migrating_vp_idx']
+            first_level_vp_idx = outer_neighbors[0] if outer_neighbors else None
+            
+            T_first_VP = None
+            if first_level_vp_idx is not None:
+                seg_key = tuple(sorted([migrating_vp_idx, first_level_vp_idx]))
+                # Use BEFORE partition's segment_to_triangle map
+                T_first_VP = partition.segment_to_triangle.get(seg_key)
+                if T_first_VP is not None:
+                    print(f"  Found T_first_VP: {T_first_VP} (from BEFORE partition)")
+            
+            # Label the 6 methodology triangles explicitly
+            methodology_triangles = {}
+            
+            # Add all triangles
+            methodology_triangles[migration_result['triple_triangle_idx']] = f"T{migration_result['triple_triangle_idx']}"
+            methodology_triangles[migration_result['target_triangle_idx']] = f"T{migration_result['target_triangle_idx']}"
+            methodology_triangles[triangle_result['T_second_VP']] = f"T{triangle_result['T_second_VP']}"
+            methodology_triangles[triangle_result['T_adjacent_to_T_second']] = f"T{triangle_result['T_adjacent_to_T_second']}"
+            methodology_triangles[triangle_result['T_shared_edge_with_target']] = f"T{triangle_result['T_shared_edge_with_target']}"
+            
+            if T_first_VP is not None:
+                methodology_triangles[T_first_VP] = f"T{T_first_VP}"
+            
+            print(f"  Labeling {len(methodology_triangles)} methodology triangles:")
+            for tri_idx in sorted(methodology_triangles.keys()):
+                print(f"    {methodology_triangles[tri_idx]}")
+            
+            for tri_idx, label in methodology_triangles.items():
+                add_triangle_label(plotter_after, mesh, tri_idx, label, color='black', font_size=12)
+            
+            print("Triangle labels added")
+            print()
+
+        
         # Apply zoom (same as BEFORE)
         if args.apply_zoom:
             camera_offset = np.array([args.zoom_factor, args.zoom_factor * 0.5, args.zoom_factor * 0.5])
@@ -1058,23 +1310,14 @@ def run_visualization(args):
         
         print("✓ AFTER state rendered")
         print()
-    
-    # ========================================================================
-    # SHOW PLOT(S)
-    # ========================================================================
-    
-    print("="*80)
-    if args.state == 'both':
-        print("Opening PyVista window (BEFORE and AFTER side-by-side)...")
-        # Link the camera views so they rotate/zoom together
-        plotter_before.link_views()
-        plotter_before.show()  # Shows both subplots
-    elif args.state == 'before':
-        print("Opening PyVista window (BEFORE state)...")
-        plotter_before.show()
-    else:  # after
+        
+        # Show AFTER window (always blocking - last window)
         print("Opening PyVista window (AFTER state)...")
         plotter_after.show()
+    
+    # ========================================================================
+    # COMPLETE
+    # ========================================================================
     
     print("\n" + "="*80)
     print("Visualization complete!")
