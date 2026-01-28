@@ -2980,6 +2980,27 @@ class TopologySwitcher:
         # CRITICAL: Must be done AFTER moving VPs but BEFORE rebuilding triangle_segments
         self._update_indicator_functions_for_target_vertex(target_vertex, old_cell, new_cell)
         
+        self.logger.debug(f"Target vertex {target_vertex} cell flip: {old_cell} → {new_cell}")
+        
+        # Step 7.6: Update belongs_to_cells for all moved VPs
+        # CRITICAL: Must happen AFTER cell flip so _determine_cells_for_edge() uses final state
+        # This ensures VPs' belongs_to_cells reflect the cells their edges actually separate
+        moved_vps = [
+            (migrating_vp_idx, "migrating_VP"),
+            (left_neighbor, "left_neighbor"),
+            (right_neighbor, "right_neighbor")
+        ]
+        
+        for vp_idx, vp_name in moved_vps:
+            vp = self.partition.variable_points[vp_idx]
+            old_cells = vp.belongs_to_cells.copy()
+            new_cells = self._determine_cells_for_edge(vp.edge)
+            vp.belongs_to_cells = new_cells
+            
+            if old_cells != new_cells:
+                self.logger.debug(f"  {vp_name} (VP{vp_idx}): "
+                                 f"belongs_to_cells updated {old_cells} → {new_cells}")
+        
         # Step 8: Update data structures (OPTIMIZED for Type 1)
         # Only rebuilds 6 affected triangles, skips boundary_segments (connectivity unchanged)
         # CRITICAL: This reads indicator_functions, so it must come AFTER Step 7.5
