@@ -758,37 +758,10 @@ def run_visualization(args):
     
     selected_component = component_info[args.component_index]
     
-    # Identify migrating VP and neighbors
+    # Display component selection
     component_vps = selected_component['vp_indices']
-    migrating_vp_idx = min(component_vps, 
-                           key=lambda vp: switcher.compute_boundary_distance(vp))
+    target_vertex = selected_component['target_vertex']
     
-    left_neighbor, right_neighbor = switcher._get_two_neighbors(migrating_vp_idx)
-    
-    # Find secondary neighbors (neighbors of neighbors)
-    left_secondary = None
-    right_secondary = None
-    
-    # Get neighbor of left_neighbor (excluding migrating VP)
-    try:
-        left_n1, left_n2 = switcher._get_two_neighbors(left_neighbor)
-        left_secondary = left_n1 if left_n1 != migrating_vp_idx else left_n2
-    except:
-        pass
-    
-    # Get neighbor of right_neighbor (excluding migrating VP)
-    try:
-        right_n1, right_n2 = switcher._get_two_neighbors(right_neighbor)
-        right_secondary = right_n1 if right_n1 != migrating_vp_idx else right_n2
-    except:
-        pass
-    
-    migrating_vp = partition.variable_points[migrating_vp_idx]
-    current_edge = migrating_vp.edge
-    target_vertex = switcher._identify_target_vertex(migrating_vp)
-    target_edge = switcher._find_opposite_edge(current_edge, target_vertex) if target_vertex else None
-    
-    # Display selection
     print(f"✓ Selected Component {args.component_index} for migration:")
     print(f"  Size: {selected_component['size']} VPs")
     print(f"  VPs: {component_vps}")
@@ -796,17 +769,50 @@ def run_visualization(args):
     print(f"  Min distance: {selected_component['min_distance']:.6f}")
     print(f"  Status: {'TO MIGRATE' if selected_component in to_migrate else 'DEFERRED'}")
     print()
-    print(f"  Migrating VP: {migrating_vp_idx}")
-    print(f"  Neighbors: {left_neighbor}, {right_neighbor}")
-    if left_secondary is not None or right_secondary is not None:
-        print(f"  Secondary neighbors:")
-        if left_secondary is not None:
-            print(f"    VP {left_secondary} (neighbor of VP {left_neighbor})")
-        if right_secondary is not None:
-            print(f"    VP {right_secondary} (neighbor of VP {right_neighbor})")
-    print(f"  Current edge: {current_edge}")
-    print(f"  Lambda: {migrating_vp.lambda_param:.6f}")
-    print()
+    # ========================================================================
+    # PRE-COMPUTE MIGRATION VPs FOR VISUALIZATION
+    # ========================================================================
+    # We need to know which VPs will be involved to visualize them in BEFORE
+    # Use the same logic as apply_type1_switch_v2() to predict the VPs
+    
+    print("Pre-computing migration VPs for visualization...")
+    try:
+        # Determine which VP will migrate and get auxiliary component in one call
+        # Use strict_validation=False to allow fallback for visualization
+        preview_migrating_vp, preview_auxiliary = switcher.select_migrating_vp_and_auxiliary(
+            selected_component, strict_validation=False
+        )
+        
+        # Get neighbors from auxiliary
+        preview_left, preview_right = switcher._get_neighbors_from_auxiliary(
+            preview_migrating_vp, preview_auxiliary
+        )
+        
+        # Get current state for BEFORE visualization
+        preview_migrating_vp_obj = partition.variable_points[preview_migrating_vp]
+        preview_old_edge = preview_migrating_vp_obj.edge
+        
+        # Verify target_vertex is correct (component analysis should set this correctly now)
+        actual_target_vertex = switcher._identify_target_vertex(preview_migrating_vp_obj)
+        if actual_target_vertex != target_vertex:
+            print(f"⚠ WARNING: Component target vertex {target_vertex} differs from VP's target {actual_target_vertex}")
+            print(f"  Using VP's target vertex: {actual_target_vertex}")
+            target_vertex = actual_target_vertex
+        
+        preview_target_edge = switcher._find_opposite_edge(preview_old_edge, target_vertex)
+        
+        print(f"✓ Will migrate VP {preview_migrating_vp}")
+        print(f"  Neighbors: {preview_left}, {preview_right}")
+        print(f"  Auxiliary component: {preview_auxiliary}")
+        print()
+    except Exception as e:
+        print(f"⚠ Could not pre-compute migration VPs: {e}")
+        print("  Will show BEFORE without VP highlighting")
+        preview_migrating_vp = None
+        preview_left = None
+        preview_right = None
+        preview_old_edge = None
+        preview_target_edge = None
     
     # ========================================================================
     # BEFORE STATE
@@ -839,19 +845,28 @@ def run_visualization(args):
         args.region, args.intense_color
     )
     
-    # Add VPs if requested
-    if args.show_vps:
-        # Build list of VPs to visualize with labels
-        highlight_vps = [migrating_vp_idx, left_neighbor, right_neighbor]
+    # Add VPs if requested and we successfully pre-computed them
+    if args.show_vps and preview_migrating_vp is not None:
+        # Highlight the VPs that will be involved in migration
+        highlight_vps = [preview_migrating_vp, preview_left, preview_right]
         vp_labels = ['Migrating', f'Neighbor-L', f'Neighbor-R']
         
-        # Add secondary neighbors if they exist
-        if left_secondary is not None:
+        # Find secondary neighbors (for context)
+        try:
+            left_n1, left_n2 = switcher._get_two_neighbors(preview_left)
+            left_secondary = left_n1 if left_n1 != preview_migrating_vp else left_n2
             highlight_vps.append(left_secondary)
             vp_labels.append(f'Secondary-L')
-        if right_secondary is not None:
+        except:
+            pass
+        
+        try:
+            right_n1, right_n2 = switcher._get_two_neighbors(preview_right)
+            right_secondary = right_n1 if right_n1 != preview_migrating_vp else right_n2
             highlight_vps.append(right_secondary)
             vp_labels.append(f'Secondary-R')
+        except:
+            pass
         
         add_vp_visualization(plotter_before, mesh, partition, highlight_vps, vp_labels, args.vp_size)
     
@@ -859,19 +874,24 @@ def run_visualization(args):
     if args.show_steiner:
         add_steiner_visualization(plotter_before, mesh, partition, steiner_handler, args.steiner_size)
     
-    # Add edge visualization
-    add_edge_visualization(plotter_before, mesh, current_edge, target_edge)
+    # Add edge visualization if we have the preview info
+    if preview_old_edge is not None and preview_target_edge is not None:
+        add_edge_visualization(plotter_before, mesh, preview_old_edge, preview_target_edge)
     
     # Add triangle labels for triangles sharing target vertex
     add_target_vertex_triangle_labels(plotter_before, mesh, target_vertex)
     
-    # Apply camera zoom if requested
+    # Apply camera zoom if requested - focus on target vertex
     if args.apply_zoom:
-        vp_pos = partition.evaluate_variable_point(migrating_vp_idx)
-        apply_camera_zoom(plotter_before, vp_pos, args.zoom_factor)
+        target_pos = mesh.vertices[target_vertex]
+        apply_camera_zoom(plotter_before, target_pos, args.zoom_factor)
     
     # Set title and show BEFORE (non-blocking, keeps window open while script continues)
-    plotter_before.add_title(f"Region {args.region} - BEFORE Type 1 (Component {args.component_index}, VP {migrating_vp_idx})", font_size=14)
+    title = f"Region {args.region} - BEFORE Type 1 (Component {args.component_index}"
+    if preview_migrating_vp is not None:
+        title += f", VP {preview_migrating_vp}"
+    title += ")"
+    plotter_before.add_title(title, font_size=14)
     plotter_before.show(interactive=False, auto_close=False)
     
     # ========================================================================
@@ -881,21 +901,75 @@ def run_visualization(args):
     print("\n" + "="*60)
     print("PERFORMING TYPE 1 MIGRATION")
     print("="*60)
-    print(f"Migrating component {args.component_index} (VP {migrating_vp_idx})...")
+    print(f"Migrating component {args.component_index}...")
     print()
     
     # Perform the migration with distance preservation
-    success = switcher.apply_type1_switch_v2(
+    # This now returns a dict with migration details
+    # Use strict_validation=False to allow fallback for visualization
+    result = switcher.apply_type1_switch_v2(
         selected_component, 
-        distance_preservation=args.migration_distance
+        distance_preservation=args.migration_distance,
+        strict_validation=False
     )
     
-    if not success:
-        print("❌ ERROR: Migration failed!")
-        return
-    
-    print("\n✓ Migration completed successfully!")
-    print()
+    # Handle result (dict or False for backward compatibility)
+    if isinstance(result, dict):
+        success = result.get('success', False)
+        if success:
+            # Extract migration details
+            migrating_vp_idx = result['migrating_vp_idx']
+            left_neighbor = result['left_neighbor']
+            right_neighbor = result['right_neighbor']
+            target_vertex = result['target_vertex']
+            old_edge = result['old_edge']
+            target_edge = result['target_edge']
+            auxiliary_component = result['auxiliary_component']
+            
+            print("\n" + "="*60)
+            print("✓ MIGRATION COMPLETED SUCCESSFULLY")
+            print("="*60)
+            print(f"  Migrating VP: {migrating_vp_idx}")
+            print(f"  Neighbors: {left_neighbor}, {right_neighbor}")
+            print(f"  Auxiliary component: {auxiliary_component}")
+            print(f"  Target vertex: {target_vertex}")
+            print(f"  Old edge: {old_edge} → Target edge: {target_edge}")
+            print("="*60)
+            print()
+        else:
+            # Migration failed - but continue to show BEFORE figure
+            print("\n" + "="*60)
+            print("❌ MIGRATION FAILED")
+            print("="*60)
+            error = result.get('error', 'Unknown error')
+            print(f"  Error: {error}")
+            if 'validation_message' in result:
+                print("\n" + result['validation_message'])
+            print("="*60)
+            print()
+            print("⚠ BEFORE figure is displayed. Close it to exit.")
+            print("  (No AFTER figure will be shown since migration failed)")
+            # Wait for user to close BEFORE window
+            input("\nPress Enter to close and exit...")
+            return
+    else:
+        # Backward compatibility (if result is bool)
+        success = result
+        if not success:
+            print("❌ ERROR: Migration failed!")
+            print("⚠ BEFORE figure is displayed. Close it to exit.")
+            print("  (No AFTER figure will be shown since migration failed)")
+            # Wait for user to close BEFORE window
+            input("\nPress Enter to close and exit...")
+            return
+        print("\n✓ Migration completed successfully!")
+        print()
+        # Need to extract VP info for visualization (fallback)
+        migrating_vp_idx = min(component_vps, key=lambda vp: switcher.compute_boundary_distance(vp))
+        left_neighbor, right_neighbor = switcher._get_two_neighbors(migrating_vp_idx)
+        migrating_vp = partition.variable_points[migrating_vp_idx]
+        old_edge = migrating_vp.edge
+        target_edge = None
     
     # ========================================================================
     # AFTER STATE
@@ -932,8 +1006,8 @@ def run_visualization(args):
     new_edge_right = right_neighbor_vp_after.edge
     
     print(f"VP positions after migration:")
-    print(f"  Migrating VP {migrating_vp_idx}: {current_edge} → {new_edge_migrating}")
-    print(f"    Lambda: {migrating_vp.lambda_param:.6f} → {migrating_vp_after.lambda_param:.6f}")
+    print(f"  Migrating VP {migrating_vp_idx}: {old_edge} → {new_edge_migrating}")
+    print(f"    Lambda: {migrating_vp_after.lambda_param:.6f}")
     print(f"  Left neighbor {left_neighbor}: edge → {new_edge_left}")
     print(f"    Lambda: {left_neighbor_vp_after.lambda_param:.6f}")
     print(f"  Right neighbor {right_neighbor}: edge → {new_edge_right}")
@@ -951,6 +1025,31 @@ def run_visualization(args):
     
     # Add VPs if requested (at new positions)
     if args.show_vps:
+        # Highlight the migrated VPs
+        highlight_vps = [migrating_vp_idx, left_neighbor, right_neighbor]
+        vp_labels = ['Migrating', f'Neighbor-L', f'Neighbor-R']
+        
+        # Find secondary neighbors (for context)
+        left_secondary = None
+        right_secondary = None
+        try:
+            left_n1, left_n2 = switcher._get_two_neighbors(left_neighbor)
+            left_secondary = left_n1 if left_n1 != migrating_vp_idx else left_n2
+        except:
+            pass
+        try:
+            right_n1, right_n2 = switcher._get_two_neighbors(right_neighbor)
+            right_secondary = right_n1 if right_n1 != migrating_vp_idx else right_n2
+        except:
+            pass
+        
+        if left_secondary is not None:
+            highlight_vps.append(left_secondary)
+            vp_labels.append(f'Secondary-L')
+        if right_secondary is not None:
+            highlight_vps.append(right_secondary)
+            vp_labels.append(f'Secondary-R')
+        
         add_vp_visualization(plotter_after, mesh, partition, highlight_vps, vp_labels, args.vp_size)
     
     # Add Steiner points if requested
@@ -971,7 +1070,10 @@ def run_visualization(args):
         apply_camera_zoom(plotter_after, target_pos, args.zoom_factor)
     
     # Set title and show AFTER
-    plotter_after.add_title(f"Region {args.region} - AFTER Type 1 (Component {args.component_index}, VP {migrating_vp_idx})", font_size=14)
+    plotter_after.add_title(
+        f"Region {args.region} - AFTER Type 1 (Component {args.component_index}, VP {migrating_vp_idx})", 
+        font_size=14
+    )
     plotter_after.show()
 
 
@@ -995,6 +1097,9 @@ def main():
     parser.add_argument('--migration-distance', default='preserve',
                        help='Distance preservation strategy: "preserve" (maintain original distance), '
                             '"midpoint" (λ=0.5), or float value (e.g., "0.1" for close to target) (default: preserve)')
+    parser.add_argument('--selection-method', choices=['topology', 'distance'], default='topology',
+                       help='VP selection method: "topology" (topology-based, recommended), '
+                            '"distance" (distance-based, old method) (default: topology)')
     
     # Visualization options
     parser.add_argument('--state', choices=['before', 'after', 'both'], default='before',
