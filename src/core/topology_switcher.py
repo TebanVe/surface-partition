@@ -2552,7 +2552,7 @@ class TopologySwitcher:
         CRITICAL: Filters candidates by target vertex FIRST, then selects by distance.
         
         Args:
-            component: Component dict with 'vp_indices' (2 VPs) and 'target_vertex'
+            component: Component dict with 'vp_indices' (2 VPs), 'target_vertex', and 'index'
             strict_validation: If False, use fallback (min distance) when no valid
                              third VP found. If True, raise error. Default True.
             
@@ -2565,8 +2565,9 @@ class TopologySwitcher:
         """
         vp_indices = component['vp_indices']
         target_vertex = component['target_vertex']
+        comp_idx = component.get('index', '?')
         
-        self.logger.debug(f"Constructing auxiliary component for 2-VP {vp_indices}, target vertex: {target_vertex}")
+        self.logger.debug(f"Component {comp_idx}: Constructing auxiliary for 2-VP {vp_indices}, target vertex: {target_vertex}")
         
         if len(vp_indices) != 2:
             raise ValueError(f"Component must have exactly 2 VPs, found {len(vp_indices)}")
@@ -2591,9 +2592,9 @@ class TopologySwitcher:
             candidates.append(('right', right_candidate))
         
         if not candidates:
-            raise ValueError(f"No third VP found for 2-VP component {vp_indices}")
+            raise ValueError(f"Component {comp_idx}: No third VP found for 2-VP component {vp_indices}")
         
-        self.logger.debug(f"  Initial candidates: {[(pos, vp) for pos, vp in candidates]}")
+        self.logger.debug(f"Component {comp_idx}:   Initial candidates: {[(pos, vp) for pos, vp in candidates]}")
         
         # CRITICAL: Filter by target vertex FIRST
         filtered_candidates = []
@@ -2603,16 +2604,16 @@ class TopologySwitcher:
             vp = self.partition.variable_points[vp_idx]
             if target_vertex in vp.edge:
                 filtered_candidates.append((position, vp_idx))
-                self.logger.debug(f"  ✓ VP {vp_idx} ({position}): edge {vp.edge} contains target vertex {target_vertex}")
+                self.logger.debug(f"Component {comp_idx}:   ✓ VP {vp_idx} ({position}): edge {vp.edge} contains target vertex {target_vertex}")
             else:
                 rejected_candidates.append((position, vp_idx, vp.edge))
                 self.logger.warning(
-                    f"  ✗ VP {vp_idx} ({position}): edge {vp.edge} does NOT contain target vertex {target_vertex} - REJECTED"
+                    f"Component {comp_idx}:   ✗ VP {vp_idx} ({position}): edge {vp.edge} does NOT contain target vertex {target_vertex} - REJECTED"
                 )
         
         if not filtered_candidates:
             error_msg = (
-                f"No valid third VP found for 2-VP component {vp_indices}. "
+                f"Component {comp_idx}: No valid third VP found for 2-VP component {vp_indices}. "
                 f"All candidates rejected (don't approach target vertex {target_vertex}): "
             )
             for pos, vp_idx, edge in rejected_candidates:
@@ -2623,7 +2624,7 @@ class TopologySwitcher:
                 raise ValueError(error_msg)
             else:
                 # Fallback for visualization: use candidate with minimum distance regardless of validity
-                self.logger.warning(f"{error_msg}\nUsing FALLBACK (min distance) for visualization.")
+                self.logger.warning(f"{error_msg}\nComponent {comp_idx}: Using FALLBACK (min distance) for visualization.")
                 
                 best_candidate = None
                 min_dist = float('inf')
@@ -2643,7 +2644,7 @@ class TopologySwitcher:
                     auxiliary = [vp_a, vp_b, third_vp]
                 
                 self.logger.warning(
-                    f"⚠ FALLBACK: Using auxiliary component {auxiliary} "
+                    f"Component {comp_idx}: ⚠ FALLBACK: Using auxiliary component {auxiliary} "
                     f"(third VP: {third_vp}, position: {position}, dist: {min_dist:.6f}) "
                     f"even though it doesn't approach target vertex"
                 )
@@ -2652,7 +2653,7 @@ class TopologySwitcher:
         
         if rejected_candidates:
             self.logger.info(
-                f"  Rejected {len(rejected_candidates)} candidate(s) that don't approach target vertex {target_vertex}"
+                f"Component {comp_idx}:   Rejected {len(rejected_candidates)} candidate(s) that don't approach target vertex {target_vertex}"
             )
         
         # THEN select by distance from FILTERED candidates
@@ -2661,7 +2662,7 @@ class TopologySwitcher:
         
         for position, vp_idx in filtered_candidates:
             dist = self.compute_boundary_distance(vp_idx)
-            self.logger.debug(f"  VP {vp_idx} ({position}): distance = {dist:.6f}")
+            self.logger.debug(f"Component {comp_idx}:   VP {vp_idx} ({position}): distance = {dist:.6f}")
             if dist < min_dist:
                 min_dist = dist
                 best_candidate = (position, vp_idx)
@@ -2675,7 +2676,7 @@ class TopologySwitcher:
             auxiliary = [vp_a, vp_b, third_vp]
         
         self.logger.info(
-            f"✓ Auxiliary component for 2-VP {vp_indices}: {auxiliary} "
+            f"Component {comp_idx}: ✓ Auxiliary component for 2-VP {vp_indices}: {auxiliary} "
             f"(third VP: {third_vp}, position: {position}, dist: {min_dist:.6f})"
         )
         
@@ -2695,7 +2696,7 @@ class TopologySwitcher:
         CRITICAL: All VPs in triplet must approach target vertex.
         
         Args:
-            component: Component dict with 'vp_indices' (1 VP) and 'target_vertex'
+            component: Component dict with 'vp_indices' (1 VP), 'target_vertex', and 'index'
             strict_validation: If False, use fallback (min distance) when no valid
                              triplet found. If True, raise error. Default True.
             
@@ -2708,11 +2709,12 @@ class TopologySwitcher:
         """
         vp_indices = component['vp_indices']
         target_vertex = component['target_vertex']
+        comp_idx = component.get('index', '?')
         
-        self.logger.debug(f"Constructing auxiliary component for 1-VP [{vp_indices[0]}], target vertex: {target_vertex}")
+        self.logger.debug(f"Component {comp_idx}: Constructing auxiliary for 1-VP [{vp_indices[0]}], target vertex: {target_vertex}")
         
         if len(vp_indices) != 1:
-            raise ValueError(f"Component must have exactly 1 VP, found {len(vp_indices)}")
+            raise ValueError(f"Component {comp_idx}: Component must have exactly 1 VP, found {len(vp_indices)}")
         
         vp_c = vp_indices[0]
         
@@ -2725,14 +2727,14 @@ class TopologySwitcher:
             neighbors_b = self._get_two_neighbors(vp_b)
             vp_a = neighbors_b[0] if neighbors_b[0] != vp_c else neighbors_b[1]
         except Exception as e:
-            self.logger.warning(f"Could not get second level left neighbor for VP {vp_c}: {e}")
+            self.logger.warning(f"Component {comp_idx}: Could not get second level left neighbor for VP {vp_c}: {e}")
             vp_a = None
         
         try:
             neighbors_d = self._get_two_neighbors(vp_d)
             vp_e = neighbors_d[0] if neighbors_d[0] != vp_c else neighbors_d[1]
         except Exception as e:
-            self.logger.warning(f"Could not get second level right neighbor for VP {vp_c}: {e}")
+            self.logger.warning(f"Component {comp_idx}: Could not get second level right neighbor for VP {vp_c}: {e}")
             vp_e = None
         
         # Build candidate triplets
@@ -2747,7 +2749,7 @@ class TopologySwitcher:
         valid_candidates = []
         
         for config_name, triplet in triplet_candidates:
-            self.logger.debug(f"  Evaluating triplet '{config_name}': {triplet}")
+            self.logger.debug(f"Component {comp_idx}:   Evaluating triplet '{config_name}': {triplet}")
             
             valid = True
             invalid_vps = []
@@ -2759,24 +2761,24 @@ class TopologySwitcher:
                     valid = False
                     invalid_vps.append((vp_idx, vp.edge))
                     self.logger.warning(
-                        f"    ✗ VP {vp_idx}: edge {vp.edge} does NOT contain target vertex {target_vertex}"
+                        f"Component {comp_idx}:     ✗ VP {vp_idx}: edge {vp.edge} does NOT contain target vertex {target_vertex}"
                     )
                 else:
                     dist = self.compute_boundary_distance(vp_idx)
                     total_dist += dist
-                    self.logger.debug(f"    ✓ VP {vp_idx}: approaches target vertex, dist={dist:.6f}")
+                    self.logger.debug(f"Component {comp_idx}:     ✓ VP {vp_idx}: approaches target vertex, dist={dist:.6f}")
             
             if valid:
                 valid_candidates.append((config_name, triplet, total_dist))
-                self.logger.info(f"  ✓ Triplet '{config_name}' is VALID (total_dist={total_dist:.6f})")
+                self.logger.info(f"Component {comp_idx}:   ✓ Triplet '{config_name}' is VALID (total_dist={total_dist:.6f})")
             else:
                 self.logger.warning(
-                    f"  ✗ Triplet '{config_name}' is INVALID - {len(invalid_vps)} VP(s) don't approach target vertex"
+                    f"Component {comp_idx}:   ✗ Triplet '{config_name}' is INVALID - {len(invalid_vps)} VP(s) don't approach target vertex"
                 )
         
         if not valid_candidates:
             error_msg = (
-                f"No valid triplet found for 1-VP component [{vp_c}]. "
+                f"Component {comp_idx}: No valid triplet found for 1-VP component [{vp_c}]. "
                 f"All triplets have VPs that don't approach target vertex {target_vertex}."
             )
             
@@ -2785,7 +2787,7 @@ class TopologySwitcher:
                 raise ValueError(error_msg)
             else:
                 # Fallback for visualization: use triplet with minimum distance regardless of validity
-                self.logger.warning(f"{error_msg} Using FALLBACK (min distance) for visualization.")
+                self.logger.warning(f"{error_msg} Component {comp_idx}: Using FALLBACK (min distance) for visualization.")
                 
                 # Calculate distances for all triplets
                 fallback_candidates = []
@@ -2795,7 +2797,7 @@ class TopologySwitcher:
                 
                 best_config, best_triplet, best_total = min(fallback_candidates, key=lambda x: x[2])
                 self.logger.warning(
-                    f"⚠ FALLBACK: Using triplet '{best_config}': {best_triplet} (total_dist={best_total:.6f}) "
+                    f"Component {comp_idx}: ⚠ FALLBACK: Using triplet '{best_config}': {best_triplet} (total_dist={best_total:.6f}) "
                     f"even though some VPs don't approach target vertex"
                 )
                 return best_triplet
@@ -2804,7 +2806,7 @@ class TopologySwitcher:
         best_config, best_triplet, best_total = min(valid_candidates, key=lambda x: x[2])
         
         self.logger.info(
-            f"✓ Auxiliary component for 1-VP [{vp_c}]: {best_triplet} "
+            f"Component {comp_idx}: ✓ Auxiliary component for 1-VP [{vp_c}]: {best_triplet} "
             f"(config: '{best_config}', total_dist: {best_total:.6f}, "
             f"rejected {len(triplet_candidates) - len(valid_candidates)} invalid triplet(s))"
         )
@@ -3679,128 +3681,204 @@ class TopologySwitcher:
                 return conflict
         return None
     
-    def select_components_for_migration(self, components: List[Dict], 
-                                        conflicts: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    def can_form_valid_auxiliary_component(self, component: Dict) -> Tuple[bool, str]:
         """
-        Select which components to migrate and which to defer.
+        Check if a component can form a valid auxiliary component for migration.
         
-        CRITICAL PRINCIPLE:
-        - Components WITHOUT neighbor components → migrate immediately (no issues)
-        - Components WITH neighbor components → check for conflicts and risks
+        A valid auxiliary component has 3 VPs that all approach the same target vertex.
+        - 3-VP components: Already valid (verified during component analysis)
+        - 2-VP components: Must find a third VP that approaches the same target vertex
+        - 1-VP components: Must find two more VPs that form a valid triplet
         
-        CRITICAL CONSTRAINT:
-        - Components with < 3 VPs that are near triple points are EXCLUDED
-          (migrating them could damage triple point topology by adjusting neighbors
-          that connect to triple point VPs)
-        - 3-VP components are safe even if near triple points (internal neighbors)
-        
-        Deferral Criteria (ALL must be true):
-        1. Components share a non-boundary neighbor (conflict exists) ← MUST have neighbor!
-        2. Both components are near convergence (min_dist < 0.01)
-        3. BOTH components have < 3 VPs (risky configuration)
-        
-        Selection Logic:
-        - Case 1: At least one is 3-VP → MIGRATE BOTH (safe, 3-VP has internal neighbors)
-        - Case 2: Both < 3-VP → Apply deferral strategy (defer_one or defer_both)
+        Args:
+            component: Component dictionary with 'vp_indices', 'target_vertex', 'size'
         
         Returns:
-            (components_to_migrate, components_deferred)
+            Tuple of (is_valid, reason_if_invalid)
         """
-        to_migrate = []
-        deferred = []
-        processed = set()
+        size = component['size']
+        
+        if size == 3:
+            # 3-VP components are already validated during component analysis
+            return (True, "")
+        
+        elif size == 2:
+            # Try to construct auxiliary component for 2-VP
+            try:
+                auxiliary = self._construct_auxiliary_component_2vp(component, strict_validation=True)
+                return (True, "")
+            except ValueError as e:
+                reason = f"Cannot find valid third VP: {str(e)}"
+                return (False, reason)
+        
+        elif size == 1:
+            # Try to construct auxiliary component for 1-VP
+            try:
+                auxiliary = self._construct_auxiliary_component_1vp(component, strict_validation=True)
+                return (True, "")
+            except ValueError as e:
+                reason = f"Cannot find valid triplet: {str(e)}"
+                return (False, reason)
+        
+        else:
+            return (False, f"Unexpected component size: {size}")
+    
+    def select_components_for_migration(self, components: List[Dict], 
+                                        conflicts: List[Dict],
+                                        conflict_strategy: str = 'exclude_one') -> Tuple[List[Dict], List[Dict]]:
+        """
+        Select which components to migrate and which to exclude.
+        
+        NEW ARCHITECTURE (Self-Healing, No Cross-Iteration Tracking):
+        1. Pre-filter: Check if valid auxiliary component can be formed
+        2. Find conflicts among valid components
+        3. Resolve conflicts based on strategy
+        4. Return components to migrate (excluded components forgotten)
+        
+        Args:
+            components: List of component dictionaries
+            conflicts: List of conflict dictionaries
+            conflict_strategy: How to resolve conflicts
+                - 'exclude_one': Keep closer component, exclude farther one
+                - 'exclude_all_conflicts': Exclude all conflicting components (for testing)
+        
+        Returns:
+            (components_to_migrate, components_excluded)
+            
+        Note: Excluded components are NOT tracked across iterations. Each iteration
+        re-evaluates all components from scratch (self-healing system).
+        """
+        self.logger.info("="*80)
+        self.logger.info("COMPONENT SELECTION FOR MIGRATION")
+        self.logger.info("="*80)
+        
+        # ====================================================================
+        # STEP 1: PRE-FILTER - Check if valid auxiliary component can be formed
+        # ====================================================================
+        self.logger.info(f"\nStep 1: Pre-filtering {len(components)} components...")
+        
+        valid_components = []
+        excluded_prefilter = []
+        excluded_triple_point = []
         
         for component in components:
+            comp_idx = component['index']
+            comp_size = component['size']
+            comp_vps = component['vp_indices']
+            
+            # Check 1: Near triple point exclusion (safety check)
+            if component.get('near_triple_point', False):
+                excluded_triple_point.append(component)
+                self.logger.warning(
+                    f"  ✗ Component {comp_idx} ({comp_size}-VP): EXCLUDED - near triple point "
+                    f"(shared VPs: {component.get('triple_point_shared_vps', [])})"
+                )
+                continue
+            
+            # Check 2: Can form valid auxiliary component?
+            self.logger.info(f"\n  Component {comp_idx} ({comp_size}-VP {comp_vps}): Checking auxiliary component...")
+            is_valid, reason = self.can_form_valid_auxiliary_component(component)
+            
+            if is_valid:
+                valid_components.append(component)
+                self.logger.info(f"  Component {comp_idx}: ✓ VALID - can form auxiliary component")
+            else:
+                excluded_prefilter.append(component)
+                self.logger.warning(f"  Component {comp_idx}: ✗ EXCLUDED - {reason}")
+        
+        self.logger.info(
+            f"\nPre-filter results: {len(valid_components)} valid, "
+            f"{len(excluded_prefilter)} excluded (auxiliary), "
+            f"{len(excluded_triple_point)} excluded (triple point)"
+        )
+        
+        if not valid_components:
+            self.logger.warning("No valid components found for migration")
+            return ([], excluded_prefilter + excluded_triple_point)
+        
+        # ====================================================================
+        # STEP 2: RESOLVE CONFLICTS
+        # ====================================================================
+        self.logger.info(f"\nStep 2: Resolving conflicts (strategy: {conflict_strategy})...")
+        
+        to_migrate = []
+        excluded_conflict = []
+        processed = set()
+        
+        for component in valid_components:
             comp_idx = component['index']
             if comp_idx in processed:
                 continue
             
-            # CRITICAL: Exclude components with < 3 VPs that are near triple points
-            # (migrating them could damage triple point topology)
-            if component.get('near_triple_point', False):
-                self.logger.warning(
-                    f"Component {comp_idx} (size={component['size']}) is too close to triple point "
-                    f"(shared VPs: {component.get('triple_point_shared_vps', [])}) - EXCLUDED from migration"
-                )
-                deferred.append(component)
-                processed.add(comp_idx)
-                continue
-            
-            # Check if component is in a conflict (has neighbor components)
+            # Check if component has a conflict
             conflict = self._get_conflict_for_component(component, conflicts)
             
             if conflict is None:
-                # No conflict → Component has NO neighbor components
-                # → MIGRATE immediately (always safe, no issues possible)
+                # No conflict → migrate immediately
                 to_migrate.append(component)
                 processed.add(comp_idx)
+                self.logger.debug(f"  Component {comp_idx}: No conflict → migrate")
             else:
-                # Conflict exists → Component HAS neighbor components
-                # → Need to check if risky before migrating
+                # Has conflict → resolve based on strategy
                 other_idx = conflict['component_j'] if conflict['component_i'] == comp_idx else conflict['component_i']
-                other_component = components[other_idx]
                 
-                # CRITICAL: Check if other component is near triple point (and < 3 VPs)
-                if other_component.get('near_triple_point', False):
-                    # Other component is excluded → migrate this one if safe
-                    if not component.get('near_triple_point', False):
-                        to_migrate.append(component)
-                        processed.add(comp_idx)
-                        processed.add(other_idx)
-                    else:
-                        # Both near triple points → defer both
-                        deferred.append(component)
-                        deferred.append(other_component)
-                        processed.add(comp_idx)
-                        processed.add(other_idx)
+                # Check if other component is also valid (not excluded in pre-filter)
+                other_component = next((c for c in valid_components if c['index'] == other_idx), None)
+                
+                if other_component is None:
+                    # Other component was excluded in pre-filter → migrate this one
+                    to_migrate.append(component)
+                    processed.add(comp_idx)
+                    self.logger.info(f"  Component {comp_idx}: Conflict with {other_idx} (excluded) → migrate")
                     continue
                 
-                # FIXED LOGIC: Check if at least one has 3 VPs (safe to migrate both)
-                at_least_one_3vp = (component['size'] >= 3) or (other_component['size'] >= 3)
-                
-                if at_least_one_3vp:
-                    # Case 1: At least one is 3-VP → MIGRATE BOTH (safe, internal neighbors)
-                    if comp_idx < other_idx:  # Only process once per pair
-                        to_migrate.append(component)
-                        to_migrate.append(other_component)
+                # Both components are valid → apply conflict strategy
+                if comp_idx < other_idx:  # Process each pair only once
+                    if conflict_strategy == 'exclude_all_conflicts':
+                        # Exclude both conflicting components
+                        excluded_conflict.append(component)
+                        excluded_conflict.append(other_component)
                         self.logger.info(
-                            f"Conflict {comp_idx}-{other_idx}: At least one 3-VP "
-                            f"(sizes {component['size']}, {other_component['size']}) → migrate both"
+                            f"  Conflict {comp_idx} vs {other_idx}: Excluding BOTH (strategy: exclude_all_conflicts)"
                         )
-                        processed.add(comp_idx)
-                        processed.add(other_idx)
-                else:
-                    # Case 2: BOTH < 3-VP → Risky, apply deferral strategy
-                    # TODO: Add deferral_strategy configuration (defer_one vs defer_both)
-                    # For now, use distance-based priority (defer_one behavior)
-                    
-                    if component['min_distance'] < other_component['min_distance']:
-                        # Component is closer → migrate it, defer the farther one
-                        to_migrate.append(component)
-                        deferred.append(other_component)
-                        self.logger.warning(
-                            f"Conflict {comp_idx}-{other_idx}: Both < 3-VP "
-                            f"(sizes {component['size']}, {other_component['size']}) → "
-                            f"deferred component {other_idx} (closer: {comp_idx}, "
-                            f"dist {component['min_distance']:.6f} < {other_component['min_distance']:.6f})"
-                        )
-                        # TODO: Track deferred component for subsequent iterations
+                    elif conflict_strategy == 'exclude_one':
+                        # Exclude farther component, keep closer one
+                        if component['min_distance'] < other_component['min_distance']:
+                            to_migrate.append(component)
+                            excluded_conflict.append(other_component)
+                            self.logger.info(
+                                f"  Conflict {comp_idx} vs {other_idx}: Keeping {comp_idx} "
+                                f"(dist {component['min_distance']:.6f} < {other_component['min_distance']:.6f})"
+                            )
+                        else:
+                            to_migrate.append(other_component)
+                            excluded_conflict.append(component)
+                            self.logger.info(
+                                f"  Conflict {comp_idx} vs {other_idx}: Keeping {other_idx} "
+                                f"(dist {other_component['min_distance']:.6f} < {component['min_distance']:.6f})"
+                            )
                     else:
-                        # Other is closer → defer this one, migrate the other
-                        deferred.append(component)
-                        to_migrate.append(other_component)
-                        self.logger.warning(
-                            f"Conflict {comp_idx}-{other_idx}: Both < 3-VP "
-                            f"(sizes {component['size']}, {other_component['size']}) → "
-                            f"deferred component {comp_idx} (closer: {other_idx}, "
-                            f"dist {other_component['min_distance']:.6f} < {component['min_distance']:.6f})"
-                        )
-                        # TODO: Track deferred component for subsequent iterations
+                        raise ValueError(f"Unknown conflict_strategy: {conflict_strategy}")
                     
                     processed.add(comp_idx)
                     processed.add(other_idx)
         
-        return (to_migrate, deferred)
+        # ====================================================================
+        # STEP 3: SUMMARY
+        # ====================================================================
+        all_excluded = excluded_prefilter + excluded_triple_point + excluded_conflict
+        
+        self.logger.info("="*80)
+        self.logger.info("SELECTION SUMMARY:")
+        self.logger.info(f"  Components to migrate: {len(to_migrate)}")
+        self.logger.info(f"  Components excluded:")
+        self.logger.info(f"    - Pre-filter (no valid auxiliary): {len(excluded_prefilter)}")
+        self.logger.info(f"    - Triple point proximity: {len(excluded_triple_point)}")
+        self.logger.info(f"    - Conflict resolution: {len(excluded_conflict)}")
+        self.logger.info(f"  Total excluded: {len(all_excluded)}")
+        self.logger.info("="*80)
+        
+        return (to_migrate, all_excluded)
     
     def apply_type2_switch_v3(self, steiner_handler, triple_point_idx: int) -> Dict:
         """
