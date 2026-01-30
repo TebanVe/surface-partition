@@ -2882,6 +2882,9 @@ class TopologySwitcher:
         Returns both the migrating VP and the auxiliary component to avoid
         redundant construction calls.
         
+        CACHING: If component has 'cached_auxiliary' from pre-filter, uses it
+        to avoid redundant construction and logging.
+        
         Args:
             component: Component info dict from analyze_component()
             strict_validation: If False, use fallback when auxiliary construction fails.
@@ -2894,14 +2897,21 @@ class TopologySwitcher:
         
         size = len(component['vp_indices'])
         
-        if size == 3:
-            auxiliary_component = component['vp_indices']
-        elif size == 2:
-            auxiliary_component = self._construct_auxiliary_component_2vp(component, strict_validation)
-        elif size == 1:
-            auxiliary_component = self._construct_auxiliary_component_1vp(component, strict_validation)
+        # Check for cached auxiliary component from pre-filter
+        if 'cached_auxiliary' in component:
+            auxiliary_component = component['cached_auxiliary']
+            comp_idx = component.get('index', '?')
+            self.logger.debug(f"Component {comp_idx}: Using cached auxiliary component {auxiliary_component}")
         else:
-            raise ValueError(f"Unexpected component size: {size}")
+            # Fallback: construct if not cached (e.g., direct calls to apply_type1_switch_v2)
+            if size == 3:
+                auxiliary_component = component['vp_indices']
+            elif size == 2:
+                auxiliary_component = self._construct_auxiliary_component_2vp(component, strict_validation)
+            elif size == 1:
+                auxiliary_component = self._construct_auxiliary_component_1vp(component, strict_validation)
+            else:
+                raise ValueError(f"Unexpected component size: {size}")
         
         # Find middle VP (degree 2 in auxiliary component)
         auxiliary_set = set(auxiliary_component)
@@ -3690,6 +3700,9 @@ class TopologySwitcher:
         - 2-VP components: Must find a third VP that approaches the same target vertex
         - 1-VP components: Must find two more VPs that form a valid triplet
         
+        CACHING: If valid, the auxiliary component is cached in component['cached_auxiliary']
+        to avoid redundant construction during migration.
+        
         Args:
             component: Component dictionary with 'vp_indices', 'target_vertex', 'size'
         
@@ -3699,13 +3712,16 @@ class TopologySwitcher:
         size = component['size']
         
         if size == 3:
-            # 3-VP components are already validated during component analysis
+            # 3-VP components: use the component's VPs as-is for auxiliary
+            # The middle VP will be determined later by topology
+            component['cached_auxiliary'] = component['vp_indices']
             return (True, "")
         
         elif size == 2:
             # Try to construct auxiliary component for 2-VP
             try:
                 auxiliary = self._construct_auxiliary_component_2vp(component, strict_validation=True)
+                component['cached_auxiliary'] = auxiliary  # Cache for later use
                 return (True, "")
             except ValueError as e:
                 reason = f"Cannot find valid third VP: {str(e)}"
@@ -3715,6 +3731,7 @@ class TopologySwitcher:
             # Try to construct auxiliary component for 1-VP
             try:
                 auxiliary = self._construct_auxiliary_component_1vp(component, strict_validation=True)
+                component['cached_auxiliary'] = auxiliary  # Cache for later use
                 return (True, "")
             except ValueError as e:
                 reason = f"Cannot find valid triplet: {str(e)}"
@@ -3748,14 +3765,11 @@ class TopologySwitcher:
         Note: Excluded components are NOT tracked across iterations. Each iteration
         re-evaluates all components from scratch (self-healing system).
         """
-        self.logger.info("="*80)
-        self.logger.info("COMPONENT SELECTION FOR MIGRATION")
-        self.logger.info("="*80)
-        
         # ====================================================================
         # STEP 1: PRE-FILTER - Check if valid auxiliary component can be formed
         # ====================================================================
-        self.logger.info(f"\nStep 1: Pre-filtering {len(components)} components...")
+        # Note: Detailed auxiliary construction logging still happens (for debugging),
+        # but we don't print per-component status here to avoid clutter
         
         valid_components = []
         excluded_prefilter = []
@@ -3776,30 +3790,27 @@ class TopologySwitcher:
                 continue
             
             # Check 2: Can form valid auxiliary component?
-            self.logger.info(f"\n  Component {comp_idx} ({comp_size}-VP {comp_vps}): Checking auxiliary component...")
             is_valid, reason = self.can_form_valid_auxiliary_component(component)
             
             if is_valid:
                 valid_components.append(component)
-                self.logger.info(f"  Component {comp_idx}: ✓ VALID - can form auxiliary component")
             else:
                 excluded_prefilter.append(component)
-                self.logger.warning(f"  Component {comp_idx}: ✗ EXCLUDED - {reason}")
-        
-        self.logger.info(
-            f"\nPre-filter results: {len(valid_components)} valid, "
-            f"{len(excluded_prefilter)} excluded (auxiliary), "
-            f"{len(excluded_triple_point)} excluded (triple point)"
-        )
+                # Log exclusion reason (detailed logging happens in auxiliary construction)
+                self.logger.warning(f"Component {comp_idx}: Excluded - {reason}")
         
         if not valid_components:
-            self.logger.warning("No valid components found for migration")
+            print("\n⚠️  No valid components found for migration")
             return ([], excluded_prefilter + excluded_triple_point)
         
         # ====================================================================
         # STEP 2: RESOLVE CONFLICTS
         # ====================================================================
-        self.logger.info(f"\nStep 2: Resolving conflicts (strategy: {conflict_strategy})...")
+        print("\n" + "="*80)
+        print("COMPONENT SELECTION - CONFLICT RESOLUTION")
+        print("="*80)
+        print(f"Step 2: Resolving conflicts (strategy: {conflict_strategy})...")
+        print(f"  Total conflicts detected: {len(conflicts)}")
         
         to_migrate = []
         excluded_conflict = []
@@ -3829,36 +3840,55 @@ class TopologySwitcher:
                     # Other component was excluded in pre-filter → migrate this one
                     to_migrate.append(component)
                     processed.add(comp_idx)
-                    self.logger.info(f"  Component {comp_idx}: Conflict with {other_idx} (excluded) → migrate")
+                    print(f"  Component {comp_idx}: Conflict with {other_idx} (excluded in pre-filter) → migrate")
                     continue
                 
-                # Both components are valid → apply conflict strategy
+                # Both components are valid → check if at least one has 3 VPs
                 if comp_idx < other_idx:  # Process each pair only once
-                    if conflict_strategy == 'exclude_all_conflicts':
-                        # Exclude both conflicting components
-                        excluded_conflict.append(component)
-                        excluded_conflict.append(other_component)
-                        self.logger.info(
-                            f"  Conflict {comp_idx} vs {other_idx}: Excluding BOTH (strategy: exclude_all_conflicts)"
+                    comp_size = component['size']
+                    other_size = other_component['size']
+                    
+                    # CRITICAL: If at least one component has 3 VPs, migrate BOTH (safe)
+                    at_least_one_3vp = (comp_size >= 3) or (other_size >= 3)
+                    
+                    if at_least_one_3vp:
+                        # Case 1: At least one is 3-VP → MIGRATE BOTH (safe, internal neighbors)
+                        to_migrate.append(component)
+                        to_migrate.append(other_component)
+                        print(
+                            f"  Conflict {comp_idx} ({comp_size}-VP) vs {other_idx} ({other_size}-VP): "
+                            f"At least one 3-VP → migrate BOTH"
                         )
-                    elif conflict_strategy == 'exclude_one':
-                        # Exclude farther component, keep closer one
-                        if component['min_distance'] < other_component['min_distance']:
-                            to_migrate.append(component)
-                            excluded_conflict.append(other_component)
-                            self.logger.info(
-                                f"  Conflict {comp_idx} vs {other_idx}: Keeping {comp_idx} "
-                                f"(dist {component['min_distance']:.6f} < {other_component['min_distance']:.6f})"
-                            )
-                        else:
-                            to_migrate.append(other_component)
-                            excluded_conflict.append(component)
-                            self.logger.info(
-                                f"  Conflict {comp_idx} vs {other_idx}: Keeping {other_idx} "
-                                f"(dist {other_component['min_distance']:.6f} < {component['min_distance']:.6f})"
-                            )
                     else:
-                        raise ValueError(f"Unknown conflict_strategy: {conflict_strategy}")
+                        # Case 2: BOTH < 3-VP → Risky, apply conflict strategy
+                        if conflict_strategy == 'exclude_all_conflicts':
+                            # Exclude both conflicting components
+                            excluded_conflict.append(component)
+                            excluded_conflict.append(other_component)
+                            print(
+                                f"  Conflict {comp_idx} ({comp_size}-VP) vs {other_idx} ({other_size}-VP): "
+                                f"Both < 3-VP → Excluding BOTH (strategy: exclude_all_conflicts)"
+                            )
+                        elif conflict_strategy == 'exclude_one':
+                            # Exclude farther component, keep closer one
+                            if component['min_distance'] < other_component['min_distance']:
+                                to_migrate.append(component)
+                                excluded_conflict.append(other_component)
+                                print(
+                                    f"  Conflict {comp_idx} ({comp_size}-VP, dist={component['min_distance']:.6f}) vs "
+                                    f"{other_idx} ({other_size}-VP, dist={other_component['min_distance']:.6f}): "
+                                    f"Keeping {comp_idx} (closer)"
+                                )
+                            else:
+                                to_migrate.append(other_component)
+                                excluded_conflict.append(component)
+                                print(
+                                    f"  Conflict {comp_idx} ({comp_size}-VP, dist={component['min_distance']:.6f}) vs "
+                                    f"{other_idx} ({other_size}-VP, dist={other_component['min_distance']:.6f}): "
+                                    f"Keeping {other_idx} (closer)"
+                                )
+                        else:
+                            raise ValueError(f"Unknown conflict_strategy: {conflict_strategy}")
                     
                     processed.add(comp_idx)
                     processed.add(other_idx)
@@ -3868,15 +3898,24 @@ class TopologySwitcher:
         # ====================================================================
         all_excluded = excluded_prefilter + excluded_triple_point + excluded_conflict
         
-        self.logger.info("="*80)
-        self.logger.info("SELECTION SUMMARY:")
-        self.logger.info(f"  Components to migrate: {len(to_migrate)}")
-        self.logger.info(f"  Components excluded:")
-        self.logger.info(f"    - Pre-filter (no valid auxiliary): {len(excluded_prefilter)}")
-        self.logger.info(f"    - Triple point proximity: {len(excluded_triple_point)}")
-        self.logger.info(f"    - Conflict resolution: {len(excluded_conflict)}")
-        self.logger.info(f"  Total excluded: {len(all_excluded)}")
-        self.logger.info("="*80)
+        print("\n" + "="*80)
+        print("SELECTION SUMMARY:")
+        print(f"  Components to migrate: {len(to_migrate)}")
+        print(f"  Components excluded:")
+        print(f"    - Pre-filter (no valid auxiliary): {len(excluded_prefilter)}")
+        if excluded_prefilter:
+            prefilter_indices = [c['index'] for c in excluded_prefilter]
+            print(f"      Indices: {prefilter_indices}")
+        print(f"    - Triple point proximity: {len(excluded_triple_point)}")
+        if excluded_triple_point:
+            triple_indices = [c['index'] for c in excluded_triple_point]
+            print(f"      Indices: {triple_indices}")
+        print(f"    - Conflict resolution: {len(excluded_conflict)}")
+        if excluded_conflict:
+            conflict_indices = [c['index'] for c in excluded_conflict]
+            print(f"      Indices: {conflict_indices}")
+        print(f"  Total excluded: {len(all_excluded)}")
+        print("="*80 + "\n")
         
         return (to_migrate, all_excluded)
     
