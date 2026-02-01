@@ -277,14 +277,8 @@ class AreaCalculator:
         """
         Compute area contribution and gradient from one mesh triangle to one partition cell.
         
-        PRIORITY ORDER (after topology switches):
-        1. Check segment_crossing_cache FIRST - handles intermediate triangles correctly
-        2. Check for VP cell mismatch - handles triangles that gained new cells
-        3. Fall back to indicator_functions for standard triangles
-        
-        The key insight: After Type 1 migration, segments can cross triangles that
-        have NO VPs (intermediate triangles). These are only detectable via the
-        crossing cache, not via indicator_functions.
+        Uses indicator_functions to determine how many vertices belong to the cell,
+        then computes the appropriate partial area.
         
         Returns:
             (area_contribution, gradient_contribution)
@@ -294,18 +288,7 @@ class AreaCalculator:
         v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
         gradient = np.zeros(len(lambda_vec))
         
-        # PRIORITY 1: Check segment_crossing_cache FIRST
-        # This handles intermediate triangles (0 VPs, crossed by segment)
-        crossing = self._find_crossing_for_cell(tri_idx, cell_idx)
-        if crossing is not None:
-            return self._area_from_crossing_generic(tri_idx, cell_idx, crossing)
-        
-        # PRIORITY 2: Check for VP cell mismatch (triangle has VP but indicator_functions don't know)
-        if self._has_cell_mismatch(tri_idx, cell_idx):
-            return self._triangle_contribution_vp_based(tri_idx, cell_idx, lambda_vec)
-        
-        # PRIORITY 3: Standard indicator_functions-based computation
-        # (Safe for triangles where VP cells match vertex labels)
+        # Use indicator_functions to get vertex labels
         vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
         labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
         
@@ -328,179 +311,6 @@ class AreaCalculator:
             # Case 3: One vertex inside, two outside
             return self._partial_area_one_inside(tri_idx, cell_idx, v1, v2, v3, labels)
     
-    def _find_crossing_for_cell(self, tri_idx: int, cell_idx: int):
-        """
-        Find crossing info for a specific cell in this triangle.
-        
-        Returns:
-            SegmentCrossingInfo if found, None otherwise
-        """
-        if tri_idx not in self.partition.segment_crossing_cache:
-            return None
-        
-        for crossing in self.partition.segment_crossing_cache[tri_idx]:
-            # Use the new involves_cell method that checks cell_pair
-            if hasattr(crossing, 'involves_cell'):
-                if crossing.involves_cell(cell_idx):
-                    return crossing
-            else:
-                # Fallback for old-style crossings
-                if crossing.cell_idx == cell_idx:
-                    return crossing
-        
-        return None
-    
-    def _has_cell_mismatch(self, tri_idx: int, cell_idx: int) -> bool:
-        """
-        Check if VPs in this triangle involve cell_idx but indicator_functions don't know.
-        
-        This detects triangles that gained VPs for a new cell after topology switches.
-        
-        Returns:
-            True if mismatch detected, False otherwise
-        """
-        # Get cells from indicator_functions
-        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
-        face = self.mesh.faces[tri_idx]
-        vertex_cells = set(vertex_labels[int(v)] for v in face)
-        
-        # Get cells from VPs in this triangle
-        vp_cells = set()
-        for tri_seg in self.partition.triangle_segments:
-            if tri_seg.triangle_idx == tri_idx:
-                for vp_idx in tri_seg.var_point_indices:
-                    vp_cells.update(self.partition.variable_points[vp_idx].belongs_to_cells)
-                break
-        
-        # Mismatch if cell_idx is in VP cells but not in vertex cells
-        return cell_idx in vp_cells and cell_idx not in vertex_cells
-    
-    def _triangle_contribution_vp_based(self, tri_idx: int, cell_idx: int,
-                                         lambda_vec: np.ndarray) -> Tuple[float, np.ndarray]:
-        """
-        Compute area using VP positions when indicator_functions mismatch.
-        
-        Used when a triangle has VPs for a cell that indicator_functions don't know about
-        (happens after Type 1 migration moves VP to new triangle).
-        
-        Algorithm:
-        1. Find VPs in this triangle that belong to cell_idx
-        2. Determine which vertices are "on the cell_idx side" using VP edge info
-        3. Construct polygon from vertices + VP positions
-        4. Compute area
-        """
-        face = self.mesh.faces[tri_idx]
-        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-        gradient = np.zeros(len(lambda_vec))
-        
-        # Find VPs in this triangle for cell_idx
-        vps_for_cell = []
-        vp_positions = []
-        for tri_seg in self.partition.triangle_segments:
-            if tri_seg.triangle_idx == tri_idx:
-                for vp_idx in tri_seg.var_point_indices:
-                    vp = self.partition.variable_points[vp_idx]
-                    if cell_idx in vp.belongs_to_cells:
-                        vps_for_cell.append(vp_idx)
-                        vp_positions.append(vp.evaluate(self.mesh.vertices))
-                break
-        
-        if not vps_for_cell:
-            # No VPs for this cell in this triangle - shouldn't happen but be safe
-            return 0.0, gradient
-        
-        # Determine which mesh vertices are on the cell_idx side
-        # A vertex is on cell_idx side if ALL VPs on edges adjacent to it include cell_idx
-        # OR if no VP is on an adjacent edge (interior vertex for this cell)
-        vertices_on_cell_side = []
-        vertex_indices = [v1, v2, v3]
-        vertex_positions = [self.mesh.vertices[v] for v in vertex_indices]
-        
-        # For each vertex, check if it's on the cell_idx side
-        for i, v in enumerate(vertex_indices):
-            # Get edges adjacent to this vertex
-            v_prev = vertex_indices[(i - 1) % 3]
-            v_next = vertex_indices[(i + 1) % 3]
-            edge1 = tuple(sorted([v, v_prev]))
-            edge2 = tuple(sorted([v, v_next]))
-            
-            # Check if these edges have VPs
-            vp_on_edge1 = self.partition.edge_to_varpoint.get(edge1)
-            vp_on_edge2 = self.partition.edge_to_varpoint.get(edge2)
-            
-            # Vertex is on cell_idx side if:
-            # - Both adjacent edges have VPs for cell_idx, OR
-            # - One adjacent edge has VP for cell_idx and other has no VP, OR
-            # - Neither adjacent edge has VP (vertex is in cell interior)
-            has_vp_for_cell_on_edge1 = (vp_on_edge1 is not None and 
-                                         cell_idx in self.partition.variable_points[vp_on_edge1].belongs_to_cells)
-            has_vp_for_cell_on_edge2 = (vp_on_edge2 is not None and 
-                                         cell_idx in self.partition.variable_points[vp_on_edge2].belongs_to_cells)
-            
-            # If vertex has 2 VPs for this cell on adjacent edges, it's a corner
-            if has_vp_for_cell_on_edge1 and has_vp_for_cell_on_edge2:
-                vertices_on_cell_side.append(vertex_positions[i])
-        
-        # Construct polygon: vertices on cell side + VP positions
-        all_points = vertices_on_cell_side + vp_positions
-        
-        if len(all_points) < 3:
-            # Not enough points to form a polygon - degenerate case
-            return 0.0, gradient
-        
-        # Order points to form valid polygon
-        ordered_points = self._order_polygon_points(all_points, tri_idx)
-        
-        # Compute area using triangulation from centroid
-        area = self._polygon_area(ordered_points)
-        
-        return area, gradient
-    
-    def _order_polygon_points(self, points: List[np.ndarray], tri_idx: int) -> np.ndarray:
-        """Order polygon points counter-clockwise around their centroid."""
-        if len(points) < 3:
-            return np.array(points)
-        
-        points = np.array(points)
-        centroid = np.mean(points, axis=0)
-        
-        # Get triangle normal for consistent ordering
-        face = self.mesh.faces[tri_idx]
-        v1, v2, v3 = [self.mesh.vertices[int(i)] for i in face]
-        normal = np.cross(v2 - v1, v3 - v1)
-        normal = normal / (np.linalg.norm(normal) + 1e-12)
-        
-        # Compute angles from centroid
-        v0 = points[0] - centroid
-        v0 = v0 / (np.linalg.norm(v0) + 1e-12)
-        
-        angles = []
-        for p in points:
-            v = p - centroid
-            v = v / (np.linalg.norm(v) + 1e-12)
-            cos_angle = np.dot(v0, v)
-            sin_angle = np.dot(np.cross(v0, v), normal)
-            angle = np.arctan2(sin_angle, cos_angle)
-            angles.append(angle)
-        
-        sorted_indices = np.argsort(angles)
-        return points[sorted_indices]
-    
-    def _polygon_area(self, ordered_points: np.ndarray) -> float:
-        """Compute area of polygon using fan triangulation from centroid."""
-        if len(ordered_points) < 3:
-            return 0.0
-        
-        centroid = np.mean(ordered_points, axis=0)
-        total_area = 0.0
-        
-        for i in range(len(ordered_points)):
-            p1 = ordered_points[i]
-            p2 = ordered_points[(i + 1) % len(ordered_points)]
-            total_area += self._triangle_area_3d(centroid, p1, p2)
-        
-        return total_area
-    
     def _partial_area_two_inside(self, tri_idx: int, cell_idx: int,
                                  v1: int, v2: int, v3: int,
                                  labels: List[int]) -> Tuple[float, np.ndarray]:
@@ -509,8 +319,6 @@ class AreaCalculator:
         
         The contour cuts the triangle, leaving a trapezoid/triangle portion inside.
         Area depends on λ parameters of the two edges connecting to the outside vertex.
-        
-        Phase 4: Also handles cross-triangle segments using segment_crossing_cache.
         
         Note: labels parameter is already passed from _triangle_contribution, which
         gets it from vertex_labels. No need to recompute here.
@@ -536,24 +344,12 @@ class AreaCalculator:
         v_in1 = vertices[inside_indices[0]]
         v_in2 = vertices[inside_indices[1]]
         
-        # Phase 4: Check segment_crossing_cache first (for cross-triangle segments)
-        if tri_idx in self.partition.segment_crossing_cache:
-            # Find crossing that involves this cell (check both cells in cell_pair)
-            for crossing in self.partition.segment_crossing_cache[tri_idx]:
-                involves = crossing.involves_cell(cell_idx) if hasattr(crossing, 'involves_cell') else crossing.cell_idx == cell_idx
-                if involves:
-                    # Use cached intersection points
-                    return self._area_from_crossing_two_inside(
-                        tri_idx, v_in1, v_in2, crossing
-                    )
-        
-        # Original logic: Find variable points on edges
+        # Find variable points on edges
         edge1 = tuple(sorted([v_out, v_in1]))
         edge2 = tuple(sorted([v_out, v_in2]))
         
         if edge1 not in self.partition.edge_to_varpoint or edge2 not in self.partition.edge_to_varpoint:
-            # No variable points on these edges - check if there's any crossing for this cell
-            # This handles cases where segment crosses without VP on expected edges
+            # No variable points on these edges (shouldn't happen)
             return 0.0, np.zeros(len(self.partition.variable_points))
         
         vp_idx1 = self.partition.edge_to_varpoint[edge1]
@@ -618,8 +414,6 @@ class AreaCalculator:
         
         The contour cuts the triangle, leaving a small triangular portion inside.
         Area depends on λ parameters of the two edges connecting to the inside vertex.
-        
-        Phase 4: Also handles cross-triangle segments using segment_crossing_cache.
         """
         # Identify which vertex is inside
         vertices = [v1, v2, v3]
@@ -640,16 +434,7 @@ class AreaCalculator:
         v_out1 = vertices[outside_indices[0]]
         v_out2 = vertices[outside_indices[1]]
         
-        # Phase 4: Check segment_crossing_cache first (for cross-triangle segments)
-        if tri_idx in self.partition.segment_crossing_cache:
-            for crossing in self.partition.segment_crossing_cache[tri_idx]:
-                involves = crossing.involves_cell(cell_idx) if hasattr(crossing, 'involves_cell') else crossing.cell_idx == cell_idx
-                if involves:
-                    return self._area_from_crossing_one_inside(
-                        tri_idx, v_in, crossing
-                    )
-        
-        # Original logic: Find variable points on edges
+        # Find variable points on edges
         edge1 = tuple(sorted([v_in, v_out1]))
         edge2 = tuple(sorted([v_in, v_out2]))
         
@@ -709,209 +494,6 @@ class AreaCalculator:
     # =========================================================================
     # Phase 4: Cross-triangle segment handling
     # =========================================================================
-    
-    def _area_from_crossing_generic(self, tri_idx: int, cell_idx: int,
-                                     crossing) -> Tuple[float, np.ndarray]:
-        """
-        Compute area contribution using cached crossing info.
-        
-        This is the MAIN method for handling crossed triangles. It determines
-        which vertices are on the cell_idx side and constructs the appropriate
-        polygon (triangle, quadrilateral, or more complex shape).
-        
-        Algorithm:
-        1. Get entry and exit points from crossing
-        2. Determine which mesh vertices are on the cell_idx side of the segment
-        3. Construct polygon: vertices on cell side + entry/exit points
-        4. Compute area
-        
-        Args:
-            tri_idx: Triangle index
-            cell_idx: Cell index for area attribution
-            crossing: SegmentCrossingInfo with entry/exit points
-        """
-        gradient = np.zeros(len(self.partition.variable_points))
-        
-        face = self.mesh.faces[tri_idx]
-        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-        vertices = [v1, v2, v3]
-        vertex_positions = [self.mesh.vertices[v] for v in vertices]
-        
-        entry_point = crossing.entry_point
-        exit_point = crossing.exit_point
-        entry_edge = crossing.entry_edge
-        exit_edge = crossing.exit_edge
-        
-        # Determine which vertices are on the cell_idx side
-        # A vertex is on the cell_idx side if:
-        # 1. It's NOT between entry and exit edges (segment doesn't cut it off)
-        # 2. OR indicator_functions say it belongs to cell_idx
-        
-        # Strategy: The segment divides the triangle into two regions.
-        # We need to figure out which region corresponds to cell_idx.
-        
-        vertices_on_cell_side = []
-        
-        # Use indicator_functions as a hint, but also check geometric position
-        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
-        
-        # For each vertex, check if it's on the cell_idx side of the segment
-        for i, v in enumerate(vertices):
-            v_pos = vertex_positions[i]
-            
-            # Check if this vertex is "cut off" by the segment
-            # A vertex is cut off if entry and exit edges both don't contain it
-            entry_has_v = v in entry_edge if entry_edge else False
-            exit_has_v = v in exit_edge if exit_edge else False
-            
-            if entry_has_v or exit_has_v:
-                # Vertex is on an edge that the segment crosses
-                # Need to determine which side it's on
-                if vertex_labels[v] == cell_idx:
-                    vertices_on_cell_side.append(v_pos)
-            else:
-                # Vertex is the "opposite" vertex (not on entry or exit edges)
-                # This vertex is either fully inside or fully outside
-                # Use the signed area test to determine which side
-                if self._vertex_on_cell_side(v_pos, entry_point, exit_point, cell_idx, tri_idx):
-                    vertices_on_cell_side.append(v_pos)
-        
-        # Construct polygon: vertices on cell side + entry and exit points
-        # Order matters for correct area calculation
-        all_points = vertices_on_cell_side + [entry_point, exit_point]
-        
-        if len(all_points) < 3:
-            # Degenerate case - no area contribution
-            return 0.0, gradient
-        
-        # Order points counter-clockwise
-        ordered_points = self._order_polygon_points(all_points, tri_idx)
-        
-        # Compute area
-        area = self._polygon_area(ordered_points)
-        
-        # Compute gradient (simplified - use finite differences)
-        gradient = self._gradient_from_crossing(crossing)
-        
-        return area, gradient
-    
-    def _vertex_on_cell_side(self, vertex_pos: np.ndarray, entry_point: np.ndarray,
-                              exit_point: np.ndarray, cell_idx: int, tri_idx: int) -> bool:
-        """
-        Determine if a vertex is on the cell_idx side of the segment.
-        
-        Uses the cross product to determine which side of the entry→exit line
-        the vertex is on, then uses indicator_functions as a tiebreaker.
-        """
-        # Vector from entry to exit
-        segment_vec = exit_point - entry_point
-        # Vector from entry to vertex
-        to_vertex = vertex_pos - entry_point
-        
-        # Get triangle normal
-        face = self.mesh.faces[tri_idx]
-        v1, v2, v3 = [self.mesh.vertices[int(i)] for i in face]
-        normal = np.cross(v2 - v1, v3 - v1)
-        
-        # Cross product gives signed area - positive on one side, negative on other
-        cross = np.cross(segment_vec, to_vertex)
-        signed_area = np.dot(cross, normal)
-        
-        # Use indicator_functions to determine which sign corresponds to cell_idx
-        # Check which side of the segment has more vertices labeled as cell_idx
-        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
-        
-        # For now, use the indicator label of the closest vertex as reference
-        # This is a heuristic that works for most cases
-        closest_v_idx = int(face[0])  # Just use first vertex as reference
-        if vertex_labels[closest_v_idx] == cell_idx:
-            # cell_idx is on the same side as the reference
-            ref_pos = self.mesh.vertices[closest_v_idx]
-            ref_to_vertex = ref_pos - entry_point
-            ref_cross = np.cross(segment_vec, ref_to_vertex)
-            ref_signed = np.dot(ref_cross, normal)
-            
-            # Vertex is on cell_idx side if signs match
-            return (signed_area > 0) == (ref_signed > 0)
-        else:
-            # cell_idx is on the opposite side
-            ref_pos = self.mesh.vertices[closest_v_idx]
-            ref_to_vertex = ref_pos - entry_point
-            ref_cross = np.cross(segment_vec, ref_to_vertex)
-            ref_signed = np.dot(ref_cross, normal)
-            
-            # Vertex is on cell_idx side if signs are opposite
-            return (signed_area > 0) != (ref_signed > 0)
-    
-    def _area_from_crossing_two_inside(self, tri_idx: int, v_in1: int, v_in2: int,
-                                        crossing) -> Tuple[float, np.ndarray]:
-        """
-        Compute area contribution using cached crossing info (2 vertices inside).
-        
-        When a segment crosses this triangle without VPs on its edges, we use
-        the precomputed entry/exit points from segment_crossing_cache.
-        
-        Args:
-            tri_idx: Triangle index
-            v_in1, v_in2: Indices of vertices inside the cell
-            crossing: SegmentCrossingInfo with entry/exit points
-        """
-        p_in1 = self.mesh.vertices[v_in1]
-        p_in2 = self.mesh.vertices[v_in2]
-        
-        # The region inside the cell is a quadrilateral: p_in1, entry_point, exit_point, p_in2
-        # Note: We need to order the points correctly around the quadrilateral
-        area = self._quadrilateral_area(p_in1, crossing.entry_point, crossing.exit_point, p_in2)
-        
-        # Gradient: depends on the VPs that define this segment
-        # Use finite differences on those VPs
-        gradient = self._gradient_from_crossing(crossing)
-        
-        return area, gradient
-    
-    def _area_from_crossing_one_inside(self, tri_idx: int, v_in: int,
-                                        crossing) -> Tuple[float, np.ndarray]:
-        """
-        Compute area contribution using cached crossing info (1 vertex inside).
-        
-        Args:
-            tri_idx: Triangle index
-            v_in: Index of the single vertex inside the cell
-            crossing: SegmentCrossingInfo with entry/exit points
-        """
-        p_in = self.mesh.vertices[v_in]
-        
-        # The region inside is triangle: p_in, entry_point, exit_point
-        area = self._triangle_area_3d(p_in, crossing.entry_point, crossing.exit_point)
-        
-        # Gradient via finite differences
-        gradient = self._gradient_from_crossing(crossing)
-        
-        return area, gradient
-    
-    def _gradient_from_crossing(self, crossing) -> np.ndarray:
-        """
-        Compute gradient contribution from a cached crossing.
-        
-        Uses finite differences on the VPs that define the crossing segment.
-        """
-        gradient = np.zeros(len(self.partition.variable_points))
-        
-        vp_idx1, vp_idx2 = crossing.segment
-        eps = 1e-7
-        
-        # For simplicity, we use finite differences on the segment's VPs
-        # A more accurate implementation would trace through the geometric dependencies
-        # For now, we assume the crossing points depend linearly on the VP positions
-        
-        # The gradient contribution is approximate - the crossing point moves
-        # when the VP moves, affecting the area
-        for vp_idx in [vp_idx1, vp_idx2]:
-            # This is a simplified gradient - in practice, the dependency is more complex
-            # because the crossing point depends on the line equation through both VPs
-            gradient[vp_idx] = 0.0  # Placeholder - full implementation requires chain rule
-        
-        return gradient
     
     def _triangle_area_3d(self, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
         """

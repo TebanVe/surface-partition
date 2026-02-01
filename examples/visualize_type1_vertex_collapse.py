@@ -43,8 +43,8 @@ from src.core.topology_switcher import TopologySwitcher
 from src.core.steiner_handler import SteinerHandler
 from src.core.area_calculator import AreaCalculator
 
-# Import data loading from the reference script
-from examples.visualize_precise_region import load_partition_from_refined_file
+# Import data loading utility
+from examples.data_loader import load_partition_from_refined_file
 
 
 # ============================================================================

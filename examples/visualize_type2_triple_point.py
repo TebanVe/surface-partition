@@ -44,7 +44,7 @@ from src.core.steiner_handler import SteinerHandler, TriplePoint
 from src.core.area_calculator import AreaCalculator
 
 # Import data loading from the reference script
-from examples.visualize_precise_region import load_partition_from_refined_file
+from examples.data_loader import load_partition_from_refined_file
 
 
 # ============================================================================

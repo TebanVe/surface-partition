@@ -135,43 +135,6 @@ class TriangleSegment:
 
 
 @dataclass
-class SegmentCrossingInfo:
-    """
-    Precomputed geometric intersection for a segment crossing a triangle.
-    
-    Created when a segment spans multiple triangles (after topology switches).
-    Used by AreaCalculator to compute partial areas correctly.
-    
-    Attributes:
-        segment: (vp_i, vp_j) - the variable point indices defining the segment
-        triangle_idx: Index of the triangle being crossed
-        entry_point: 3D coordinates where segment enters triangle
-        exit_point: 3D coordinates where segment exits triangle
-        entry_edge: Mesh edge (v_a, v_b) where segment enters
-        exit_edge: Mesh edge (v_c, v_d) where segment exits
-        cell_idx: Primary cell for area attribution (DEPRECATED, use cell_pair instead)
-        cell_pair: Both cells that this segment separates (for proper area attribution)
-        entry_vertex: Vertex index if entry is at vertex, None otherwise (for edge_following)
-        exit_vertex: Vertex index if exit is at vertex, None otherwise (for edge_following)
-        is_vertex_crossing: True if crossing is through shared vertex (edge_following)
-    """
-    segment: Tuple[int, int]
-    triangle_idx: int
-    entry_point: np.ndarray
-    exit_point: np.ndarray
-    entry_edge: Tuple[int, int]
-    exit_edge: Tuple[int, int]
-    cell_idx: int  # DEPRECATED: kept for backward compatibility, use cell_pair
-    cell_pair: Tuple[int, int] = (0, 0)  # Both cells separated by this segment
-    entry_vertex: Optional[int] = None
-    exit_vertex: Optional[int] = None
-    is_vertex_crossing: bool = False
-    
-    def involves_cell(self, cell_idx: int) -> bool:
-        """Check if this crossing involves the given cell."""
-        return cell_idx in self.cell_pair or cell_idx == self.cell_idx
-
-
 @dataclass
 class BoundarySegment:
     """
@@ -253,9 +216,8 @@ class PartitionContour:
         self.segment_to_triangle: Dict[Tuple[int, int], int] = {}  # Inverse map: (vp1, vp2) -> triangle
         self.triple_points: Optional[List] = None  # Computed on demand
         
-        # Phase 4: Explicit segment connectivity (for cross-triangle segments)
+        # Explicit segment connectivity
         self.boundary_segments: List[BoundarySegment] = []
-        self.segment_crossing_cache: Dict[int, List[SegmentCrossingInfo]] = {}
         
         # Choose initialization method based on available data
         if boundary_topology is not None:
@@ -683,10 +645,6 @@ class PartitionContour:
                     - Safe to use indicator_functions here because:
                       * Interior triangles never have VPs
                       * Vertex-cell relationship doesn't change
-            
-            PASS 3: Add cross-triangle segments (from segment_crossing_cache)
-                    - Include triangles that segments pass through
-                    - Critical for accuracy after Type 1 switches
         
         Returns:
             Dict[cell_idx] -> {
@@ -745,28 +703,6 @@ class PartitionContour:
                     categorization[cell_idx]['interior'].append(tri_idx)
                 # Otherwise: triangle is outside all cells (no VPs, mixed vertices)
         
-        # PASS 3: Add triangles from segment_crossing_cache
-        # Critical for cross-triangle segments created by Type 1 switches
-        # CRITICAL FIX: Add to BOTH cells that the segment separates, not just one
-        for tri_idx, crossings in self.segment_crossing_cache.items():
-            for crossing in crossings:
-                # Use cell_pair to add triangle to both cells
-                cells_to_add = set()
-                if hasattr(crossing, 'cell_pair') and crossing.cell_pair != (0, 0):
-                    cells_to_add.update(crossing.cell_pair)
-                else:
-                    # Fallback to legacy cell_idx
-                    cells_to_add.add(crossing.cell_idx)
-                
-                for cell_idx in cells_to_add:
-                    if cell_idx < self.n_cells:
-                        # Check if already in boundary
-                        if tri_idx not in categorization[cell_idx]['boundary']:
-                            # Also check if it was categorized as interior and move it
-                            if tri_idx in categorization[cell_idx]['interior']:
-                                categorization[cell_idx]['interior'].remove(tri_idx)
-                            categorization[cell_idx]['boundary'].append(tri_idx)
-        
         return categorization
     
     def _build_segment_connectivity(self):
@@ -786,8 +722,7 @@ class PartitionContour:
             - Type 2 switches: _update_segments_for_type2_switch() explicitly adds/removes segments.
               Clearing would destroy those explicit changes.
         
-        After topology switches, classify_all_segments() will iterate over preserved
-        boundary_segments, detect cross-triangle cases, and populate segment_crossing_cache.
+        After topology switches, boundary_segments are preserved with updated connectivity.
         """
         if self.boundary_segments:
             # MODE 2: Update existing segments (after topology switch)
