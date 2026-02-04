@@ -820,7 +820,7 @@ def run_visualization(args):
     
     # Initialize AreaCalculator
     print("  Initializing AreaCalculator BEFORE migration...")
-    area_calc_before = AreaCalculator(mesh, partition, use_vp_based=True)
+    area_calc_before = AreaCalculator(mesh, partition)
     print()
     
     # Compute area
@@ -977,7 +977,7 @@ def run_visualization(args):
     
     # Re-initialize AreaCalculator with updated data structures
     print("  Initializing AreaCalculator AFTER migration...")
-    area_calc_after = AreaCalculator(mesh, partition, use_vp_based=True)
+    area_calc_after = AreaCalculator(mesh, partition)
     print()
     
     # Compute area after migration

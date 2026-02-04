@@ -73,8 +73,7 @@ class PerimeterOptimizer:
         self.logger = get_logger(__name__)
         
         # Initialize calculators
-        # Use vertex-labels method for initial iteration (proven, tested)
-        self.area_calc = AreaCalculator(mesh, partition, use_vp_based=False)
+        self.area_calc = AreaCalculator(mesh, partition)
         self.perim_calc = PerimeterCalculator(mesh, partition)
         self.steiner_handler = SteinerHandler(mesh, partition)
         
@@ -770,7 +769,7 @@ class PerimeterOptimizer:
         from .area_calculator import AreaCalculator
         from .perimeter_calculator import PerimeterCalculator
         
-        self.area_calc = AreaCalculator(self.mesh, self.partition, use_vp_based=True)
+        self.area_calc = AreaCalculator(self.mesh, self.partition)
         self.perim_calc = PerimeterCalculator(self.mesh, self.partition)
         
         self.logger.info(f"  New triple point count: {len(self.steiner_handler.triple_points)}")

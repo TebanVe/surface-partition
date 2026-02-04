@@ -806,7 +806,7 @@ def run_visualization(args):
     
     # Initialize AreaCalculator (for rendering only)
     print("  Initializing AreaCalculator...")
-    area_calc = AreaCalculator(mesh, partition, use_vp_based=True)
+    area_calc = AreaCalculator(mesh, partition)
     print()
     
     # Get Steiner position for camera focus
@@ -1031,7 +1031,7 @@ def run_visualization(args):
         print()
         
         # Reinitialize area calculator for updated partition
-        area_calc_after = AreaCalculator(mesh, partition_after, use_vp_based=True)
+        area_calc_after = AreaCalculator(mesh, partition_after)
         
         # Create separate plotter for AFTER
         plotter_after = pv.Plotter()
