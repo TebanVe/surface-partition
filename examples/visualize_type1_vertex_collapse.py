@@ -42,6 +42,8 @@ from src.core.mesh_topology import MeshTopology
 from src.core.topology_switcher import TopologySwitcher
 from src.core.steiner_handler import SteinerHandler
 from src.core.area_calculator import AreaCalculator
+from src.core.type1_component_analyzer import Type1ComponentAnalyzer
+from src.core import migration_utils
 
 # Import data loading utility
 from examples.data_loader import load_partition_from_refined_file
@@ -697,6 +699,7 @@ def run_visualization(args):
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
     steiner_handler = SteinerHandler(mesh, partition)
+    analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology)
     
     # Component analysis
     print("Analyzing Type 1 migration...")
@@ -712,22 +715,22 @@ def run_visualization(args):
         return
     
     # Step 2: Find connected components
-    components = switcher.find_connected_components(boundary_vps_set)
+    components = analyzer.find_connected_components(boundary_vps_set)
     print(f"✓ Found {len(components)} connected component(s)")
     print()
     
     # Step 3: Analyze each component
     component_info = []
     for i, comp_vps in enumerate(components):
-        info = switcher.analyze_component(comp_vps)
+        info = analyzer.analyze_component(comp_vps)
         info['index'] = i
         component_info.append(info)
     
     # Step 4: Detect conflicts
-    conflicts, chain_warnings = switcher.detect_proximity_conflicts(component_info)
+    conflicts, chain_warnings = analyzer.detect_proximity_conflicts(component_info)
     
     # Step 5: Select components for migration
-    to_migrate, deferred = switcher.select_components_for_migration(component_info, conflicts)
+    to_migrate, deferred = analyzer.select_components_for_migration(component_info, conflicts)
     
     # Display component table
     print("="*80)
@@ -779,12 +782,12 @@ def run_visualization(args):
     try:
         # Determine which VP will migrate and get auxiliary component in one call
         # Use strict_validation=False to allow fallback for visualization
-        preview_migrating_vp, preview_auxiliary = switcher.select_migrating_vp_and_auxiliary(
+        preview_migrating_vp, preview_auxiliary = analyzer.select_migrating_vp_and_auxiliary(
             selected_component, strict_validation=False
         )
         
         # Get neighbors from auxiliary
-        preview_left, preview_right = switcher._get_neighbors_from_auxiliary(
+        preview_left, preview_right = analyzer._get_neighbors_from_auxiliary(
             preview_migrating_vp, preview_auxiliary
         )
         
@@ -793,7 +796,7 @@ def run_visualization(args):
         preview_old_edge = preview_migrating_vp_obj.edge
         
         # Verify target_vertex is correct (component analysis should set this correctly now)
-        actual_target_vertex = switcher._identify_target_vertex(preview_migrating_vp_obj)
+        actual_target_vertex = migration_utils.identify_target_vertex(preview_migrating_vp_obj)
         if actual_target_vertex != target_vertex:
             print(f"⚠ WARNING: Component target vertex {target_vertex} differs from VP's target {actual_target_vertex}")
             print(f"  Using VP's target vertex: {actual_target_vertex}")
@@ -965,8 +968,8 @@ def run_visualization(args):
         print("\n✓ Migration completed successfully!")
         print()
         # Need to extract VP info for visualization (fallback)
-        migrating_vp_idx = min(component_vps, key=lambda vp: switcher.compute_boundary_distance(vp))
-        left_neighbor, right_neighbor = switcher._get_two_neighbors(migrating_vp_idx)
+        migrating_vp_idx = min(component_vps, key=lambda vp_idx: migration_utils.compute_boundary_distance(partition.variable_points[vp_idx]))
+        left_neighbor, right_neighbor = migration_utils.get_two_neighbors(partition, migrating_vp_idx)
         migrating_vp = partition.variable_points[migrating_vp_idx]
         old_edge = migrating_vp.edge
         target_edge = None

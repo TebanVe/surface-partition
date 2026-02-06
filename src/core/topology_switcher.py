@@ -20,6 +20,8 @@ try:
     from .contour_partition import PartitionContour, VariablePoint, BoundarySegment
     from .mesh_topology import MeshTopology
     from .steiner_handler import TriplePoint, SteinerHandler
+    from . import migration_utils
+    from .type1_component_analyzer import Type1ComponentAnalyzer
 except ImportError:
     import sys
     import os
@@ -29,6 +31,8 @@ except ImportError:
     from core.contour_partition import PartitionContour, VariablePoint, BoundarySegment
     from core.mesh_topology import MeshTopology
     from core.steiner_handler import TriplePoint, SteinerHandler
+    import migration_utils
+    from type1_component_analyzer import Type1ComponentAnalyzer
 
 
 class TopologySwitcher:
@@ -706,31 +710,10 @@ class TopologySwitcher:
     
     def _identify_target_vertex(self, vp: VariablePoint) -> Optional[int]:
         """
-        Identify which vertex the variable point is approaching.
-        
-        CRITICAL: The λ convention in VariablePoint is:
-            position = λ * edge[0] + (1-λ) * edge[1]
-        
-        This means:
-            - λ = 1 → position at edge[0] (smaller vertex index due to normalization)
-            - λ = 0 → position at edge[1] (larger vertex index)
-        
-        So:
-            - If λ > 0.5, VP is closer to edge[0], approaching edge[0]
-            - If λ < 0.5, VP is closer to edge[1], approaching edge[1]
-        
-        Args:
-            vp: VariablePoint object
-            
-        Returns:
-            Vertex index, or None if can't determine
+        Wrapper for migration_utils.identify_target_vertex().
+        Kept for backward compatibility.
         """
-        # λ > 0.5 means closer to edge[0] (since λ=1 is AT edge[0])
-        # λ < 0.5 means closer to edge[1] (since λ=0 is AT edge[1])
-        if vp.lambda_param > 0.5:
-            return vp.edge[0]
-        else:
-            return vp.edge[1]
+        return migration_utils.identify_target_vertex(vp)
     
     def _get_neighboring_variable_points(self, vp_idx: int) -> List[int]:
         """
@@ -1083,336 +1066,33 @@ class TopologySwitcher:
     
     def compute_boundary_distance(self, vp_idx: int) -> float:
         """
-        Compute distance from VP to its target vertex: min(λ, 1-λ)
-        
-        Args:
-            vp_idx: Variable point index
-            
-        Returns:
-            Distance in [0, 0.5], where smaller = closer to target vertex
+        Wrapper for migration_utils.compute_boundary_distance().
+        Kept for backward compatibility.
         """
         vp = self.partition.variable_points[vp_idx]
-        return min(vp.lambda_param, 1.0 - vp.lambda_param)
+        return migration_utils.compute_boundary_distance(vp)
+    
+    # =============================================================================
+    # Component Analysis Methods - Delegated to Type1ComponentAnalyzer
+    # =============================================================================
+    # These methods are kept as wrappers for backward compatibility
+    # but delegate to the Type1ComponentAnalyzer module
+    
+    def _get_analyzer(self) -> Type1ComponentAnalyzer:
+        """Create analyzer instance (lazy initialization pattern)."""
+        return Type1ComponentAnalyzer(self.mesh, self.partition, self.mesh_topology)
     
     def find_connected_components(self, boundary_vps_set: set) -> List[set]:
-        """
-        Find connected components of boundary VPs via DFS on boundary_segments.
-        
-        Args:
-            boundary_vps_set: Set of boundary VP indices
-            
-        Returns:
-            List of sets, each set is a connected component
-        """
-        from collections import defaultdict
-        
-        # Build adjacency from boundary_segments (only for boundary VPs)
-        adjacency = defaultdict(set)
-        for segment in self.partition.boundary_segments:
-            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
-            if vp1 in boundary_vps_set and vp2 in boundary_vps_set:
-                adjacency[vp1].add(vp2)
-                adjacency[vp2].add(vp1)
-        
-        # DFS to find connected components
-        visited = set()
-        components = []
-        
-        for vp_idx in boundary_vps_set:
-            if vp_idx in visited:
-                continue
-            
-            component = set()
-            stack = [vp_idx]
-            
-            while stack:
-                current = stack.pop()
-                if current in visited:
-                    continue
-                
-                visited.add(current)
-                component.add(current)
-                
-                for neighbor in adjacency[current]:
-                    if neighbor not in visited:
-                        stack.append(neighbor)
-            
-            if component:
-                components.append(component)
-        
-        return components
-    
-    def _get_triple_point_vps(self) -> Set[int]:
-        """
-        Get all VPs that are part of triple point triangles.
-        
-        Returns:
-            Set of VP indices that belong to triple point triangles
-        """
-        from .steiner_handler import SteinerHandler
-        
-        steiner_handler = SteinerHandler(self.mesh, self.partition)
-        triple_point_vps = set()
-        for tp in steiner_handler.triple_points:
-            triple_point_vps.update(tp.var_point_indices)
-        
-        return triple_point_vps
-    
-    def _component_near_triple_point(self, component: Dict) -> Tuple[bool, List[int]]:
-        """
-        Check if a component is too close to a triple point triangle.
-        
-        A component is "too close" if:
-        - It shares a non-boundary VP with a triple point triangle
-        - AND the component has < 3 VPs (risky migration)
-        
-        For 3-VP components, this is safe because both neighbors are internal,
-        so they won't affect triple point VPs.
-        
-        Args:
-            component: Component info dict from analyze_component()
-            
-        Returns:
-            (is_near: bool, shared_vps: List[int])
-            - is_near: True if component is too close to triple point (and has < 3 VPs)
-            - shared_vps: List of non-boundary VPs that connect component to triple points
-        """
-        # 3-VP components are safe (internal neighbors)
-        if component['size'] >= 3:
-            return False, []
-        
-        # Get triple point VPs
-        triple_point_vps = self._get_triple_point_vps()
-        
-        # Build adjacency from boundary_segments to find connections
-        from collections import defaultdict
-        adjacency = defaultdict(set)
-        for segment in self.partition.boundary_segments:
-            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
-            adjacency[vp1].add(vp2)
-            adjacency[vp2].add(vp1)
-        
-        # Check if any non-boundary neighbor of this component is connected to a triple point VP
-        shared_vps = []
-        for non_boundary_vp in component['non_boundary_neighbors']:
-            # Check if this non-boundary VP is connected to any triple point VP
-            neighbors_of_non_boundary = adjacency.get(non_boundary_vp, set())
-            if neighbors_of_non_boundary & triple_point_vps:
-                # This non-boundary VP connects the component to a triple point
-                shared_vps.append(non_boundary_vp)
-        
-        is_near = len(shared_vps) > 0
-        return is_near, shared_vps
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().find_connected_components(boundary_vps_set)
     
     def analyze_component(self, component_vps: Set[int]) -> Dict:
-        """
-        Analyze a component and extract metadata.
-        
-        Args:
-            component_vps: Set of VP indices in the component
-            
-        Returns:
-            {
-                'vp_indices': List[int],
-                'size': int,
-                'target_vertex': int,  # Common vertex all VPs converge to
-                'min_distance': float,  # Closest VP distance to target
-                'non_boundary_neighbors': List[int],  # External non-boundary VPs
-                'boundary_neighbors': List[int],  # External boundary VPs
-                'centroid': np.ndarray  # Geometric center
-            }
-        """
-        from collections import defaultdict
-        
-        # Build adjacency from boundary_segments
-        adjacency = defaultdict(set)
-        for segment in self.partition.boundary_segments:
-            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
-            adjacency[vp1].add(vp2)
-            adjacency[vp2].add(vp1)
-        
-        # Get all neighbors of this component
-        all_neighbors = set()
-        for vp_idx in component_vps:
-            all_neighbors.update(adjacency.get(vp_idx, set()))
-        
-        # External neighbors (not in this component)
-        external_neighbors = all_neighbors - component_vps
-        
-        # Get boundary VPs set for classification
-        boundary_vps_set = set(self.partition.get_boundary_variable_points(tol=0.1))
-        
-        # Separate boundary and non-boundary external neighbors
-        boundary_neighbors = external_neighbors & boundary_vps_set
-        non_boundary_neighbors = external_neighbors - boundary_vps_set
-        
-        # Find target vertex using distance-based logic (same as _identify_target_vertex)
-        # For each VP, identify which vertex it's approaching based on lambda
-        target_vertices = []
-        for vp_idx in component_vps:
-            vp = self.partition.variable_points[vp_idx]
-            tv = self._identify_target_vertex(vp)
-            if tv is not None:
-                target_vertices.append(tv)
-            else:
-                self.logger.warning(f"Could not identify target vertex for VP {vp_idx} in component")
-        
-        # Verify all VPs approach the same vertex
-        target_vertex = None
-        if target_vertices:
-            target_vertex = target_vertices[0]
-            if not all(tv == target_vertex for tv in target_vertices):
-                # Warning: VPs don't converge to same vertex
-                unique_targets = set(target_vertices)
-                self.logger.warning(
-                    f"Component VPs approach different vertices: {unique_targets}. "
-                    f"Using most common vertex."
-                )
-                # Use most common target vertex
-                from collections import Counter
-                target_vertex = Counter(target_vertices).most_common(1)[0][0]
-        
-        # Compute min distance (closest VP to target vertex)
-        min_distance = float('inf')
-        for vp_idx in component_vps:
-            dist = self.compute_boundary_distance(vp_idx)
-            if dist < min_distance:
-                min_distance = dist
-        
-        # Compute centroid
-        positions = []
-        for vp_idx in component_vps:
-            vp = self.partition.variable_points[vp_idx]
-            positions.append(vp.evaluate(self.mesh.vertices))
-        centroid = np.mean(positions, axis=0) if positions else np.array([0.0, 0.0, 0.0])
-        
-        # Check proximity to triple points
-        component_dict = {
-            'vp_indices': list(component_vps),
-            'size': len(component_vps),
-            'target_vertex': target_vertex,
-            'min_distance': min_distance,
-            'non_boundary_neighbors': list(non_boundary_neighbors),
-            'boundary_neighbors': list(boundary_neighbors),
-            'centroid': centroid
-        }
-        
-        # Check if component is too close to triple point (only risky if < 3 VPs)
-        is_near, shared_vps = self._component_near_triple_point(component_dict)
-        component_dict['near_triple_point'] = is_near
-        component_dict['triple_point_shared_vps'] = shared_vps
-        
-        return component_dict
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().analyze_component(component_vps)
     
     def detect_proximity_conflicts(self, components: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Detect conflicts between components (shared non-boundary neighbors).
-        
-        A conflict exists when:
-        - Components share a non-boundary neighbor VP (topological connection)
-        - Both components are near convergence (min_dist < 0.01)
-        
-        Note: Conflict detection does NOT determine deferral. Deferral requires
-        additional condition: at least one component has < 3 VPs (risky).
-        
-        IMPORTANT: Each conflict is between exactly 2 components (one shared VP).
-        However, chains can form: Component A shares VP_ab with B, B shares VP_bc with C.
-        This creates a chain: A - B - C, where B has multiple neighbors.
-        
-        Returns:
-            (conflicts: List[Dict], chain_warnings: List[Dict])
-        """
-        conflicts = []
-        
-        # Detect pairwise conflicts
-        for i in range(len(components)):
-            for j in range(i + 1, len(components)):
-                comp_i = components[i]
-                comp_j = components[j]
-                
-                shared_non_boundary = set(comp_i['non_boundary_neighbors']) & set(comp_j['non_boundary_neighbors'])
-                
-                if shared_non_boundary:
-                    # Calculate minimum distances in each component
-                    min_dist_i = comp_i['min_distance']
-                    min_dist_j = comp_j['min_distance']
-                    
-                    # Determine if both components are near convergence
-                    proximity_threshold = 0.01
-                    both_near = min_dist_i < proximity_threshold and min_dist_j < proximity_threshold
-                    
-                    conflicts.append({
-                        'component_i': i,
-                        'component_j': j,
-                        'size_i': comp_i['size'],
-                        'size_j': comp_j['size'],
-                        'shared_vps': list(shared_non_boundary),
-                        'min_dist_i': min_dist_i,
-                        'min_dist_j': min_dist_j,
-                        'both_near_convergence': both_near,
-                    })
-        
-        # Detect chains: components with multiple neighbors
-        from collections import defaultdict, deque
-        
-        component_neighbors = defaultdict(set)
-        for conflict in conflicts:
-            i, j = conflict['component_i'], conflict['component_j']
-            component_neighbors[i].add(j)
-            component_neighbors[j].add(i)
-        
-        chain_warnings = []
-        for comp_idx, neighbors in component_neighbors.items():
-            if len(neighbors) >= 2:
-                # This component has 2+ neighbors → part of a chain
-                neighbor_list = list(neighbors)
-                neighbor_sizes = [components[n]['size'] for n in neighbor_list]
-                
-                # Find all components in the chain (connected components)
-                chain_components = self._find_chain_components(comp_idx, component_neighbors)
-                
-                chain_warnings.append({
-                    'component_index': comp_idx,
-                    'neighbor_indices': neighbor_list,
-                    'component_size': components[comp_idx]['size'],
-                    'neighbor_sizes': neighbor_sizes,
-                    'chain_components': chain_components,
-                    'chain_length': len(chain_components),
-                    'warning': f"CHAIN: Component {comp_idx} has {len(neighbors)} neighbors "
-                              f"(indices: {neighbor_list}). Chain length: {len(chain_components)}"
-                })
-                self.logger.warning(
-                    f"⚠️  COMPONENT CHAIN DETECTED: Component {comp_idx} (size={components[comp_idx]['size']}) "
-                    f"has {len(neighbors)} neighbors: {neighbor_list} (sizes: {neighbor_sizes}). "
-                    f"Total chain length: {len(chain_components)} components."
-                )
-        
-        return (conflicts, chain_warnings)
-    
-    def _find_chain_components(self, start_idx: int, component_neighbors: Dict[int, Set[int]]) -> Set[int]:
-        """
-        Find all components in the chain starting from start_idx.
-        
-        Uses BFS to find all connected components.
-        """
-        from collections import deque
-        
-        chain = set()
-        queue = deque([start_idx])
-        visited = set()
-        
-        while queue:
-            current = queue.popleft()
-            if current in visited:
-                continue
-            visited.add(current)
-            chain.add(current)
-            
-            for neighbor in component_neighbors.get(current, set()):
-                if neighbor not in visited:
-                    queue.append(neighbor)
-        
-        return chain
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().detect_proximity_conflicts(components)
     
     # =========================================================================
     # Stage 1: Core Migration Function (Vertex-Collapse Strategy)
@@ -1516,429 +1196,30 @@ class TopologySwitcher:
     
     def _get_two_neighbors(self, vp_idx: int) -> Tuple[int, int]:
         """
-        Get the two neighbors of a VP via boundary_segments.
-        
-        CRITICAL: Every VP has exactly 2 neighbors (one on each side of the boundary segment).
-        
-        Args:
-            vp_idx: Variable point index
-            
-        Returns:
-            (left_neighbor_idx, right_neighbor_idx)
-            Note: These might be boundary or non-boundary VPs!
-            
-        Raises:
-            ValueError: If VP doesn't have exactly 2 neighbors
+        Wrapper for migration_utils.get_two_neighbors().
+        Kept for backward compatibility.
         """
-        neighbors = []
-        for segment in self.partition.boundary_segments:
-            if segment.vp_idx_1 == vp_idx:
-                neighbors.append(segment.vp_idx_2)
-            elif segment.vp_idx_2 == vp_idx:
-                neighbors.append(segment.vp_idx_1)
-        
-        if len(neighbors) != 2:
-            raise ValueError(f"VP {vp_idx} must have exactly 2 neighbors, found {len(neighbors)}")
-        
-        return (neighbors[0], neighbors[1])
+        return migration_utils.get_two_neighbors(self.partition, vp_idx)
     
     def _construct_auxiliary_component_2vp(self, component: Dict,
                                            strict_validation: bool = True) -> List[int]:
-        """
-        Construct auxiliary 3-VP component for a 2-VP labeled component.
-        
-        The labeled component has 2 VPs, but the Type 1 migration needs 3 VPs.
-        This finds the third VP (neighbor) that approaches the target vertex
-        and is closest to it.
-        
-        CRITICAL: Filters candidates by target vertex FIRST, then selects by distance.
-        
-        Args:
-            component: Component dict with 'vp_indices' (2 VPs), 'target_vertex', and 'index'
-            strict_validation: If False, use fallback (min distance) when no valid
-                             third VP found. If True, raise error. Default True.
-            
-        Returns:
-            List of 3 VP indices ordered by topology: [left/middle/right]
-            
-        Raises:
-            ValueError: If component doesn't have exactly 2 VPs or (if strict_validation=True)
-                       no valid third VP found
-        """
-        vp_indices = component['vp_indices']
-        target_vertex = component['target_vertex']
-        comp_idx = component.get('index', '?')
-        
-        self.logger.debug(f"Component {comp_idx}: Constructing auxiliary for 2-VP {vp_indices}, target vertex: {target_vertex}")
-        
-        if len(vp_indices) != 2:
-            raise ValueError(f"Component must have exactly 2 VPs, found {len(vp_indices)}")
-        
-        vp_a, vp_b = vp_indices[0], vp_indices[1]
-        
-        # Get neighbors of each VP
-        neighbors_a = self._get_two_neighbors(vp_a)
-        neighbors_b = self._get_two_neighbors(vp_b)
-        
-        # Find candidate third VPs (neighbors not in component)
-        candidates = []
-        
-        # Left candidate: neighbor of vp_a that's not vp_b
-        left_candidate = neighbors_a[0] if neighbors_a[0] != vp_b else neighbors_a[1]
-        if left_candidate not in vp_indices:
-            candidates.append(('left', left_candidate))
-        
-        # Right candidate: neighbor of vp_b that's not vp_a
-        right_candidate = neighbors_b[0] if neighbors_b[0] != vp_a else neighbors_b[1]
-        if right_candidate not in vp_indices:
-            candidates.append(('right', right_candidate))
-        
-        if not candidates:
-            raise ValueError(f"Component {comp_idx}: No third VP found for 2-VP component {vp_indices}")
-        
-        self.logger.debug(f"Component {comp_idx}:   Initial candidates: {[(pos, vp) for pos, vp in candidates]}")
-        
-        # CRITICAL: Filter by target vertex FIRST
-        filtered_candidates = []
-        rejected_candidates = []
-        
-        for position, vp_idx in candidates:
-            vp = self.partition.variable_points[vp_idx]
-            if target_vertex in vp.edge:
-                filtered_candidates.append((position, vp_idx))
-                self.logger.debug(f"Component {comp_idx}:   ✓ VP {vp_idx} ({position}): edge {vp.edge} contains target vertex {target_vertex}")
-            else:
-                rejected_candidates.append((position, vp_idx, vp.edge))
-                self.logger.warning(
-                    f"Component {comp_idx}:   ✗ VP {vp_idx} ({position}): edge {vp.edge} does NOT contain target vertex {target_vertex} - REJECTED"
-                )
-        
-        if not filtered_candidates:
-            error_msg = (
-                f"Component {comp_idx}: No valid third VP found for 2-VP component {vp_indices}. "
-                f"All candidates rejected (don't approach target vertex {target_vertex}): "
-            )
-            for pos, vp_idx, edge in rejected_candidates:
-                error_msg += f"\n  - VP {vp_idx} ({pos}): edge {edge}"
-            
-            if strict_validation:
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
-            else:
-                # Fallback for visualization: use candidate with minimum distance regardless of validity
-                self.logger.warning(f"{error_msg}\nComponent {comp_idx}: Using FALLBACK (min distance) for visualization.")
-                
-                best_candidate = None
-                min_dist = float('inf')
-                
-                for position, vp_idx in candidates:
-                    dist = self.compute_boundary_distance(vp_idx)
-                    if dist < min_dist:
-                        min_dist = dist
-                        best_candidate = (position, vp_idx)
-                
-                position, third_vp = best_candidate
-                
-                # Build ordered auxiliary component
-                if position == 'left':
-                    auxiliary = [third_vp, vp_a, vp_b]
-                else:  # position == 'right'
-                    auxiliary = [vp_a, vp_b, third_vp]
-                
-                self.logger.warning(
-                    f"Component {comp_idx}: ⚠ FALLBACK: Using auxiliary component {auxiliary} "
-                    f"(third VP: {third_vp}, position: {position}, dist: {min_dist:.6f}) "
-                    f"even though it doesn't approach target vertex"
-                )
-                
-                return auxiliary
-        
-        if rejected_candidates:
-            self.logger.info(
-                f"Component {comp_idx}:   Rejected {len(rejected_candidates)} candidate(s) that don't approach target vertex {target_vertex}"
-            )
-        
-        # THEN select by distance from FILTERED candidates
-        best_candidate = None
-        min_dist = float('inf')
-        
-        for position, vp_idx in filtered_candidates:
-            dist = self.compute_boundary_distance(vp_idx)
-            self.logger.debug(f"Component {comp_idx}:   VP {vp_idx} ({position}): distance = {dist:.6f}")
-            if dist < min_dist:
-                min_dist = dist
-                best_candidate = (position, vp_idx)
-        
-        position, third_vp = best_candidate
-        
-        # Build ordered auxiliary component
-        if position == 'left':
-            auxiliary = [third_vp, vp_a, vp_b]
-        else:  # position == 'right'
-            auxiliary = [vp_a, vp_b, third_vp]
-        
-        self.logger.info(
-            f"Component {comp_idx}: ✓ Auxiliary component for 2-VP {vp_indices}: {auxiliary} "
-            f"(third VP: {third_vp}, position: {position}, dist: {min_dist:.6f})"
-        )
-        
-        return auxiliary
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer()._construct_auxiliary_component_2vp(component, strict_validation)
     
     def _construct_auxiliary_component_1vp(self, component: Dict, 
                                            strict_validation: bool = True) -> List[int]:
-        """
-        Construct auxiliary 3-VP component for a 1-VP labeled component.
-        
-        Evaluates three candidate triplets, filters by target vertex, then
-        selects the one with minimum total distance:
-        - (VP_a, VP_b, VP_c): Two left neighbors
-        - (VP_b, VP_c, VP_d): Middle configuration  
-        - (VP_c, VP_d, VP_e): Two right neighbors
-        
-        CRITICAL: All VPs in triplet must approach target vertex.
-        
-        Args:
-            component: Component dict with 'vp_indices' (1 VP), 'target_vertex', and 'index'
-            strict_validation: If False, use fallback (min distance) when no valid
-                             triplet found. If True, raise error. Default True.
-            
-        Returns:
-            List of 3 VP indices for best triplet ordered by topology
-            
-        Raises:
-            ValueError: If component doesn't have exactly 1 VP or (if strict_validation=True)
-                       no valid triplet found
-        """
-        vp_indices = component['vp_indices']
-        target_vertex = component['target_vertex']
-        comp_idx = component.get('index', '?')
-        
-        self.logger.debug(f"Component {comp_idx}: Constructing auxiliary for 1-VP [{vp_indices[0]}], target vertex: {target_vertex}")
-        
-        if len(vp_indices) != 1:
-            raise ValueError(f"Component {comp_idx}: Component must have exactly 1 VP, found {len(vp_indices)}")
-        
-        vp_c = vp_indices[0]
-        
-        # Get first and second level neighbors
-        neighbors_c = self._get_two_neighbors(vp_c)
-        vp_b, vp_d = neighbors_c[0], neighbors_c[1]
-        
-        # Get second level neighbors
-        try:
-            neighbors_b = self._get_two_neighbors(vp_b)
-            vp_a = neighbors_b[0] if neighbors_b[0] != vp_c else neighbors_b[1]
-        except Exception as e:
-            self.logger.warning(f"Component {comp_idx}: Could not get second level left neighbor for VP {vp_c}: {e}")
-            vp_a = None
-        
-        try:
-            neighbors_d = self._get_two_neighbors(vp_d)
-            vp_e = neighbors_d[0] if neighbors_d[0] != vp_c else neighbors_d[1]
-        except Exception as e:
-            self.logger.warning(f"Component {comp_idx}: Could not get second level right neighbor for VP {vp_c}: {e}")
-            vp_e = None
-        
-        # Build candidate triplets
-        triplet_candidates = []
-        if vp_a is not None:
-            triplet_candidates.append(('left-left-center', [vp_a, vp_b, vp_c]))
-        triplet_candidates.append(('left-center-right', [vp_b, vp_c, vp_d]))
-        if vp_e is not None:
-            triplet_candidates.append(('center-right-right', [vp_c, vp_d, vp_e]))
-        
-        # Evaluate each triplet: ALL VPs must approach target vertex
-        valid_candidates = []
-        
-        for config_name, triplet in triplet_candidates:
-            self.logger.debug(f"Component {comp_idx}:   Evaluating triplet '{config_name}': {triplet}")
-            
-            valid = True
-            invalid_vps = []
-            total_dist = 0.0
-            
-            for vp_idx in triplet:
-                vp = self.partition.variable_points[vp_idx]
-                if target_vertex not in vp.edge:
-                    valid = False
-                    invalid_vps.append((vp_idx, vp.edge))
-                    self.logger.warning(
-                        f"Component {comp_idx}:     ✗ VP {vp_idx}: edge {vp.edge} does NOT contain target vertex {target_vertex}"
-                    )
-                else:
-                    dist = self.compute_boundary_distance(vp_idx)
-                    total_dist += dist
-                    self.logger.debug(f"Component {comp_idx}:     ✓ VP {vp_idx}: approaches target vertex, dist={dist:.6f}")
-            
-            if valid:
-                valid_candidates.append((config_name, triplet, total_dist))
-                self.logger.info(f"Component {comp_idx}:   ✓ Triplet '{config_name}' is VALID (total_dist={total_dist:.6f})")
-            else:
-                self.logger.warning(
-                    f"Component {comp_idx}:   ✗ Triplet '{config_name}' is INVALID - {len(invalid_vps)} VP(s) don't approach target vertex"
-                )
-        
-        if not valid_candidates:
-            error_msg = (
-                f"Component {comp_idx}: No valid triplet found for 1-VP component [{vp_c}]. "
-                f"All triplets have VPs that don't approach target vertex {target_vertex}."
-            )
-            
-            if strict_validation:
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
-            else:
-                # Fallback for visualization: use triplet with minimum distance regardless of validity
-                self.logger.warning(f"{error_msg} Component {comp_idx}: Using FALLBACK (min distance) for visualization.")
-                
-                # Calculate distances for all triplets
-                fallback_candidates = []
-                for config_name, triplet in triplet_candidates:
-                    total_dist = sum(self.compute_boundary_distance(vp) for vp in triplet)
-                    fallback_candidates.append((config_name, triplet, total_dist))
-                
-                best_config, best_triplet, best_total = min(fallback_candidates, key=lambda x: x[2])
-                self.logger.warning(
-                    f"Component {comp_idx}: ⚠ FALLBACK: Using triplet '{best_config}': {best_triplet} (total_dist={best_total:.6f}) "
-                    f"even though some VPs don't approach target vertex"
-                )
-                return best_triplet
-        
-        # Select triplet with minimum total distance from VALID candidates
-        best_config, best_triplet, best_total = min(valid_candidates, key=lambda x: x[2])
-        
-        self.logger.info(
-            f"Component {comp_idx}: ✓ Auxiliary component for 1-VP [{vp_c}]: {best_triplet} "
-            f"(config: '{best_config}', total_dist: {best_total:.6f}, "
-            f"rejected {len(triplet_candidates) - len(valid_candidates)} invalid triplet(s))"
-        )
-        
-        return best_triplet
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer()._construct_auxiliary_component_1vp(component, strict_validation)
     
     def _get_neighbors_from_auxiliary(self, migrating_vp_idx: int, 
                                       auxiliary_component: List[int]) -> Tuple[int, int]:
-        """
-        Get left and right neighbors from auxiliary component using adjacency.
-        
-        Uses the boundary segment graph to find the two neighbors of the migrating VP
-        that are also in the auxiliary component. This works regardless of list ordering.
-        
-        Args:
-            migrating_vp_idx: Index of migrating VP
-            auxiliary_component: List of 3 VPs (order doesn't matter)
-            
-        Returns:
-            (left_neighbor, right_neighbor)
-            
-        Raises:
-            ValueError: If migrating VP is not in auxiliary or neighbors can't be determined
-        """
-        self.logger.debug(
-            f"Getting neighbors for migrating VP {migrating_vp_idx} from auxiliary component {auxiliary_component}"
-        )
-        
-        # Verify migrating VP is in auxiliary component
-        if migrating_vp_idx not in auxiliary_component:
-            error_msg = (
-                f"CRITICAL ERROR: Migrating VP {migrating_vp_idx} is NOT in auxiliary component {auxiliary_component}. "
-                f"This indicates a bug in topology-based selection."
-            )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Use adjacency graph to find neighbors (not list positions)
-        try:
-            all_neighbors = self._get_two_neighbors(migrating_vp_idx)
-        except Exception as e:
-            error_msg = f"Failed to get neighbors from boundary graph for VP {migrating_vp_idx}: {e}"
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Filter to neighbors that are in the auxiliary component
-        auxiliary_set = set(auxiliary_component)
-        neighbors_in_auxiliary = [n for n in all_neighbors if n in auxiliary_set]
-        
-        if len(neighbors_in_auxiliary) != 2:
-            error_msg = (
-                f"Expected 2 neighbors in auxiliary component, found {len(neighbors_in_auxiliary)}. "
-                f"Migrating VP: {migrating_vp_idx}, All neighbors: {all_neighbors}, "
-                f"Auxiliary component: {auxiliary_component}"
-            )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        left_neighbor, right_neighbor = neighbors_in_auxiliary[0], neighbors_in_auxiliary[1]
-        
-        self.logger.info(
-            f"✓ Found neighbors for migrating VP {migrating_vp_idx} from adjacency graph: "
-            f"left={left_neighbor}, right={right_neighbor}"
-        )
-        
-        return (left_neighbor, right_neighbor)
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer()._get_neighbors_from_auxiliary(migrating_vp_idx, auxiliary_component)
     
     def select_migrating_vp_and_auxiliary(self, component: Dict,
                                           strict_validation: bool = True) -> Tuple[int, List[int]]:
-        """
-        Select migrating VP and construct auxiliary component.
-        
-        Returns both the migrating VP and the auxiliary component to avoid
-        redundant construction calls.
-        
-        CACHING: If component has 'cached_auxiliary' from pre-filter, uses it
-        to avoid redundant construction and logging.
-        
-        Args:
-            component: Component info dict from analyze_component()
-            strict_validation: If False, use fallback when auxiliary construction fails.
-                             If True, raise error. Default True.
-            
-        Returns:
-            Tuple of (migrating_vp_idx, auxiliary_component)
-        """
-        from collections import defaultdict
-        
-        size = len(component['vp_indices'])
-        
-        # Check for cached auxiliary component from pre-filter
-        if 'cached_auxiliary' in component:
-            auxiliary_component = component['cached_auxiliary']
-            comp_idx = component.get('index', '?')
-            self.logger.debug(f"Component {comp_idx}: Using cached auxiliary component {auxiliary_component}")
-        else:
-            # Fallback: construct if not cached (e.g., direct calls to apply_type1_switch_v2)
-            if size == 3:
-                auxiliary_component = component['vp_indices']
-            elif size == 2:
-                auxiliary_component = self._construct_auxiliary_component_2vp(component, strict_validation)
-            elif size == 1:
-                auxiliary_component = self._construct_auxiliary_component_1vp(component, strict_validation)
-            else:
-                raise ValueError(f"Unexpected component size: {size}")
-        
-        # Find middle VP (degree 2 in auxiliary component)
-        auxiliary_set = set(auxiliary_component)
-        adjacency = defaultdict(set)
-        for segment in self.partition.boundary_segments:
-            vp1, vp2 = segment.vp_idx_1, segment.vp_idx_2
-            if vp1 in auxiliary_set and vp2 in auxiliary_set:
-                adjacency[vp1].add(vp2)
-                adjacency[vp2].add(vp1)
-        
-        # Find VP with degree 2
-        for vp_idx in auxiliary_component:
-            if len(adjacency[vp_idx]) == 2:
-                self.logger.info(
-                    f"Selected migrating VP {vp_idx} (topology-based: degree 2, component size {size})"
-                )
-                return (vp_idx, auxiliary_component)
-        
-        # Fallback
-        self.logger.warning(
-            f"Could not find degree-2 VP in auxiliary component {auxiliary_component}, "
-            f"using first VP from component"
-        )
-        migrating_vp = component['vp_indices'][0]
-        return (migrating_vp, auxiliary_component)
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().select_migrating_vp_and_auxiliary(component, strict_validation)
     
     def select_migrating_vp_topology_based(self, component: Dict,
                                            strict_validation: bool = True) -> int:
@@ -2369,7 +1650,11 @@ class TopologySwitcher:
     
     def apply_type1_switch_v2(self, component: Dict, 
                               distance_preservation: str = 'preserve',
-                              strict_validation: bool = True) -> bool:
+                              strict_validation: bool = True,
+                              migrating_vp: int = None,
+                              auxiliary_component: List[int] = None,
+                              left_neighbor: int = None,
+                              right_neighbor: int = None) -> bool:
         """
         Apply Type 1 switch to entire component using vertex-collapse strategy.
         
@@ -2389,6 +1674,14 @@ class TopologySwitcher:
                 - float as string: Use specific distance (e.g., '0.1' for close to target)
             strict_validation: If False (visualization mode), use fallback when validation fails.
                              If True (optimization mode), halt on validation errors. Default True.
+            migrating_vp: Pre-computed migrating VP index (optional). If provided, skips
+                         VP selection step. Improves performance when calling in batch.
+            auxiliary_component: Pre-computed auxiliary component (optional). Must be provided
+                               if migrating_vp is provided.
+            left_neighbor: Pre-computed left neighbor (optional). Must be provided if
+                          migrating_vp is provided.
+            right_neighbor: Pre-computed right neighbor (optional). Must be provided if
+                           migrating_vp is provided.
             
         Returns:
             Dict with migration results (see docstring end) or False for backward compatibility
@@ -2400,53 +1693,74 @@ class TopologySwitcher:
             self.logger.warning("Empty component - cannot migrate")
             return {'success': False, 'error': 'Empty component'}
         
-        self.logger.info("="*80)
-        self.logger.info(f"STARTING TYPE 1 MIGRATION")
-        self.logger.info(f"Component: {component_vps} (size: {component_size})")
-        self.logger.info(f"Target vertex: {component.get('target_vertex', 'unknown')}")
-        self.logger.info("="*80)
+        # Check if pre-computed parameters are provided
+        use_precomputed = (migrating_vp is not None and 
+                          auxiliary_component is not None and
+                          left_neighbor is not None and
+                          right_neighbor is not None)
         
-        # Step 1: Use topology-based VP selection
-        self.logger.info("Step 1: Selecting migrating VP using TOPOLOGY-BASED criteria...")
-        try:
-            migrating_vp_idx = self.select_migrating_vp_topology_based(component, strict_validation)
-            self.logger.info(f"✓ Selected migrating VP: {migrating_vp_idx}")
-        except Exception as e:
-            self.logger.error(f"❌ Failed to select migrating VP: {e}")
-            return {'success': False, 'error': f'VP selection failed: {e}'}
+        if use_precomputed:
+            # Use pre-computed values (efficient path for batch migrations)
+            self.logger.debug("="*80)
+            self.logger.debug(f"STARTING TYPE 1 MIGRATION (using pre-computed plan)")
+            self.logger.debug(f"Component: {component_vps} (size: {component_size})")
+            self.logger.debug(f"Target vertex: {component.get('target_vertex', 'unknown')}")
+            self.logger.debug(f"Migrating VP: {migrating_vp}")
+            self.logger.debug("="*80)
+            
+            migrating_vp_idx = migrating_vp
+            
+        else:
+            # Compute values on-the-fly (backward compatibility for visualization scripts)
+            self.logger.info("="*80)
+            self.logger.info(f"STARTING TYPE 1 MIGRATION")
+            self.logger.info(f"Component: {component_vps} (size: {component_size})")
+            self.logger.info(f"Target vertex: {component.get('target_vertex', 'unknown')}")
+            self.logger.info("="*80)
+            
+            # Step 1: Use topology-based VP selection
+            self.logger.info("Step 1: Selecting migrating VP using TOPOLOGY-BASED criteria...")
+            try:
+                migrating_vp_idx = self.select_migrating_vp_topology_based(component, strict_validation)
+                self.logger.info(f"✓ Selected migrating VP: {migrating_vp_idx}")
+            except Exception as e:
+                self.logger.error(f"❌ Failed to select migrating VP: {e}")
+                return {'success': False, 'error': f'VP selection failed: {e}'}
+            
+            # Step 1.5: Construct/identify auxiliary component
+            self.logger.info("Step 1.5: Determining auxiliary component for neighbor selection...")
+            try:
+                if component_size == 3:
+                    auxiliary_component = component_vps
+                    self.logger.info(f"✓ Using 3-VP component directly: {auxiliary_component}")
+                elif component_size == 2:
+                    auxiliary_component = self._construct_auxiliary_component_2vp(component, strict_validation)
+                elif component_size == 1:
+                    auxiliary_component = self._construct_auxiliary_component_1vp(component, strict_validation)
+                else:
+                    raise ValueError(f"Unexpected component size: {component_size}")
+            except Exception as e:
+                self.logger.error(f"❌ Failed to construct auxiliary component: {e}")
+                return {'success': False, 'error': f'Auxiliary component construction failed: {e}'}
+            
+            # Step 2: Get neighbors from auxiliary component (NOT blind _get_two_neighbors)
+            self.logger.info("Step 2: Getting neighbors from auxiliary component...")
+            try:
+                left_neighbor, right_neighbor = self._get_neighbors_from_auxiliary(
+                    migrating_vp_idx, auxiliary_component
+                )
+            except Exception as e:
+                self.logger.error(f"❌ Failed to get neighbors: {e}")
+                return {'success': False, 'error': f'Neighbor selection failed: {e}'}
         
-        migrating_vp = self.partition.variable_points[migrating_vp_idx]
-        old_edge = migrating_vp.edge
-        
-        # Step 1.5: Construct/identify auxiliary component
-        self.logger.info("Step 1.5: Determining auxiliary component for neighbor selection...")
-        try:
-            if component_size == 3:
-                auxiliary_component = component_vps
-                self.logger.info(f"✓ Using 3-VP component directly: {auxiliary_component}")
-            elif component_size == 2:
-                auxiliary_component = self._construct_auxiliary_component_2vp(component, strict_validation)
-            elif component_size == 1:
-                auxiliary_component = self._construct_auxiliary_component_1vp(component, strict_validation)
-            else:
-                raise ValueError(f"Unexpected component size: {component_size}")
-        except Exception as e:
-            self.logger.error(f"❌ Failed to construct auxiliary component: {e}")
-            return {'success': False, 'error': f'Auxiliary component construction failed: {e}'}
-        
-        # Step 2: Get neighbors from auxiliary component (NOT blind _get_two_neighbors)
-        self.logger.info("Step 2: Getting neighbors from auxiliary component...")
-        try:
-            left_neighbor, right_neighbor = self._get_neighbors_from_auxiliary(
-                migrating_vp_idx, auxiliary_component
-            )
-        except Exception as e:
-            self.logger.error(f"❌ Failed to get neighbors: {e}")
-            return {'success': False, 'error': f'Neighbor selection failed: {e}'}
+        # Common path continues here (whether pre-computed or computed on-the-fly)
+        migrating_vp_obj = self.partition.variable_points[migrating_vp_idx]
+        old_edge = migrating_vp_obj.edge
         
         # Step 2.5: Validate migration trio
-        self.logger.info("Step 2.5: Validating migration trio...")
-        target_vertex = self._identify_target_vertex(migrating_vp)
+        log_fn = self.logger.debug if use_precomputed else self.logger.info
+        log_fn("Step 2.5: Validating migration trio...")
+        target_vertex = self._identify_target_vertex(migrating_vp_obj)
         if target_vertex is None:
             self.logger.warning(f"VP {migrating_vp_idx}: Could not identify target vertex")
             return {'success': False, 'error': 'Could not identify target vertex'}
@@ -2483,10 +1797,10 @@ class TopologySwitcher:
                 self.logger.warning("⚠ Proceeding with migration despite validation failure (visualization mode)")
                 self.logger.warning("="*80)
         else:
-            self.logger.info(f"✓ Validation PASSED: All VPs approach target vertex {target_vertex}")
+            log_fn(f"✓ Validation PASSED: All VPs approach target vertex {target_vertex}")
         
         # Step 3: Continue with migration
-        self.logger.info(f"Step 3: Proceeding with migration...")
+        log_fn(f"Step 3: Proceeding with migration...")
         
         # Step 4: Find target edge (opposite edge)
         target_edge = self._find_opposite_edge(old_edge, target_vertex)
@@ -2575,13 +1889,22 @@ class TopologySwitcher:
         # CRITICAL: This reads indicator_functions, so it must come AFTER Step 9
         self.update_data_structures_after_type1_migration(target_vertex)
         
-        self.logger.info("="*80)
-        self.logger.info(f"✓ TYPE 1 MIGRATION COMPLETED SUCCESSFULLY")
-        self.logger.info(f"  Migrated VP: {migrating_vp_idx}")
-        self.logger.info(f"  Neighbors: {left_neighbor}, {right_neighbor}")
-        self.logger.info(f"  Target vertex: {target_vertex}")
-        self.logger.info(f"  Component size: {component_size}")
-        self.logger.info("="*80)
+        if use_precomputed:
+            self.logger.debug("="*80)
+            self.logger.debug(f"✓ TYPE 1 MIGRATION COMPLETED SUCCESSFULLY")
+            self.logger.debug(f"  Migrated VP: {migrating_vp_idx}")
+            self.logger.debug(f"  Neighbors: {left_neighbor}, {right_neighbor}")
+            self.logger.debug(f"  Target vertex: {target_vertex}")
+            self.logger.debug(f"  Component size: {component_size}")
+            self.logger.debug("="*80)
+        else:
+            self.logger.info("="*80)
+            self.logger.info(f"✓ TYPE 1 MIGRATION COMPLETED SUCCESSFULLY")
+            self.logger.info(f"  Migrated VP: {migrating_vp_idx}")
+            self.logger.info(f"  Neighbors: {left_neighbor}, {right_neighbor}")
+            self.logger.info(f"  Target vertex: {target_vertex}")
+            self.logger.info(f"  Component size: {component_size}")
+            self.logger.info("="*80)
         
         return {
             'success': True,
@@ -2676,250 +1999,15 @@ class TopologySwitcher:
         
         return result
     
-    def _get_conflict_for_component(self, component: Dict, conflicts: List[Dict]) -> Optional[Dict]:
-        """
-        Get the conflict (if any) for a given component.
-        
-        Args:
-            component: Component dict with 'index' field
-            conflicts: List of conflict dicts
-            
-        Returns:
-            Conflict dict if found, None otherwise
-        """
-        comp_idx = component['index']
-        for conflict in conflicts:
-            if conflict['component_i'] == comp_idx or conflict['component_j'] == comp_idx:
-                return conflict
-        return None
-    
     def can_form_valid_auxiliary_component(self, component: Dict) -> Tuple[bool, str]:
-        """
-        Check if a component can form a valid auxiliary component for migration.
-        
-        A valid auxiliary component has 3 VPs that all approach the same target vertex.
-        - 3-VP components: Already valid (verified during component analysis)
-        - 2-VP components: Must find a third VP that approaches the same target vertex
-        - 1-VP components: Must find two more VPs that form a valid triplet
-        
-        CACHING: If valid, the auxiliary component is cached in component['cached_auxiliary']
-        to avoid redundant construction during migration.
-        
-        Args:
-            component: Component dictionary with 'vp_indices', 'target_vertex', 'size'
-        
-        Returns:
-            Tuple of (is_valid, reason_if_invalid)
-        """
-        size = component['size']
-        
-        if size == 3:
-            # 3-VP components: use the component's VPs as-is for auxiliary
-            # The middle VP will be determined later by topology
-            component['cached_auxiliary'] = component['vp_indices']
-            return (True, "")
-        
-        elif size == 2:
-            # Try to construct auxiliary component for 2-VP
-            try:
-                auxiliary = self._construct_auxiliary_component_2vp(component, strict_validation=True)
-                component['cached_auxiliary'] = auxiliary  # Cache for later use
-                return (True, "")
-            except ValueError as e:
-                reason = f"Cannot find valid third VP: {str(e)}"
-                return (False, reason)
-        
-        elif size == 1:
-            # Try to construct auxiliary component for 1-VP
-            try:
-                auxiliary = self._construct_auxiliary_component_1vp(component, strict_validation=True)
-                component['cached_auxiliary'] = auxiliary  # Cache for later use
-                return (True, "")
-            except ValueError as e:
-                reason = f"Cannot find valid triplet: {str(e)}"
-                return (False, reason)
-        
-        else:
-            return (False, f"Unexpected component size: {size}")
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().can_form_valid_auxiliary_component(component)
     
     def select_components_for_migration(self, components: List[Dict], 
                                         conflicts: List[Dict],
                                         conflict_strategy: str = 'exclude_one') -> Tuple[List[Dict], List[Dict]]:
-        """
-        Select which components to migrate and which to exclude.
-        
-        NEW ARCHITECTURE (Self-Healing, No Cross-Iteration Tracking):
-        1. Pre-filter: Check if valid auxiliary component can be formed
-        2. Find conflicts among valid components
-        3. Resolve conflicts based on strategy
-        4. Return components to migrate (excluded components forgotten)
-        
-        Args:
-            components: List of component dictionaries
-            conflicts: List of conflict dictionaries
-            conflict_strategy: How to resolve conflicts
-                - 'exclude_one': Keep closer component, exclude farther one
-                - 'exclude_all_conflicts': Exclude all conflicting components (for testing)
-        
-        Returns:
-            (components_to_migrate, components_excluded)
-            
-        Note: Excluded components are NOT tracked across iterations. Each iteration
-        re-evaluates all components from scratch (self-healing system).
-        """
-        # ====================================================================
-        # STEP 1: PRE-FILTER - Check if valid auxiliary component can be formed
-        # ====================================================================
-        # Note: Detailed auxiliary construction logging still happens (for debugging),
-        # but we don't print per-component status here to avoid clutter
-        
-        valid_components = []
-        excluded_prefilter = []
-        excluded_triple_point = []
-        
-        for component in components:
-            comp_idx = component['index']
-            comp_size = component['size']
-            comp_vps = component['vp_indices']
-            
-            # Check 1: Near triple point exclusion (safety check)
-            if component.get('near_triple_point', False):
-                excluded_triple_point.append(component)
-                self.logger.warning(
-                    f"  ✗ Component {comp_idx} ({comp_size}-VP): EXCLUDED - near triple point "
-                    f"(shared VPs: {component.get('triple_point_shared_vps', [])})"
-                )
-                continue
-            
-            # Check 2: Can form valid auxiliary component?
-            is_valid, reason = self.can_form_valid_auxiliary_component(component)
-            
-            if is_valid:
-                valid_components.append(component)
-            else:
-                excluded_prefilter.append(component)
-                # Log exclusion reason (detailed logging happens in auxiliary construction)
-                self.logger.warning(f"Component {comp_idx}: Excluded - {reason}")
-        
-        if not valid_components:
-            print("\n⚠️  No valid components found for migration")
-            return ([], excluded_prefilter + excluded_triple_point)
-        
-        # ====================================================================
-        # STEP 2: RESOLVE CONFLICTS
-        # ====================================================================
-        print("\n" + "="*80)
-        print("COMPONENT SELECTION - CONFLICT RESOLUTION")
-        print("="*80)
-        print(f"Step 2: Resolving conflicts (strategy: {conflict_strategy})...")
-        print(f"  Total conflicts detected: {len(conflicts)}")
-        
-        to_migrate = []
-        excluded_conflict = []
-        processed = set()
-        
-        for component in valid_components:
-            comp_idx = component['index']
-            if comp_idx in processed:
-                continue
-            
-            # Check if component has a conflict
-            conflict = self._get_conflict_for_component(component, conflicts)
-            
-            if conflict is None:
-                # No conflict → migrate immediately
-                to_migrate.append(component)
-                processed.add(comp_idx)
-                self.logger.debug(f"  Component {comp_idx}: No conflict → migrate")
-            else:
-                # Has conflict → resolve based on strategy
-                other_idx = conflict['component_j'] if conflict['component_i'] == comp_idx else conflict['component_i']
-                
-                # Check if other component is also valid (not excluded in pre-filter)
-                other_component = next((c for c in valid_components if c['index'] == other_idx), None)
-                
-                if other_component is None:
-                    # Other component was excluded in pre-filter → migrate this one
-                    to_migrate.append(component)
-                    processed.add(comp_idx)
-                    print(f"  Component {comp_idx}: Conflict with {other_idx} (excluded in pre-filter) → migrate")
-                    continue
-                
-                # Both components are valid → check if at least one has 3 VPs
-                if comp_idx < other_idx:  # Process each pair only once
-                    comp_size = component['size']
-                    other_size = other_component['size']
-                    
-                    # CRITICAL: If at least one component has 3 VPs, migrate BOTH (safe)
-                    at_least_one_3vp = (comp_size >= 3) or (other_size >= 3)
-                    
-                    if at_least_one_3vp:
-                        # Case 1: At least one is 3-VP → MIGRATE BOTH (safe, internal neighbors)
-                        to_migrate.append(component)
-                        to_migrate.append(other_component)
-                        print(
-                            f"  Conflict {comp_idx} ({comp_size}-VP) vs {other_idx} ({other_size}-VP): "
-                            f"At least one 3-VP → migrate BOTH"
-                        )
-                    else:
-                        # Case 2: BOTH < 3-VP → Risky, apply conflict strategy
-                        if conflict_strategy == 'exclude_all_conflicts':
-                            # Exclude both conflicting components
-                            excluded_conflict.append(component)
-                            excluded_conflict.append(other_component)
-                            print(
-                                f"  Conflict {comp_idx} ({comp_size}-VP) vs {other_idx} ({other_size}-VP): "
-                                f"Both < 3-VP → Excluding BOTH (strategy: exclude_all_conflicts)"
-                            )
-                        elif conflict_strategy == 'exclude_one':
-                            # Exclude farther component, keep closer one
-                            if component['min_distance'] < other_component['min_distance']:
-                                to_migrate.append(component)
-                                excluded_conflict.append(other_component)
-                                print(
-                                    f"  Conflict {comp_idx} ({comp_size}-VP, dist={component['min_distance']:.6f}) vs "
-                                    f"{other_idx} ({other_size}-VP, dist={other_component['min_distance']:.6f}): "
-                                    f"Keeping {comp_idx} (closer)"
-                                )
-                            else:
-                                to_migrate.append(other_component)
-                                excluded_conflict.append(component)
-                                print(
-                                    f"  Conflict {comp_idx} ({comp_size}-VP, dist={component['min_distance']:.6f}) vs "
-                                    f"{other_idx} ({other_size}-VP, dist={other_component['min_distance']:.6f}): "
-                                    f"Keeping {other_idx} (closer)"
-                                )
-                        else:
-                            raise ValueError(f"Unknown conflict_strategy: {conflict_strategy}")
-                    
-                    processed.add(comp_idx)
-                    processed.add(other_idx)
-        
-        # ====================================================================
-        # STEP 3: SUMMARY
-        # ====================================================================
-        all_excluded = excluded_prefilter + excluded_triple_point + excluded_conflict
-        
-        print("\n" + "="*80)
-        print("SELECTION SUMMARY:")
-        print(f"  Components to migrate: {len(to_migrate)}")
-        print(f"  Components excluded:")
-        print(f"    - Pre-filter (no valid auxiliary): {len(excluded_prefilter)}")
-        if excluded_prefilter:
-            prefilter_indices = [c['index'] for c in excluded_prefilter]
-            print(f"      Indices: {prefilter_indices}")
-        print(f"    - Triple point proximity: {len(excluded_triple_point)}")
-        if excluded_triple_point:
-            triple_indices = [c['index'] for c in excluded_triple_point]
-            print(f"      Indices: {triple_indices}")
-        print(f"    - Conflict resolution: {len(excluded_conflict)}")
-        if excluded_conflict:
-            conflict_indices = [c['index'] for c in excluded_conflict]
-            print(f"      Indices: {conflict_indices}")
-        print(f"  Total excluded: {len(all_excluded)}")
-        print("="*80 + "\n")
-        
-        return (to_migrate, all_excluded)
+        """Wrapper - delegates to Type1ComponentAnalyzer."""
+        return self._get_analyzer().select_components_for_migration(components, conflicts, conflict_strategy)
     
     def apply_type2_switch_v3(self, steiner_handler, triple_point_idx: int) -> Dict:
         """

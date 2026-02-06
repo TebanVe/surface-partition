@@ -149,6 +149,123 @@ results/run_20251027_233612_surftorus_npart5_v1nt60-240_incr20_v2np48-192_incr16
 
 ---
 
+### Test 2: Migration and Continue Optimization
+
+**File**: `test_migration_and_continue.py`
+
+**Status**: 🚧 IN PROGRESS
+
+**Created**: 2026-02-04
+
+**Approved**: _Pending testing and validation_
+
+**Objective**: 
+Test the complete workflow cycle after topology switches: Load refined partition → Apply migrations → Optimize → Export. This validates that the optimization can successfully continue after migrations are applied, with proper calculator rebuilding and indicator function updates.
+
+**What it validates**:
+- Loading refined contours from HDF5 file (same format as visualization scripts use)
+- Detection of topology switches (Type 1 and Type 2)
+- Application of migrations with proper indicator_functions updates
+- Rebuilding of calculators (AreaCalculator, PerimeterCalculator, SteinerHandler) after migrations
+- Optimization convergence after migrations
+- Export in same HDF5 format as input (compatible with visualization scripts)
+- One complete cycle: migrate → optimize → export
+
+**Key differences from `refine_perimeter.py`**:
+- **Input**: Reads refined contours `*_refined_contours.h5` (not initial solution)
+- **Workflow**: Migrations FIRST, then optimization (inverse of refine_perimeter.py)
+- **Output**: New iteration file `*_iteration2_refined_contours.h5` in same format as input
+- **Scope**: One cycle only (not iterative loop)
+
+**Usage**:
+```bash
+# Apply both types of migrations
+python testing/test_migration_and_continue.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --migration-type both
+
+# Apply only Type 1 migrations
+python testing/test_migration_and_continue.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --migration-type type1
+
+# Apply only Type 2 migrations with custom output
+python testing/test_migration_and_continue.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --migration-type type2 \
+    --output results/run_xyz/*_custom_output.h5
+```
+
+**Command-line arguments**:
+- `--solution`: Path to refined contours HDF5 file (required)
+- `--migration-type`: Which migrations to apply: `type1`, `type2`, or `both` (default: `both`)
+- `--output`: Output path (default: auto-generated in same directory as input)
+- `--max-opt-iter`: Maximum optimization iterations (default: 1000)
+- `--tolerance`: Optimization tolerance (default: 1e-7)
+- `--boundary-tol`: Boundary detection threshold (default: 1e-3)
+- `--method`: Optimization method: `SLSQP` or `trust-constr` (default: SLSQP)
+- `--log-level`: Logging verbosity (default: INFO)
+
+**Expected output**:
+The script performs these stages with detailed logging:
+1. **Load refined data**: Mesh, partition, indicator functions, λ parameters
+2. **Initial diagnostics**: Current perimeter, areas, VPs, triple points
+3. **Detect switches**: Identify Type 1 and Type 2 candidates
+4. **Apply migrations**: Execute selected migration types with per-migration logging
+5. **Rebuild calculators**: Recreate AreaCalculator, PerimeterCalculator, SteinerHandler
+6. **Run optimization**: One optimization iteration with convergence tracking
+7. **Export results**: Save to HDF5 with metadata
+8. **Post-optimization analysis**: Detect if new switches are needed
+
+**Success criteria**:
+```
+✓ Data loaded successfully
+✓ Switches detected
+✓ Migrations applied (> 0 successful)
+✓ Calculators rebuilt
+✓ Optimization converged
+✓ Results exported
+✓ Post-analysis completed
+TEST COMPLETED SUCCESSFULLY
+```
+
+**Failure handling**:
+- Script aborts with clear error messages if:
+  - Input file not found
+  - No switches detected
+  - No migrations applied
+  - Optimization fails to converge
+  - Export fails
+
+**Dependencies**:
+- `examples/data_loader.py` (load_partition_from_refined_file)
+- `src/core/tri_mesh.py`
+- `src/core/contour_partition.py`
+- `src/core/area_calculator.py`
+- `src/core/perimeter_calculator.py`
+- `src/core/steiner_handler.py`
+- `src/core/perimeter_optimizer.py`
+- `src/core/mesh_topology.py`
+- `src/core/topology_switcher.py`
+- `src/logging_config.py`
+
+**Notes**:
+- Output file format matches input format (visualization scripts can directly read it)
+- Log file created in `logs/` directory with timestamp
+- Default output location: same directory as input file
+- If no switches detected, script exits gracefully (partition already converged)
+- Maximum one complete cycle per execution
+
+**Integration**:
+After successful test, results can be visualized with:
+```bash
+python examples/visualize_type1_vertex_collapse.py \
+    --solution results/run_xyz/*_iteration2_refined_contours.h5 \
+    --region X --component-index Y --state before
+```
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -168,5 +285,5 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-02-04 | Added Test 2 (migration and continue optimization) | System |
 | 2026-01-26 | Created test registry, added Test 1 (self-healing) | System |
-| | | |
