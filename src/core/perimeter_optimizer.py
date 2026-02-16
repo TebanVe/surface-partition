@@ -58,7 +58,8 @@ class PerimeterOptimizer:
         logger: Logger instance
     """
     
-    def __init__(self, partition: PartitionContour, mesh: TriMesh, target_area: float):
+    def __init__(self, partition: PartitionContour, mesh: TriMesh, target_area: float,
+                 area_calc=None, perim_calc=None, steiner_handler=None):
         """
         Initialize perimeter optimizer.
         
@@ -66,16 +67,19 @@ class PerimeterOptimizer:
             partition: PartitionContour with extracted contours
             mesh: TriMesh object
             target_area: Target area for each partition cell (total_area / n_cells)
+            area_calc: Optional pre-created AreaCalculator (for efficiency)
+            perim_calc: Optional pre-created PerimeterCalculator (for efficiency)
+            steiner_handler: Optional pre-created SteinerHandler (for efficiency)
         """
         self.mesh = mesh
         self.partition = partition
         self.target_area = float(target_area)
         self.logger = get_logger(__name__)
         
-        # Initialize calculators
-        self.area_calc = AreaCalculator(mesh, partition)
-        self.perim_calc = PerimeterCalculator(mesh, partition)
-        self.steiner_handler = SteinerHandler(mesh, partition)
+        # Initialize calculators (reuse if provided, create if not)
+        self.area_calc = area_calc if area_calc is not None else AreaCalculator(mesh, partition)
+        self.perim_calc = perim_calc if perim_calc is not None else PerimeterCalculator(mesh, partition)
+        self.steiner_handler = steiner_handler if steiner_handler is not None else SteinerHandler(mesh, partition)
         
         # Optimization state
         self.iteration = 0

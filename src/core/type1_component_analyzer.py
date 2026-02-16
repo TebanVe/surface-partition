@@ -45,7 +45,7 @@ class Type1ComponentAnalyzer:
     """
     
     def __init__(self, mesh: TriMesh, partition: PartitionContour, 
-                 mesh_topology: MeshTopology):
+                 mesh_topology: MeshTopology, steiner_handler=None):
         """
         Initialize the component analyzer.
         
@@ -53,14 +53,22 @@ class Type1ComponentAnalyzer:
             mesh: TriMesh instance
             partition: PartitionContour instance
             mesh_topology: MeshTopology instance
+            steiner_handler: Optional pre-created SteinerHandler (for efficiency)
         """
         self.mesh = mesh
         self.partition = partition
         self.mesh_topology = mesh_topology
         self.logger = get_logger(__name__)
         
-        # Cache for triple point VPs (avoid recreating SteinerHandler multiple times)
-        self._triple_point_vps_cache = None
+        # Cache for triple point VPs
+        if steiner_handler is not None:
+            # Extract triple point VPs from provided SteinerHandler
+            self._triple_point_vps_cache = set()
+            for tp in steiner_handler.triple_points:
+                self._triple_point_vps_cache.update(tp.var_point_indices)
+        else:
+            # Will create SteinerHandler when needed
+            self._triple_point_vps_cache = None
     
     # =========================================================================
     # Component Finding
@@ -68,13 +76,51 @@ class Type1ComponentAnalyzer:
     
     def find_connected_components(self, boundary_vps_set: set) -> List[set]:
         """
-        Find connected components of boundary VPs via DFS on boundary_segments.
+        Find connected components of boundary VPs, grouped by target vertex.
+        
+        This method first groups VPs by which vertex they approach (based on lambda),
+        then finds connected components within each target vertex group. This ensures
+        that components are geometrically consistent (all VPs approach the same vertex).
         
         Args:
             boundary_vps_set: Set of boundary VP indices
             
         Returns:
-            List of sets, each set is a connected component
+            List of sets, each set is a connected component with consistent target vertex
+        """
+        # Step 1: Group VPs by target vertex (geometric criterion)
+        by_target = defaultdict(set)
+        
+        for vp_idx in boundary_vps_set:
+            vp = self.partition.variable_points[vp_idx]
+            target = migration_utils.identify_target_vertex(vp)
+            if target is not None:
+                by_target[target].add(vp_idx)
+            else:
+                self.logger.warning(f"VP {vp_idx}: Cannot identify target vertex (skipping)")
+        
+        # Step 2: Within each target vertex group, find connected components (topological criterion)
+        all_components = []
+        
+        for target_vertex, vp_set in by_target.items():
+            # Find connected components within this target vertex group
+            sub_components = self._find_connected_components_topology(vp_set)
+            all_components.extend(sub_components)
+        
+        return all_components
+    
+    def _find_connected_components_topology(self, boundary_vps_set: set) -> List[set]:
+        """
+        Find connected components via DFS on boundary_segments (topology only).
+        
+        This is a private helper method that finds connected components based purely
+        on boundary segment connectivity, without considering target vertex.
+        
+        Args:
+            boundary_vps_set: Set of boundary VP indices
+            
+        Returns:
+            List of sets, each set is a topologically connected component
         """
         # Build adjacency from boundary_segments (only for boundary VPs)
         adjacency = defaultdict(set)
@@ -221,6 +267,8 @@ class Type1ComponentAnalyzer:
         
         # Find target vertex using distance-based logic (same as identify_target_vertex)
         # For each VP, identify which vertex it's approaching based on lambda
+        # NOTE: After the fix to find_connected_components(), all VPs in a component
+        # should already approach the same vertex. This is a sanity check.
         target_vertices = []
         for vp_idx in component_vps:
             vp = self.partition.variable_points[vp_idx]
@@ -230,18 +278,18 @@ class Type1ComponentAnalyzer:
             else:
                 self.logger.warning(f"Could not identify target vertex for VP {vp_idx} in component")
         
-        # Verify all VPs approach the same vertex
+        # Verify all VPs approach the same vertex (sanity check)
         target_vertex = None
         if target_vertices:
             target_vertex = target_vertices[0]
             if not all(tv == target_vertex for tv in target_vertices):
-                # Warning: VPs don't converge to same vertex
+                # This should NOT happen after the component identification fix!
                 unique_targets = set(target_vertices)
-                self.logger.warning(
-                    f"Component VPs approach different vertices: {unique_targets}. "
-                    f"Using most common vertex."
+                self.logger.error(
+                    f"UNEXPECTED: Component VPs approach different vertices: {unique_targets}. "
+                    f"This indicates a bug in find_connected_components()!"
                 )
-                # Use most common target vertex
+                # Fallback: use most common target vertex
                 target_vertex = Counter(target_vertices).most_common(1)[0][0]
         
         # Compute min distance (closest VP to target vertex)
@@ -315,6 +363,31 @@ class Type1ComponentAnalyzer:
         
         vp_a, vp_b = vp_indices[0], vp_indices[1]
         
+        # CRITICAL: Validate that both VPs in the component approach the same target vertex
+        # This must be checked BEFORE trying to construct the auxiliary component
+        # Use identify_target_vertex() which considers lambda value, not just edge containment
+        from src.core.migration_utils import identify_target_vertex
+        
+        invalid_vps = []
+        for vp_idx in vp_indices:
+            vp = self.partition.variable_points[vp_idx]
+            vp_target = identify_target_vertex(vp)
+            if vp_target != target_vertex:
+                invalid_vps.append(vp_idx)
+                self.logger.warning(
+                    f"Component {comp_idx}:   ✗ VP {vp_idx}: edge {vp.edge}, λ={vp.lambda_param:.6f} "
+                    f"approaches vertex {vp_target}, NOT target vertex {target_vertex}"
+                )
+        
+        if invalid_vps:
+            error_msg = (
+                f"Invalid 2-VP component {vp_indices}: VP(s) {invalid_vps} don't approach target vertex {target_vertex}"
+            )
+            if strict_validation:
+                raise ValueError(error_msg)
+            else:
+                self.logger.warning(f"Component {comp_idx}: {error_msg} (proceeding anyway for visualization)")
+        
         # Get neighbors of each VP
         neighbors_a = migration_utils.get_two_neighbors(self.partition, vp_a)
         neighbors_b = migration_utils.get_two_neighbors(self.partition, vp_b)
@@ -338,18 +411,21 @@ class Type1ComponentAnalyzer:
         self.logger.debug(f"Component {comp_idx}:   Initial candidates: {[(pos, vp) for pos, vp in candidates]}")
         
         # CRITICAL: Filter by target vertex FIRST
+        # Use identify_target_vertex() which considers lambda value, not just edge containment
         filtered_candidates = []
         rejected_candidates = []
         
         for position, vp_idx in candidates:
             vp = self.partition.variable_points[vp_idx]
-            if target_vertex in vp.edge:
+            vp_target = migration_utils.identify_target_vertex(vp)
+            if vp_target == target_vertex:
                 filtered_candidates.append((position, vp_idx))
-                self.logger.debug(f"Component {comp_idx}:   ✓ VP {vp_idx} ({position}): edge {vp.edge} contains target vertex {target_vertex}")
+                self.logger.debug(f"Component {comp_idx}:   ✓ VP {vp_idx} ({position}): edge {vp.edge}, λ={vp.lambda_param:.6f} approaches target vertex {target_vertex}")
             else:
-                rejected_candidates.append((position, vp_idx, vp.edge))
+                rejected_candidates.append((position, vp_idx, vp.edge, vp_target))
                 self.logger.warning(
-                    f"Component {comp_idx}:   ✗ VP {vp_idx} ({position}): edge {vp.edge} does NOT contain target vertex {target_vertex} - REJECTED"
+                    f"Component {comp_idx}:   ✗ VP {vp_idx} ({position}): edge {vp.edge}, λ={vp.lambda_param:.6f} "
+                    f"approaches vertex {vp_target}, NOT target vertex {target_vertex} - REJECTED"
                 )
         
         if not filtered_candidates:
@@ -357,8 +433,8 @@ class Type1ComponentAnalyzer:
                 f"Component {comp_idx}: No valid third VP found for 2-VP component {vp_indices}. "
                 f"All candidates rejected (don't approach target vertex {target_vertex}): "
             )
-            for pos, vp_idx, edge in rejected_candidates:
-                error_msg += f"\n  - VP {vp_idx} ({pos}): edge {edge}"
+            for pos, vp_idx, edge, vp_target in rejected_candidates:
+                error_msg += f"\n  - VP {vp_idx} ({pos}): edge {edge}, approaches {vp_target}"
             
             if strict_validation:
                 self.logger.error(error_msg)
@@ -498,18 +574,21 @@ class Type1ComponentAnalyzer:
             invalid_vps = []
             total_dist = 0.0
             
+            # Use identify_target_vertex() which considers lambda value, not just edge containment
             for vp_idx in triplet:
                 vp = self.partition.variable_points[vp_idx]
-                if target_vertex not in vp.edge:
+                vp_target = migration_utils.identify_target_vertex(vp)
+                if vp_target != target_vertex:
                     valid = False
-                    invalid_vps.append((vp_idx, vp.edge))
+                    invalid_vps.append((vp_idx, vp.edge, vp_target))
                     self.logger.warning(
-                        f"Component {comp_idx}:     ✗ VP {vp_idx}: edge {vp.edge} does NOT contain target vertex {target_vertex}"
+                        f"Component {comp_idx}:     ✗ VP {vp_idx}: edge {vp.edge}, λ={vp.lambda_param:.6f} "
+                        f"approaches vertex {vp_target}, NOT target vertex {target_vertex}"
                     )
                 else:
                     dist = migration_utils.compute_boundary_distance(vp)
                     total_dist += dist
-                    self.logger.debug(f"Component {comp_idx}:     ✓ VP {vp_idx}: approaches target vertex, dist={dist:.6f}")
+                    self.logger.debug(f"Component {comp_idx}:     ✓ VP {vp_idx}: edge {vp.edge}, λ={vp.lambda_param:.6f} approaches target vertex {target_vertex}, dist={dist:.6f}")
             
             if valid:
                 valid_candidates.append((config_name, triplet, total_dist))
@@ -665,7 +744,7 @@ class Type1ComponentAnalyzer:
         # Find VP with degree 2
         for vp_idx in auxiliary_component:
             if len(adjacency[vp_idx]) == 2:
-                self.logger.info(
+                self.logger.debug(
                     f"Selected migrating VP {vp_idx} (topology-based: degree 2, component size {size})"
                 )
                 return (vp_idx, auxiliary_component)
@@ -826,8 +905,36 @@ class Type1ComponentAnalyzer:
         size = component['size']
         
         if size == 3:
-            # 3-VP components: use the component's VPs as-is for auxiliary
-            # The middle VP will be determined later by topology
+            # 3-VP components: Validate that all VPs approach the same target vertex
+            vp_indices = component['vp_indices']
+            
+            # Identify target vertex from the component
+            target_vertex = component.get('target_vertex')
+            if target_vertex is None:
+                # Fallback: compute from first VP
+                from src.core.migration_utils import identify_target_vertex
+                vp0 = self.partition.variable_points[vp_indices[0]]
+                target_vertex = identify_target_vertex(vp0)
+                if target_vertex is None:
+                    return (False, "Cannot identify target vertex")
+            
+            # Validate each VP approaches the target vertex
+            # Use identify_target_vertex() which considers lambda value, not just edge containment
+            from src.core.migration_utils import identify_target_vertex
+            
+            invalid_vps = []
+            for vp_idx in vp_indices:
+                vp = self.partition.variable_points[vp_idx]
+                vp_target = identify_target_vertex(vp)
+                if vp_target != target_vertex:
+                    invalid_vps.append((vp_idx, vp_target))
+            
+            if invalid_vps:
+                invalid_details = ", ".join([f"VP {vp_idx} approaches {vp_target}" for vp_idx, vp_target in invalid_vps])
+                reason = f"Invalid 3-VP component: {invalid_details}, but component target is {target_vertex}"
+                return (False, reason)
+            
+            # All VPs are valid - use as auxiliary component
             component['cached_auxiliary'] = component['vp_indices']
             return (True, "")
         
@@ -1152,6 +1259,13 @@ class Type1ComponentAnalyzer:
                 # Get neighbors from auxiliary component
                 left_neighbor, right_neighbor = self._get_neighbors_from_auxiliary(
                     migrating_vp, auxiliary_component
+                )
+                
+                # Log migration plan entry with component index and full auxiliary
+                self.logger.info(
+                    f"Component {comp['index']}: Selected migrating VP {migrating_vp} "
+                    f"from auxiliary {auxiliary_component} "
+                    f"(neighbors: L={left_neighbor}, R={right_neighbor})"
                 )
                 
                 # Build migration plan entry

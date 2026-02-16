@@ -1,25 +1,46 @@
 #!/usr/bin/env python3
 """
-Test script: Migration and Continue Optimization
+Test script: Migration and Continue Optimization (with Iterative Support)
 
-This script tests the full workflow cycle starting from a refined partition:
-1. Load refined contours from HDF5 file
-2. Detect topology switches needed
-3. Apply selected migrations (Type 1, Type 2, or both)
-4. Rebuild calculators with updated partition
-5. Run one optimization iteration
-6. Export results in same format as input
+This script implements the migrate→optimize workflow starting from a refined partition:
+1. Load refined contours from HDF5 file (iteration file or first refined file)
+2. ITERATIVE LOOP (until convergence or max_iterations):
+   a. Detect topology switches needed
+   b. Apply selected migrations (Type 1, Type 2, or both)
+   c. Rebuild calculators with updated partition
+   d. Run optimization iteration
+   e. Export results with correct iteration numbering
+3. Converge when no more switches are detected
 
-This differs from refine_perimeter.py in that migrations happen FIRST,
-then optimization continues. The refine_perimeter.py optimizes first
-until switches are detected.
+Key features:
+- Can start from any iteration file (_iterationN_refined_contours.h5)
+- Automatically detects starting iteration number from filename
+- Maintains sequential iteration numbering in output files
+- Default: single cycle (max-iterations=1) for backward compatibility
+- Set --max-iterations higher for full iterative refinement
+- Type 2 migrations applied before Type 1 (proven order)
+
+This differs from refine_perimeter_iterative.py in workflow order:
+- refine_perimeter_iterative.py: OPTIMIZE → MIGRATE (starts from base solution)
+- test_migration_and_continue.py: MIGRATE → OPTIMIZE (starts from refined file)
 
 Usage:
+    # Single cycle (backward compatible)
     python testing/test_migration_and_continue.py \\
         --solution results/run_xyz/*_refined_contours.h5 \\
+        --migration-type both
+
+    # Iterative refinement from iteration 1
+    python testing/test_migration_and_continue.py \\
+        --solution results/run_xyz/*_iteration1_refined_contours.h5 \\
         --migration-type both \\
-        --max-opt-iter 1000 \\
-        --tolerance 1e-7
+        --max-iterations 10
+
+    # Resume from iteration 5
+    python testing/test_migration_and_continue.py \\
+        --solution results/run_xyz/*_iteration5_refined_contours.h5 \\
+        --migration-type both \\
+        --max-iterations 5
 
 Author: Perimeter Refinement Testing
 Date: February 2026
@@ -49,98 +70,8 @@ from src.core.type1_component_analyzer import Type1ComponentAnalyzer
 from src.logging_config import get_logger, setup_logging
 
 
-def compute_initial_diagnostics(mesh, partition, logger):
-    """Compute and log initial state diagnostics."""
-    logger.info("="*80)
-    logger.info("INITIAL STATE DIAGNOSTICS")
-    logger.info("="*80)
-    
-    # Mesh info
-    logger.info(f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} triangles")
-    
-    # Partition info
-    logger.info(f"Partition: {partition.n_cells} cells, {len(partition.variable_points)} VPs")
-    
-    # Triple points
-    steiner_handler = SteinerHandler(mesh, partition)
-    logger.info(f"Triple points: {len(steiner_handler.triple_points)}")
-    
-    # Compute current perimeter
-    perim_calc = PerimeterCalculator(mesh, partition)
-    lambda_vec = partition.get_variable_vector()
-    partition.set_variable_vector(lambda_vec)
-    
-    total_perimeter = perim_calc.compute_total_perimeter(lambda_vec)
-    steiner_perimeter = steiner_handler.get_total_perimeter_contribution()
-    combined_perimeter = total_perimeter + steiner_perimeter
-    
-    logger.info(f"Current perimeter:")
-    logger.info(f"  Regular: {total_perimeter:.10f}")
-    logger.info(f"  Steiner: {steiner_perimeter:.10f}")
-    logger.info(f"  Total:   {combined_perimeter:.10f}")
-    
-    # Compute current areas
-    area_calc = AreaCalculator(mesh, partition)
-    areas = area_calc.compute_all_cell_areas(lambda_vec)
-    
-    # Add Steiner contributions
-    steiner_areas = steiner_handler.get_total_area_contribution()
-    for cell_idx, area_contrib in steiner_areas.items():
-        if cell_idx < len(areas):
-            areas[cell_idx] += area_contrib
-    
-    total_area = np.sum(areas)
-    logger.info(f"Current areas:")
-    logger.info(f"  Total area: {total_area:.10f}")
-    for i, area in enumerate(areas):
-        logger.info(f"  Cell {i}: {area:.10f}")
-    
-    logger.info("="*80)
-    
-    return combined_perimeter, areas, steiner_handler
-
-
-def detect_topology_switches(partition, mesh, steiner_handler, boundary_tol, logger):
-    """Detect which topology switches are needed."""
-    logger.info("")
-    logger.info("="*80)
-    logger.info("DETECTING TOPOLOGY SWITCHES")
-    logger.info("="*80)
-    
-    # Create temporary optimizer just for switch detection
-    target_area = 1.0  # Dummy value, not used for detection
-    temp_optimizer = PerimeterOptimizer(partition, mesh, target_area)
-    temp_optimizer.steiner_handler = steiner_handler  # Use existing steiner_handler
-    
-    switches_needed, switch_info = temp_optimizer.check_topology_switches_needed(tol=boundary_tol)
-    
-    logger.info(f"Switches detected: {switches_needed}")
-    logger.info(f"  Type 1 candidates (boundary VPs): {switch_info['n_boundary_points']}")
-    logger.info(f"  Type 2 candidates (boundary triple points): {switch_info['n_boundary_triple_points']}")
-    
-    # Get detailed lists
-    type1_candidates = []
-    type2_candidates = []
-    
-    if switches_needed:
-        # Type 1: Scan VPs for boundary conditions
-        for vp_idx, vp in enumerate(partition.variable_points):
-            if vp.on_boundary(tol=boundary_tol):
-                type1_candidates.append(vp_idx)
-        
-        # Type 2: Get boundary triple points
-        boundary_tps = steiner_handler.get_boundary_triple_points(tol=boundary_tol)
-        type2_candidates = boundary_tps
-        
-        logger.info(f"\nType 1 VP indices: {type1_candidates}")
-        logger.info(f"Type 2 triple point count: {len(type2_candidates)}")
-    
-    logger.info("="*80)
-    
-    return switches_needed, type1_candidates, type2_candidates
-
-
-def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=0.01, distance_preservation='preserve'):
+def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=0.01, 
+                          distance_preservation='preserve', steiner_handler=None):
     """Apply Type 1 migrations for boundary VPs.
     
     Args:
@@ -150,6 +81,7 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
         logger: Logger instance
         boundary_tol: Boundary tolerance (default: 0.01)
         distance_preservation: VP placement strategy after migration (default: 'preserve')
+        steiner_handler: Optional pre-created SteinerHandler (for efficiency)
     """
     logger.info("")
     logger.info("="*80)
@@ -166,7 +98,8 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
     # Create topology objects
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
-    analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology)
+    analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology, 
+                                     steiner_handler=steiner_handler)  # Reuse if provided
     
     # Run full component analysis
     logger.info("\nStep 1: Running full component analysis...")
@@ -268,11 +201,22 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
     return migrations_applied
 
 
-def apply_type2_migrations(partition, mesh, tp_candidates, logger):
-    """Apply Type 2 migrations for boundary triple points."""
+def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handler=None, 
+                          distance_preservation='preserve'):
+    """Apply Type 2 migrations for boundary triple points.
+    
+    Args:
+        partition: PartitionContour object
+        mesh: TriMesh object
+        tp_candidates: List of candidate triple point indices
+        logger: Logger instance
+        steiner_handler: Optional pre-created SteinerHandler (for efficiency)
+        distance_preservation: VP placement strategy after migration
+    """
     logger.info("")
     logger.info("="*80)
     logger.info(f"APPLYING TYPE 2 MIGRATIONS ({len(tp_candidates)} candidates)")
+    logger.info(f"  Distance preservation: {distance_preservation}")
     logger.info("="*80)
     
     if len(tp_candidates) == 0:
@@ -283,7 +227,10 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger):
     # Create topology objects
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
-    steiner_handler = SteinerHandler(mesh, partition)
+    
+    # Reuse steiner_handler if provided, otherwise create new
+    if steiner_handler is None:
+        steiner_handler = SteinerHandler(mesh, partition)
     
     migrations_applied = 0
     failures = []
@@ -300,14 +247,24 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger):
     logger.info("\nApplying migrations...")
     
     # Apply migrations for each boundary triple point
-    for i, tp_idx in enumerate(tp_candidates):
-        tp = steiner_handler.triple_points[tp_idx]
+    # tp_candidates contains TriplePoint objects, not indices
+    for i, tp in enumerate(tp_candidates):
+        # Find the index of this triple point in steiner_handler.triple_points
+        tp_idx = None
+        for idx, handler_tp in enumerate(steiner_handler.triple_points):
+            if handler_tp.triangle_idx == tp.triangle_idx:
+                tp_idx = idx
+                break
+        
+        if tp_idx is None:
+            logger.error(f"  ✗ Triple point {i} (triangle {tp.triangle_idx}): Could not find in steiner_handler")
+            continue
         
         try:
             result = switcher.apply_type2_switch_v4(
                 steiner_handler=steiner_handler,
                 triple_point_idx=tp_idx,
-                distance_preservation='preserve'
+                distance_preservation=distance_preservation
             )
             
             if result['success']:
@@ -349,27 +306,17 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger):
     return migrations_applied
 
 
-def rebuild_calculators(mesh, partition, logger):
-    """Rebuild calculators after migrations."""
-    logger.info("")
-    logger.info("="*80)
-    logger.info("REBUILDING CALCULATORS")
-    logger.info("="*80)
+def run_optimization_with_optimizer(optimizer, target_area, max_iter, tolerance, method, logger):
+    """Run one optimization iteration using existing optimizer.
     
-    area_calc = AreaCalculator(mesh, partition)
-    perim_calc = PerimeterCalculator(mesh, partition)
-    steiner_handler = SteinerHandler(mesh, partition)
-    
-    logger.info(f"✓ AreaCalculator rebuilt")
-    logger.info(f"✓ PerimeterCalculator rebuilt")
-    logger.info(f"✓ SteinerHandler rebuilt ({len(steiner_handler.triple_points)} triple points)")
-    logger.info("="*80)
-    
-    return area_calc, perim_calc, steiner_handler
-
-
-def run_optimization(partition, mesh, target_area, max_iter, tolerance, method, logger):
-    """Run one optimization iteration."""
+    Args:
+        optimizer: Pre-created PerimeterOptimizer instance
+        target_area: Target area per cell
+        max_iter: Maximum iterations
+        tolerance: Convergence tolerance
+        method: Optimization method
+        logger: Logger instance
+    """
     logger.info("")
     logger.info("="*80)
     logger.info("RUNNING OPTIMIZATION")
@@ -379,11 +326,8 @@ def run_optimization(partition, mesh, target_area, max_iter, tolerance, method, 
     logger.info(f"Tolerance: {tolerance}")
     logger.info(f"Method: {method}")
     
-    # Create optimizer
-    optimizer = PerimeterOptimizer(partition, mesh, target_area)
-    
     # Calculate initial perimeter before optimization
-    x0 = partition.get_variable_vector()
+    x0 = optimizer.partition.get_variable_vector()
     initial_perimeter = optimizer.objective(x0)
     logger.info(f"\nInitial perimeter: {initial_perimeter:.10f}")
     
@@ -436,7 +380,7 @@ def run_optimization(partition, mesh, target_area, max_iter, tolerance, method, 
 
 
 def export_results(partition, opt_info, output_path, logger):
-    """Export results to HDF5 file in same format as input."""
+    """Export results to HDF5 file in same format as input, including updated indicator functions."""
     logger.info("")
     logger.info("="*80)
     logger.info("EXPORTING RESULTS")
@@ -446,10 +390,16 @@ def export_results(partition, opt_info, output_path, logger):
     # Get optimized lambda parameters
     lambda_opt = partition.get_variable_vector()
     
+    # Get indicator functions (updated after migrations)
+    indicator_functions = partition.indicator_functions
+    
     # Create HDF5 file
     with h5py.File(output_path, 'w') as f:
         # Save lambda parameters (same format as input)
         f.create_dataset('lambda_parameters', data=lambda_opt)
+        
+        # Save indicator functions (critical for visualization after migrations)
+        f.create_dataset('indicator_functions', data=indicator_functions)
         
         # Save metadata
         f.attrs['n_variable_points'] = len(lambda_opt)
@@ -469,6 +419,7 @@ def export_results(partition, opt_info, output_path, logger):
     
     logger.info("✓ Results exported successfully")
     logger.info(f"  {len(lambda_opt)} lambda parameters saved")
+    logger.info(f"  Indicator functions saved: {indicator_functions.shape}")
     logger.info(f"  Metadata and optimization info included")
     logger.info("="*80)
 
@@ -501,6 +452,9 @@ def main():
                             '"preserve" (default, maintains original distance to target vertex), '
                             '"midpoint" (places at edge midpoint, λ=0.5), '
                             'or a number between 0.0 and 1.0 (custom distance)')
+    parser.add_argument('--max-iterations', type=int, default=1,
+                       help='Maximum refinement iterations (default: 1 for single cycle, '
+                            'set higher for iterative refinement until convergence)')
     
     args = parser.parse_args()
     
@@ -529,22 +483,41 @@ def main():
     logger.info(f"Input file: {args.solution}")
     logger.info(f"Migration type: {args.migration_type}")
     logger.info(f"Distance preservation: {args.distance_preservation}")
+    logger.info(f"Max iterations: {args.max_iterations}")
     
     # Check input file exists
     if not os.path.exists(args.solution):
         logger.error(f"Solution file not found: {args.solution}")
         return 1
     
-    # Determine output path (same directory as input if not specified)
-    if args.output is None:
-        base_path = args.solution.replace('_refined_contours.h5', '')
-        args.output = f"{base_path}_iteration2_refined_contours.h5"
+    # Detect starting iteration number from filename
+    import re
+    iteration_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', args.solution)
+    if iteration_match:
+        starting_iteration = int(iteration_match.group(1))
+        logger.info(f"Detected input as iteration {starting_iteration} file")
+    else:
+        starting_iteration = 1
+        logger.info("Input appears to be first refined file (iteration 1)")
     
-    logger.info(f"Output file: {args.output}")
+    # Determine base output path for iteration files
+    if args.output is None:
+        # Remove iteration number and _refined_contours suffix to get base path
+        if iteration_match:
+            base_path = args.solution.replace(f'_iteration{starting_iteration}_refined_contours.h5', '')
+        else:
+            base_path = args.solution.replace('_refined_contours.h5', '')
+    else:
+        # User provided output path - derive base from it
+        base_path = args.output.replace(f'_iteration{starting_iteration + 1}_refined_contours.h5', '')
+        base_path = base_path.replace('_refined_contours.h5', '')
+    
+    logger.info(f"Base output path: {base_path}")
+    logger.info(f"Iteration files will be: {base_path}_iteration{{N}}_refined_contours.h5")
     
     # Create output directory if needed
-    output_dir = os.path.dirname(args.output)
-    if output_dir and not os.path.exists(output_dir):
+    output_dir = os.path.dirname(base_path) if os.path.dirname(base_path) else '.'
+    if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     
     # -------------------------------------------------------------------------
@@ -560,116 +533,195 @@ def main():
         return 1
     
     # -------------------------------------------------------------------------
-    # Stage 2: Initial diagnostics
+    # Stage 2: Initialize optimizer and target area
     # -------------------------------------------------------------------------
-    initial_perimeter, initial_areas, steiner_handler = compute_initial_diagnostics(
-        mesh, partition, logger
-    )
+    logger.info("")
+    logger.info("="*80)
+    logger.info("INITIAL STATE DIAGNOSTICS")
+    logger.info("="*80)
+    
+    # Mesh info
+    logger.info(f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} triangles")
+    logger.info(f"Partition: {partition.n_cells} cells, {len(partition.variable_points)} VPs")
     
     # Calculate target area (equal division)
-    total_area = np.sum(initial_areas)
+    total_area = float(mesh.M.sum())
     target_area = total_area / partition.n_cells
     logger.info(f"Target area per cell: {target_area:.10f}")
+    logger.info("="*80)
     
     # -------------------------------------------------------------------------
-    # Stage 3: Detect topology switches
-    # -------------------------------------------------------------------------
-    switches_needed, type1_candidates, type2_candidates = detect_topology_switches(
-        partition, mesh, steiner_handler, args.boundary_tol, logger
-    )
-    
-    if not switches_needed:
-        logger.info("\nNo topology switches detected - aborting test")
-        logger.info("This partition is already converged for perimeter refinement")
-        return 0
-    
-    # -------------------------------------------------------------------------
-    # Stage 4: Apply migrations based on type
-    # -------------------------------------------------------------------------
-    total_migrations = 0
-    
-    if args.migration_type in ['type1', 'both']:
-        migrations = apply_type1_migrations(
-            partition, mesh, type1_candidates, logger, 
-            boundary_tol=args.boundary_tol,
-            distance_preservation=args.distance_preservation
-        )
-        total_migrations += migrations
-    
-    if args.migration_type in ['type2', 'both']:
-        migrations = apply_type2_migrations(partition, mesh, type2_candidates, logger)
-        total_migrations += migrations
-    
-    if total_migrations == 0:
-        logger.warning("\nNo migrations were applied - aborting test")
-        logger.warning("Check boundary tolerance or migration candidates")
-        return 1
-    
-    logger.info(f"\nTotal migrations applied: {total_migrations}")
-    
-    # -------------------------------------------------------------------------
-    # Stage 5: Rebuild calculators
-    # -------------------------------------------------------------------------
-    area_calc, perim_calc, steiner_handler = rebuild_calculators(mesh, partition, logger)
-    
-    # -------------------------------------------------------------------------
-    # Stage 6: Run optimization
-    # -------------------------------------------------------------------------
-    try:
-        result, opt_info = run_optimization(
-            partition, mesh, target_area,
-            args.max_opt_iter, args.tolerance, args.method, logger
-        )
-    except Exception as e:
-        logger.error(f"Optimization failed with exception: {str(e)}")
-        logger.error("ABORTING TEST - Please debug the optimization failure")
-        return 1
-    
-    if not opt_info['success']:
-        logger.error("Optimization did not converge successfully")
-        logger.error(f"Reason: {opt_info['message']}")
-        logger.error("ABORTING TEST - Please review optimization parameters")
-        return 1
-    
-    # -------------------------------------------------------------------------
-    # Stage 7: Export results
-    # -------------------------------------------------------------------------
-    export_results(partition, opt_info, args.output, logger)
-    
-    # -------------------------------------------------------------------------
-    # Stage 8: Post-optimization analysis
+    # Stage 3: ITERATIVE REFINEMENT LOOP
     # -------------------------------------------------------------------------
     logger.info("")
     logger.info("="*80)
-    logger.info("POST-OPTIMIZATION ANALYSIS")
+    logger.info("STARTING ITERATIVE REFINEMENT LOOP")
+    logger.info("="*80)
+    logger.info(f"Starting from iteration {starting_iteration}")
+    logger.info(f"Maximum iterations: {args.max_iterations}")
     logger.info("="*80)
     
-    # Check for NEW switches needed
-    new_switches_needed, new_switch_info = PerimeterOptimizer(
-        partition, mesh, target_area
-    ).check_topology_switches_needed(tol=args.boundary_tol)
+    global_start_time = time.time()
+    converged = False
+    total_type1_migrations = 0
+    total_type2_migrations = 0
     
-    logger.info(f"New switches needed: {new_switches_needed}")
-    if new_switches_needed:
-        logger.info(f"  New Type 1 candidates: {new_switch_info['n_boundary_points']}")
-        logger.info(f"  New Type 2 candidates: {new_switch_info['n_boundary_triple_points']}")
-    else:
-        logger.info("  Partition has converged (no more switches needed)")
-    
-    logger.info("="*80)
+    for iteration_idx in range(args.max_iterations):
+        current_iteration = starting_iteration + iteration_idx + 1
+        
+        logger.info("")
+        logger.info("="*80)
+        logger.info(f"ITERATION {current_iteration}")
+        logger.info("="*80)
+        iteration_start_time = time.time()
+        
+        # ---------------------------------------------------------------------
+        # Phase 1: Create/reinitialize optimizer
+        # ---------------------------------------------------------------------
+        if iteration_idx == 0:
+            # First iteration - create optimizer
+            logger.info("Initializing optimizer...")
+            optimizer = PerimeterOptimizer(partition, mesh, target_area)
+        else:
+            # Subsequent iterations - reinitialize after migrations
+            logger.info("Reinitializing optimizer after migrations...")
+            optimizer.reinitialize_after_switches()
+        
+        # Compute current state diagnostics
+        lambda_vec = partition.get_variable_vector()
+        total_perimeter = optimizer.perim_calc.compute_total_perimeter(lambda_vec)
+        steiner_perimeter = optimizer.steiner_handler.get_total_perimeter_contribution()
+        current_perimeter = total_perimeter + steiner_perimeter
+        
+        logger.info(f"Current state:")
+        logger.info(f"  VPs: {len(partition.variable_points)}")
+        logger.info(f"  Triple points: {len(optimizer.steiner_handler.triple_points)}")
+        logger.info(f"  Perimeter: {current_perimeter:.10f}")
+        
+        # ---------------------------------------------------------------------
+        # Phase 2: Detect topology switches
+        # ---------------------------------------------------------------------
+        logger.info("")
+        logger.info("Detecting topology switches...")
+        
+        switches_needed, switch_info = optimizer.check_topology_switches_needed(
+            tol=args.boundary_tol
+        )
+        
+        if not switches_needed:
+            logger.info("✓ No topology switches detected - CONVERGED")
+            converged = True
+            # Export final state
+            output_path = f"{base_path}_iteration{current_iteration}_refined_contours.h5"
+            opt_info = {
+                'success': True,
+                'n_iterations': 0,
+                'initial_perimeter': current_perimeter,
+                'final_perimeter': current_perimeter,
+                'perimeter_reduction': 0.0,
+                'percent_reduction': 0.0,
+                'final_constraint_violations': optimizer.area_calc.compute_all_cell_areas(lambda_vec) - target_area,
+                'message': 'Converged - no switches needed'
+            }
+            export_results(partition, opt_info, output_path, logger)
+            break
+        
+        # Collect candidates
+        type1_candidates = []
+        for vp_idx, vp in enumerate(partition.variable_points):
+            if vp.on_boundary(tol=args.boundary_tol):
+                type1_candidates.append(vp_idx)
+        
+        type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(tol=args.boundary_tol)
+        
+        logger.info(f"✓ Switches detected:")
+        logger.info(f"  Type 1 candidates: {len(type1_candidates)}")
+        logger.info(f"  Type 2 candidates: {len(type2_candidates)}")
+        
+        # ---------------------------------------------------------------------
+        # Phase 3: Apply migrations (Type 2 first, then Type 1)
+        # ---------------------------------------------------------------------
+        iteration_migrations = 0
+        
+        # Type 2 migrations
+        if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0:
+            migrations = apply_type2_migrations(
+                partition, mesh, type2_candidates, logger,
+                steiner_handler=optimizer.steiner_handler,
+                distance_preservation=args.distance_preservation
+            )
+            iteration_migrations += migrations
+            total_type2_migrations += migrations
+        
+        # Type 1 migrations
+        if args.migration_type in ['type1', 'both'] and len(type1_candidates) > 0:
+            migrations = apply_type1_migrations(
+                partition, mesh, type1_candidates, logger,
+                boundary_tol=args.boundary_tol,
+                distance_preservation=args.distance_preservation,
+                steiner_handler=optimizer.steiner_handler
+            )
+            iteration_migrations += migrations
+            total_type1_migrations += migrations
+        
+        if iteration_migrations == 0:
+            logger.warning("⚠️  No migrations were applied despite switches detected")
+            logger.warning("This may indicate tolerance issues or all migrations failed")
+            converged = True
+            break
+        
+        logger.info(f"✓ Iteration {current_iteration} migrations: {iteration_migrations}")
+        
+        # ---------------------------------------------------------------------
+        # Phase 4: Optimize after migrations
+        # ---------------------------------------------------------------------
+        logger.info("")
+        logger.info("Starting optimization after migrations...")
+        
+        # Reinitialize optimizer for new partition state
+        optimizer.reinitialize_after_switches()
+        
+        try:
+            result, opt_info = run_optimization_with_optimizer(
+                optimizer, target_area,
+                args.max_opt_iter, args.tolerance, args.method, logger
+            )
+        except Exception as e:
+            logger.error(f"Optimization failed with exception: {str(e)}")
+            logger.error("ABORTING - Please debug the optimization failure")
+            return 1
+        
+        if not opt_info['success']:
+            logger.error("Optimization did not converge successfully")
+            logger.error(f"Reason: {opt_info['message']}")
+            logger.error("ABORTING - Please review optimization parameters")
+            return 1
+        
+        # ---------------------------------------------------------------------
+        # Phase 5: Export iteration results
+        # ---------------------------------------------------------------------
+        output_path = f"{base_path}_iteration{current_iteration}_refined_contours.h5"
+        export_results(partition, opt_info, output_path, logger)
+        
+        iteration_time = time.time() - iteration_start_time
+        logger.info(f"✓ Iteration {current_iteration} completed in {iteration_time:.2f}s")
+        logger.info(f"  Final perimeter: {opt_info['final_perimeter']:.10f}")
     
     # -------------------------------------------------------------------------
-    # Final summary
+    # Final Summary
     # -------------------------------------------------------------------------
+    total_time = time.time() - global_start_time
+    
     logger.info("")
     logger.info("="*80)
-    logger.info("TEST COMPLETED SUCCESSFULLY")
+    logger.info("ITERATIVE REFINEMENT COMPLETED")
     logger.info("="*80)
-    logger.info(f"Migrations applied: {total_migrations}")
-    logger.info(f"Initial perimeter: {initial_perimeter:.10f}")
-    logger.info(f"Final perimeter: {opt_info['final_perimeter']:.10f}")
-    logger.info(f"Perimeter reduction: {initial_perimeter - opt_info['final_perimeter']:.10f}")
-    logger.info(f"Output saved to: {args.output}")
+    logger.info(f"Status: {'CONVERGED' if converged else 'MAX ITERATIONS REACHED'}")
+    logger.info(f"Total iterations: {iteration_idx + 1}")
+    logger.info(f"Total time: {total_time:.2f}s")
+    logger.info(f"Total Type 1 migrations: {total_type1_migrations}")
+    logger.info(f"Total Type 2 migrations: {total_type2_migrations}")
+    logger.info(f"Final output: {output_path}")
     logger.info("="*80)
     
     return 0

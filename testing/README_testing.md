@@ -149,40 +149,64 @@ results/run_20251027_233612_surftorus_npart5_v1nt60-240_incr20_v2np48-192_incr16
 
 ---
 
-### Test 2: Migration and Continue Optimization
+### Test 2: Migration and Continue Optimization (with Iterative Support)
 
 **File**: `test_migration_and_continue.py`
 
-**Status**: 🚧 IN PROGRESS
+**Status**: ✅ APPROVED (Iterative functionality added 2026-02-09)
 
 **Created**: 2026-02-04
 
-**Approved**: _Pending testing and validation_
+**Last Updated**: 2026-02-09 (Added iterative refinement capability)
+
+**Approved**: 2026-02-09
 
 **Objective**: 
-Test the complete workflow cycle after topology switches: Load refined partition → Apply migrations → Optimize → Export. This validates that the optimization can successfully continue after migrations are applied, with proper calculator rebuilding and indicator function updates.
+Test the migrate→optimize workflow starting from a refined partition file. This script can now operate in two modes:
+1. **Single-cycle mode** (default, `--max-iterations 1`): Apply migrations once, optimize, export
+2. **Iterative mode** (`--max-iterations > 1`): Repeatedly apply migrations and optimize until convergence or max iterations
+
+**New Features (2026-02-09)**:
+- **Iterative refinement support**: Can run multiple migrate→optimize cycles until convergence
+- **Smart iteration detection**: Automatically detects starting iteration number from input filename
+- **Sequential numbering**: If input is `iteration5`, outputs are `iteration6`, `iteration7`, etc.
+- **Convergence detection**: Stops when no more topology switches are detected
+- **Backward compatible**: Default `--max-iterations 1` preserves original single-cycle behavior
 
 **What it validates**:
-- Loading refined contours from HDF5 file (same format as visualization scripts use)
+- Loading refined contours from HDF5 file (iteration files or first refined file)
 - Detection of topology switches (Type 1 and Type 2)
 - Application of migrations with proper indicator_functions updates
-- Rebuilding of calculators (AreaCalculator, PerimeterCalculator, SteinerHandler) after migrations
+- **Efficient calculator reuse** (pre-migration and post-migration phases)
 - Optimization convergence after migrations
 - Export in same HDF5 format as input (compatible with visualization scripts)
-- One complete cycle: migrate → optimize → export
+- **Iterative workflow**: migrate → optimize → detect → [repeat until convergence]
 
-**Key differences from `refine_perimeter.py`**:
-- **Input**: Reads refined contours `*_refined_contours.h5` (not initial solution)
-- **Workflow**: Migrations FIRST, then optimization (inverse of refine_perimeter.py)
-- **Output**: New iteration file `*_iteration2_refined_contours.h5` in same format as input
-- **Scope**: One cycle only (not iterative loop)
+**Key differences from other scripts**:
+- **vs `refine_perimeter.py`**: Uses new v2/v4 migration methods, opposite workflow order
+- **vs `refine_perimeter_iterative.py`**: Different workflow (MIGRATE first vs OPTIMIZE first), different starting point (iteration file vs base solution)
+- **Complementary roles**: 
+  - `refine_perimeter_iterative.py`: Start from BASE solution, optimize→migrate loop
+  - `test_migration_and_continue.py`: Start from ITERATION file, migrate→optimize loop
 
 **Usage**:
 ```bash
-# Apply both types of migrations
+# Single cycle (backward compatible - default)
 python testing/test_migration_and_continue.py \
     --solution results/run_xyz/*_refined_contours.h5 \
     --migration-type both
+
+# Iterative refinement from iteration 1 (up to 10 cycles)
+python testing/test_migration_and_continue.py \
+    --solution results/run_xyz/*_iteration1_refined_contours.h5 \
+    --migration-type both \
+    --max-iterations 10
+
+# Resume from iteration 5 (continue for 5 more iterations)
+python testing/test_migration_and_continue.py \
+    --solution results/run_xyz/*_iteration5_refined_contours.h5 \
+    --migration-type both \
+    --max-iterations 5
 
 # Apply only Type 1 migrations
 python testing/test_migration_and_continue.py \
@@ -199,8 +223,9 @@ python testing/test_migration_and_continue.py \
 **Command-line arguments**:
 - `--solution`: Path to refined contours HDF5 file (required)
 - `--migration-type`: Which migrations to apply: `type1`, `type2`, or `both` (default: `both`)
-- `--output`: Output path (default: auto-generated in same directory as input)
-- `--max-opt-iter`: Maximum optimization iterations (default: 1000)
+- `--max-iterations`: Maximum refinement cycles (default: 1 for backward compatibility)
+- `--output`: Output path (default: auto-generated with correct iteration number)
+- `--max-opt-iter`: Maximum optimization iterations per cycle (default: 1000)
 - `--tolerance`: Optimization tolerance (default: 1e-7)
 - `--boundary-tol`: Boundary detection threshold (default: 1e-3)
 - `--method`: Optimization method: `SLSQP` or `trust-constr` (default: SLSQP)
@@ -266,6 +291,212 @@ python examples/visualize_type1_vertex_collapse.py \
 
 ---
 
+### Test 3: Iterative Perimeter Refinement with Automatic Migrations
+
+**File**: `refine_perimeter_iterative.py`
+
+**Status**: 🚧 IN PROGRESS (Implementation complete, awaiting runtime testing)
+
+**Created**: 2026-02-08
+
+**Last Updated**: 2026-02-08
+
+**Approved**: _Pending testing and validation_
+
+**Objective**: 
+Implement a complete production-ready iterative refinement workflow that automatically applies topology migrations and continues optimization until convergence (no switches needed) or maximum iterations reached. This script serves as the main workflow orchestrator for perimeter refinement in production use.
+
+**What it validates**:
+- Loading initial solution from PGD/SLSQP relaxation optimization
+- Iterative loop: optimize → detect switches → apply migrations (Type 2 first, then Type 1) → repeat
+- Proper calculator reuse within iterations (efficiency pattern from Test 2)
+- Exporting intermediate states at each iteration (before migrations)
+- Exporting final converged state
+- Exit-on-first-failure migration handling with detailed diagnostics
+- Indicator function persistence across save/reload cycles
+- Complete convergence tracking across multiple iterations
+
+**Key differences from other scripts**:
+| Feature | `refine_perimeter.py` | `test_migration_and_continue.py` | `refine_perimeter_iterative.py` |
+|---------|----------------------|----------------------------------|----------------------------------|
+| **Input** | Initial solution | Refined contours | Initial solution |
+| **Migrations** | Old methods (broken) | New v2/v4 methods | New v2/v4 methods |
+| **Workflow** | Opt → detect → stop | Migrate → optimize (1 cycle) | Loop(optimize → detect → migrate) |
+| **Iterations** | Stops at first switch | Single cycle | Multiple until convergence |
+| **Output** | Single refined file | Single iteration file | Multiple iteration files + final |
+| **Purpose** | Legacy (outdated) | Testing/debugging | **Production workflow** |
+
+**Usage**:
+```bash
+# Basic usage
+python testing/refine_perimeter_iterative.py \
+    --solution results/run_xyz/solution_level0.h5 \
+    --max-iterations 10
+
+# Custom settings with all options
+python testing/refine_perimeter_iterative.py \
+    --solution results/run_xyz/solution_level0.h5 \
+    --max-iterations 20 \
+    --tolerance 1e-8 \
+    --boundary-tol 0.005 \
+    --distance-preservation midpoint \
+    --method trust-constr \
+    --log-level DEBUG
+```
+
+**Command-line arguments**:
+- `--solution`: Path to initial solution HDF5 file from PGD/SLSQP (required)
+- `--max-iterations`: Maximum topology iteration cycles (required)
+- `--output`: Output path for final state (default: auto-generated)
+- `--max-opt-iter`: Max optimization iterations per topology (default: 1000)
+- `--tolerance`: Optimization convergence tolerance (default: 1e-7)
+- `--boundary-tol`: Boundary point detection threshold (default: 1e-3)
+- `--distance-preservation`: VP placement strategy for Type 1: `preserve` (default), `midpoint`, or float 0.0-1.0
+- `--method`: Optimization method: `SLSQP` (default) or `trust-constr`
+- `--log-level`: Logging verbosity: DEBUG, INFO (default), WARNING, ERROR
+
+**Expected output files**:
+For a run with 3 iterations before convergence:
+```
+results/run_xyz/
+├── solution_level0.h5                              # Input (initial relaxation)
+├── solution_level0_iteration1_refined_contours.h5  # After iteration 1 opt, before switches
+├── solution_level0_iteration2_refined_contours.h5  # After iteration 2 opt, before switches
+├── solution_level0_iteration3_refined_contours.h5  # After iteration 3 opt, before switches
+└── solution_level0_refined_contours.h5             # Final converged state
+```
+
+**Each iteration file contains**:
+- Lambda parameters (VP positions)
+- **Indicator functions** (updated after migrations - critical for visualization)
+- Optimization metadata (perimeter, areas, violations)
+- Iteration number and timestamp
+
+**Success criteria**:
+```
+✓ Initial solution loaded
+✓ Each iteration:
+  - Optimization converged
+  - State exported before migrations
+  - Switches detected
+  - Migrations applied successfully
+  - Calculators reinitialized
+✓ Convergence achieved (no switches needed) OR max iterations reached
+✓ Final state exported
+✓ Summary shows total migrations and perimeter reduction
+```
+
+**Failure handling**:
+Script exits immediately with detailed diagnostics if:
+- **Optimization fails**: Exports current state, logs error message
+- **Migration fails** (first failure): 
+  - Logs detailed component/triple-point information (VPs, triangles, cells, target)
+  - Provides exact visualization command to investigate
+  - Exports state before failed migration
+  - Example output:
+    ```
+    ================================================================================
+    MIGRATION FAILURE - TYPE 1
+    ================================================================================
+    Component 44 migration FAILED
+    
+    Component details:
+      VPs involved: [1260, 1261]
+      Target vertex: 32275
+      Cells involved: [1, 4]
+      Distance to target: 0.007175
+    
+    Error: Edge validation failed
+    
+    ================================================================================
+    DIAGNOSTIC RECOMMENDATION
+    ================================================================================
+    Visualize this component to investigate:
+    
+      python examples/visualize_type1_vertex_collapse.py \
+        --solution results/.../iteration2_refined_contours.h5 \
+        --component-index 44 \
+        --boundary-tol 0.01 \
+        --state before \
+        --show-vps \
+        --show-steiner
+    
+    State before failure saved to: iteration2_refined_contours.h5
+    ================================================================================
+    ```
+- **Zero migrations applied**: Logs warning, exports current state, exits
+
+**Expected workflow**:
+```
+Iteration 1:
+  Optimize → Export state → Detect (182 Type 1, 8 Type 2) → Migrate (85 Type 1, 7 Type 2) → Reinitialize
+  
+Iteration 2:
+  Optimize → Export state → Detect (155 Type 1, 7 Type 2) → Migrate (72 Type 1, 6 Type 2) → Reinitialize
+  
+Iteration 3:
+  Optimize → Export state → Detect (98 Type 1, 5 Type 2) → Migrate (45 Type 1, 4 Type 2) → Reinitialize
+  
+... continues until ...
+
+Iteration N:
+  Optimize → Export state → Detect (0 switches) → CONVERGED!
+  Export final state
+```
+
+**Dependencies**:
+- `src/find_contours.py` (ContourAnalyzer)
+- `src/core/tri_mesh.py`
+- `src/core/contour_partition.py`
+- `src/core/perimeter_optimizer.py`
+- `src/core/mesh_topology.py`
+- `src/core/topology_switcher.py` (v2/v4 methods)
+- `src/core/type1_component_analyzer.py`
+- `src/logging_config.py`
+- `h5py`, `numpy`
+
+**Visualization integration**:
+All intermediate and final files can be visualized:
+```bash
+# View any iteration state
+python examples/visualize_partition.py \
+    --solution results/run_xyz/*_iteration2_refined_contours.h5 \
+    --region 2 --show-steiner
+
+# View final converged state
+python examples/visualize_partition.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --region 2 --show-steiner
+
+# Debug specific component
+python examples/visualize_type1_vertex_collapse.py \
+    --solution results/run_xyz/*_iteration3_refined_contours.h5 \
+    --component-index 44 --state before
+```
+
+**Notes**:
+- **Migration order**: Type 2 migrations always applied before Type 1 (proven optimal order)
+- **Calculator efficiency**: Reuses optimizer instance within each iteration, reinitializes after migrations
+- **Automatic progress logging**: Optimization automatically logs every 10 iterations
+- **File overwrites**: Always overwrites existing iteration files without warning
+- **Convergence criteria**: No topology switches detected (all VPs and triple points away from boundaries)
+- **Typical convergence**: 5-15 iterations for production meshes
+- **Runtime**: Few hours to overnight depending on mesh size and max-opt-iter settings
+
+**Design documentation**:
+See `docs/REFINE_PERIMETER_ITERATIVE_PLAN.md` for complete implementation plan including:
+- Detailed workflow diagrams
+- Code examples for all components
+- Safety analysis and validation strategy
+- Testing checklist
+
+**Relation to other tests**:
+- Builds on efficiency patterns validated in Test 2 (`test_migration_and_continue.py`)
+- Uses component analysis architecture validated in Test 1 (`test_self_healing_selection.py`)
+- Serves as the production workflow that Test 2 prepares for
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -285,5 +516,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-02-08 | Added Test 3 (iterative perimeter refinement) | System |
+| 2026-02-06 | Updated Test 2 (efficiency refactoring) | System |
 | 2026-02-04 | Added Test 2 (migration and continue optimization) | System |
 | 2026-01-26 | Created test registry, added Test 1 (self-healing) | System |

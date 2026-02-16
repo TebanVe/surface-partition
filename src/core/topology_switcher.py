@@ -2640,6 +2640,67 @@ class TopologySwitcher:
         
         return common_vertex
     
+    def _find_triangle_in_fan(
+        self,
+        common_vertex: int,
+        already_assigned: List[int],
+        must_share_edge_with: List[int]
+    ) -> Optional[int]:
+        """
+        Find triangle in the fan around common_vertex that shares edges with specified triangles.
+        
+        This is used to find T_adjacent_to_T_second by ensuring it:
+        1. Contains the common vertex (part of the fan)
+        2. Shares an edge with T_second_VP (adjacent in the fan)
+        3. Shares an edge with T_shared_edge_with_target (completes the fan)
+        
+        Args:
+            common_vertex: The vertex all triangles in the fan should contain
+            already_assigned: Triangles already assigned (exclude these)
+            must_share_edge_with: List of triangle indices - candidate must share edge with ALL
+            
+        Returns:
+            Triangle index, or None if not found
+        """
+        # Get all triangles at common_vertex
+        triangles_at_vertex = self._get_all_triangles_at_vertex(common_vertex)
+        
+        # Get edges for triangles we must share with
+        required_edge_sets = []
+        for tri_idx in must_share_edge_with:
+            face = self.mesh.faces[tri_idx]
+            edges = [
+                tuple(sorted([face[0], face[1]])),
+                tuple(sorted([face[1], face[2]])),
+                tuple(sorted([face[2], face[0]]))
+            ]
+            required_edge_sets.append(set(edges))
+        
+        # Find candidate triangle
+        for tri_idx in triangles_at_vertex:
+            if tri_idx in already_assigned:
+                continue
+            
+            face = self.mesh.faces[tri_idx]
+            tri_edges = set([
+                tuple(sorted([face[0], face[1]])),
+                tuple(sorted([face[1], face[2]])),
+                tuple(sorted([face[2], face[0]]))
+            ])
+            
+            # Check if shares edge with ALL required triangles
+            shares_all = all(
+                len(tri_edges & req_edges) > 0 
+                for req_edges in required_edge_sets
+            )
+            
+            if shares_all:
+                self.logger.info(f"Found triangle {tri_idx} in fan (shares edges with {must_share_edge_with})")
+                return tri_idx
+        
+        self.logger.error(f"No triangle found in fan around vertex {common_vertex} that shares edges with {must_share_edge_with}")
+        return None
+    
     def _determine_cells_for_edge(self, edge: Tuple[int, int]) -> Set[int]:
         """
         Determine which two cells are separated by an edge.
@@ -2745,7 +2806,12 @@ class TopologySwitcher:
                 ...
             }
         """
+        print("="*80)
+        print(f"🔥 TYPE 2 MIGRATION v4 - CODE VERSION 2026-01-26-FIX 🔥")
+        print(f"TYPE 2 MIGRATION v4 (Triple Point {triple_point_idx})")
+        print("="*80)
         self.logger.info("="*80)
+        self.logger.info(f"🔥 TYPE 2 MIGRATION v4 - CODE VERSION 2026-01-26-FIX 🔥")
         self.logger.info(f"TYPE 2 MIGRATION v4 (Triple Point {triple_point_idx})")
         self.logger.info("="*80)
         
@@ -2817,6 +2883,22 @@ class TopologySwitcher:
         if migrating_vp_idx is None or stationary_vp_idx is None:
             return result
         
+        # Step 3b: Compute common vertex (shared by migrating_VP edge and target_edge)
+        # This is the anchor vertex that all 6 triangles should share
+        common_vertex = None
+        migrating_vp = self.partition.variable_points[migrating_vp_idx]
+        for v in migrating_vp.edge:
+            if v in target_edge:
+                common_vertex = v
+                break
+        
+        if common_vertex is None:
+            self.logger.error(f"Migrating VP edge {migrating_vp.edge} shares no vertex with target edge {target_edge}")
+            return result
+        
+        self.logger.info(f"Common vertex (migration anchor): {common_vertex}")
+        result['common_vertex'] = common_vertex
+        
         # Step 4: Identify outer neighbors
         first_level_vp_idx, second_level_vp_idx = self._identify_outer_neighbors(
             migrating_vp_idx, triple_vp_indices
@@ -2835,55 +2917,74 @@ class TopologySwitcher:
             self.logger.error(f"Failed to find T_first_VP or T_second_VP using segment_to_triangle map")
             return result
         
-        # Find T_second_VP free edge
-        face_t_second = self.mesh.faces[T_second_VP_idx]
-        edges_t_second = [
-            tuple(sorted([face_t_second[0], face_t_second[1]])),
-            tuple(sorted([face_t_second[1], face_t_second[2]])),
-            tuple(sorted([face_t_second[2], face_t_second[0]]))
-        ]
+        # Find T_shared_edge_with_target first (needed for T_adjacent_to_T_second)
+        print("="*80)
+        print("PHASE 1B: TRIANGLE IDENTIFICATION (v4 fan-based logic)")
+        print("="*80)
+        self.logger.info("="*80)
+        self.logger.info("PHASE 1B: TRIANGLE IDENTIFICATION (v4 fan-based logic)")
+        self.logger.info("="*80)
         
-        t_second_free_edge = None
-        for edge in edges_t_second:
-            if edge not in self.partition.edge_to_varpoint:
-                t_second_free_edge = edge
-                break
-        
-        if t_second_free_edge is None:
-            self.logger.error(f"No free edge in T_second_VP {T_second_VP_idx}")
-            return result
-        
-        # Find T_adjacent_to_T_second
-        triangles_on_t_second_free = self.mesh_topology.edge_to_triangles.get(t_second_free_edge, [])
-        T_adjacent_to_T_second_idx = [t for t in triangles_on_t_second_free if t != T_second_VP_idx]
-        if len(T_adjacent_to_T_second_idx) != 1:
-            self.logger.error(f"Could not find unique T_adjacent_to_T_second")
-            return result
-        T_adjacent_to_T_second_idx = T_adjacent_to_T_second_idx[0]
-        
-        # Find T_shared_edge_with_target
         triangles_on_target_edge = self.mesh_topology.edge_to_triangles.get(target_edge, [])
         T_shared_edge_with_target_idx = [t for t in triangles_on_target_edge if t != target_triangle_idx]
         if len(T_shared_edge_with_target_idx) != 1:
             self.logger.error(f"Could not find unique T_shared_edge_with_target")
             return result
         T_shared_edge_with_target_idx = T_shared_edge_with_target_idx[0]
-        
-        self.logger.info(f"T_first_VP: {T_first_VP_idx}")
-        self.logger.info(f"T_second_VP: {T_second_VP_idx}")
-        self.logger.info(f"T_adjacent_to_T_second: {T_adjacent_to_T_second_idx}")
+        print(f"T_shared_edge_with_target: {T_shared_edge_with_target_idx}")
         self.logger.info(f"T_shared_edge_with_target: {T_shared_edge_with_target_idx}")
         
-        # Step 6: Find common_vertex_all_triangles
-        common_vertex = self._find_common_vertex_all_triangles(
+        # Find T_adjacent_to_T_second using fan geometry around common_vertex
+        # It must share edges with both T_second_VP and T_shared_edge_with_target
+        print(f"Finding T_adjacent_to_T_second using fan geometry around common_vertex {common_vertex}")
+        print(f"Must share edges with: T_second_VP={T_second_VP_idx}, T_shared_edge_with_target={T_shared_edge_with_target_idx}")
+        self.logger.info(f"Finding T_adjacent_to_T_second using fan geometry around common_vertex {common_vertex}")
+        self.logger.info(f"Must share edges with: T_second_VP={T_second_VP_idx}, T_shared_edge_with_target={T_shared_edge_with_target_idx}")
+        
+        T_adjacent_to_T_second_idx = self._find_triangle_in_fan(
+            common_vertex=common_vertex,
+            already_assigned=[
+                triple_triangle_idx, 
+                target_triangle_idx,
+                T_first_VP_idx, 
+                T_second_VP_idx,
+                T_shared_edge_with_target_idx
+            ],
+            must_share_edge_with=[T_second_VP_idx, T_shared_edge_with_target_idx]
+        )
+        
+        if T_adjacent_to_T_second_idx is None:
+            print(f"ERROR: Could not find T_adjacent_to_T_second in fan around vertex {common_vertex}")
+            self.logger.error(f"Could not find T_adjacent_to_T_second in fan around vertex {common_vertex}")
+            return result
+        
+        print(f"✓ T_first_VP: {T_first_VP_idx}")
+        print(f"✓ T_second_VP: {T_second_VP_idx}")
+        print(f"✓ T_adjacent_to_T_second: {T_adjacent_to_T_second_idx}")
+        print(f"✓ T_shared_edge_with_target: {T_shared_edge_with_target_idx}")
+        self.logger.info(f"✓ T_first_VP: {T_first_VP_idx}")
+        self.logger.info(f"✓ T_second_VP: {T_second_VP_idx}")
+        self.logger.info(f"✓ T_adjacent_to_T_second: {T_adjacent_to_T_second_idx}")
+        self.logger.info(f"✓ T_shared_edge_with_target: {T_shared_edge_with_target_idx}")
+        
+        # Step 6: Validate common_vertex is in all 6 triangles (sanity check)
+        validation_common_vertex = self._find_common_vertex_all_triangles(
             triple_triangle_idx, target_triangle_idx,
             T_first_VP_idx, T_second_VP_idx,
             T_adjacent_to_T_second_idx, T_shared_edge_with_target_idx
         )
-        if common_vertex is None:
+        if validation_common_vertex is None:
+            self.logger.error(f"Validation failed: computed common_vertex {common_vertex} not in all 6 triangles")
             return result
         
-        result['common_vertex'] = common_vertex
+        if validation_common_vertex != common_vertex:
+            self.logger.error(
+                f"Validation failed: computed common_vertex {common_vertex} != "
+                f"validation result {validation_common_vertex}"
+            )
+            return result
+        
+        self.logger.info(f"Validated common_vertex {common_vertex} present in all 6 triangles")
         
         # ========================================================================
         # PHASE 2: VP MIGRATIONS (Steps 7-10)
@@ -2900,7 +3001,25 @@ class TopologySwitcher:
         self.logger.info(f"Step 7: Moving vp_close_to_steiner {vp_close_to_steiner_idx} "
                         f"from {old_edge_vp_close} to target edge {target_edge}")
         
-        new_lambda_vp_close = 0.5  # Can be optimized later
+        # Use distance_preservation parameter (same as Steps 9 and 10)
+        if distance_preservation == 'preserve':
+            dist_vp_close = self._compute_distance_to_vertex(vp_close_to_steiner_idx, common_vertex)
+            new_lambda_vp_close = self._compute_lambda_for_distance(
+                target_edge, common_vertex, dist_vp_close
+            )
+            self.logger.debug(f"Preserving distance to common vertex {common_vertex}: {dist_vp_close:.6f}")
+        elif distance_preservation == 'midpoint':
+            new_lambda_vp_close = 0.5
+            self.logger.debug(f"Using midpoint placement (λ=0.5)")
+        else:
+            # Custom distance provided as string
+            try:
+                new_lambda_vp_close = float(distance_preservation)
+                self.logger.debug(f"Using custom distance {new_lambda_vp_close:.6f}")
+            except ValueError:
+                self.logger.warning(f"Invalid distance_preservation value '{distance_preservation}', using midpoint")
+                new_lambda_vp_close = 0.5
+        
         self._move_variable_point(vp_close_to_steiner_idx, target_edge, new_lambda_vp_close)
         
         # Step 8: Create steiner_VP at old position
@@ -2924,8 +3043,18 @@ class TopologySwitcher:
             lambda_migrating = self._compute_lambda_for_distance(
                 target_edge_migrating, common_vertex, dist_migrating
             )
-        else:
+            self.logger.debug(f"Preserving distance to common vertex {common_vertex}: {dist_migrating:.6f}")
+        elif distance_preservation == 'midpoint':
             lambda_migrating = 0.5
+            self.logger.debug(f"Using midpoint placement (λ=0.5)")
+        else:
+            # Custom distance provided as string
+            try:
+                lambda_migrating = float(distance_preservation)
+                self.logger.debug(f"Using custom distance {lambda_migrating:.6f}")
+            except ValueError:
+                self.logger.warning(f"Invalid distance_preservation value '{distance_preservation}', using midpoint")
+                lambda_migrating = 0.5
         
         self._move_variable_point(migrating_vp_idx, target_edge_migrating, lambda_migrating)
         
@@ -2933,13 +3062,72 @@ class TopologySwitcher:
         self.logger.info(f"Step 10: Moving first_level_VP {first_level_vp_idx} "
                         f"to free edge in T_second_VP")
         
+        # Find the free edge in T_second_VP
+        face_t_second = self.mesh.faces[T_second_VP_idx]
+        print(f"DEBUG: T_second_VP {T_second_VP_idx} vertices: {face_t_second}")
+        edges_t_second = [
+            tuple(sorted([face_t_second[0], face_t_second[1]])),
+            tuple(sorted([face_t_second[1], face_t_second[2]])),
+            tuple(sorted([face_t_second[2], face_t_second[0]]))
+        ]
+        
+        self.logger.debug(f"T_second_VP {T_second_VP_idx} edges: {edges_t_second}")
+        self.logger.debug(f"Common vertex: {common_vertex}")
+        print(f"DEBUG: T_second_VP edges: {edges_t_second}")
+        print(f"DEBUG: Common vertex: {common_vertex}")
+        print(f"DEBUG: edge_to_varpoint map:")
+        for edge in edges_t_second:
+            has_vp = edge in self.partition.edge_to_varpoint
+            contains_common = common_vertex in edge
+            print(f"  Edge {edge}: has_VP={has_vp}, contains_common_vertex={contains_common}")
+        
+        # First, find ALL free edges (no VPs)
+        free_edges = []
+        for edge in edges_t_second:
+            if edge not in self.partition.edge_to_varpoint:
+                contains_common = common_vertex in edge
+                free_edges.append((edge, contains_common))
+                self.logger.debug(f"  Free edge {edge}: contains common_vertex={contains_common}")
+        
+        if not free_edges:
+            self.logger.error(f"No free edge found in T_second_VP {T_second_VP_idx}")
+            return result
+        
+        # Prefer edge containing common_vertex, but fallback to any free edge
+        t_second_free_edge = None
+        for edge, contains_common in free_edges:
+            if contains_common:
+                t_second_free_edge = edge
+                self.logger.info(f"  Selected free edge {t_second_free_edge} (contains common_vertex {common_vertex})")
+                print(f"  Selected free edge {t_second_free_edge} (contains common_vertex {common_vertex})")
+                break
+        
+        if t_second_free_edge is None:
+            # Fallback: use first free edge (even if it doesn't contain common_vertex)
+            t_second_free_edge = free_edges[0][0]
+            self.logger.warning(
+                f"  No free edge contains common_vertex {common_vertex}. "
+                f"Using free edge {t_second_free_edge} anyway."
+            )
+            print(f"  WARNING: No free edge contains common_vertex {common_vertex}. Using free edge {t_second_free_edge} anyway.")
+        
         if distance_preservation == 'preserve':
             dist_first_level = self._compute_distance_to_vertex(first_level_vp_idx, common_vertex)
             lambda_first_level = self._compute_lambda_for_distance(
                 t_second_free_edge, common_vertex, dist_first_level
             )
-        else:
+            self.logger.debug(f"Preserving distance to common vertex {common_vertex}: {dist_first_level:.6f}")
+        elif distance_preservation == 'midpoint':
             lambda_first_level = 0.5
+            self.logger.debug(f"Using midpoint placement (λ=0.5)")
+        else:
+            # Custom distance provided as string
+            try:
+                lambda_first_level = float(distance_preservation)
+                self.logger.debug(f"Using custom distance {lambda_first_level:.6f}")
+            except ValueError:
+                self.logger.warning(f"Invalid distance_preservation value '{distance_preservation}', using midpoint")
+                lambda_first_level = 0.5
         
         self._move_variable_point(first_level_vp_idx, t_second_free_edge, lambda_first_level)
         
@@ -3134,7 +3322,7 @@ class TopologySwitcher:
                     if vp.edge not in ts.boundary_edges:
                         self.logger.warning(f"      ⚠️  VP edge {vp.edge} NOT in triangle's boundary_edges!")
             else:
-                self.logger.warning(f"Triangle {tri_idx}: NO triangle_segment found!")
+                self.logger.info(f"Triangle {tri_idx}: NO triangle_segment found (triangle transitioned from boundary to interior - expected after migration)")
         
         self.logger.info("="*80)
         
