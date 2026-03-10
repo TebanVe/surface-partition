@@ -50,6 +50,7 @@ from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.mesh_topology import MeshTopology
 from src.core.topology_switcher import TopologySwitcher
 from src.core.type1_component_analyzer import Type1ComponentAnalyzer
+from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
 from src.logging_config import get_logger, setup_logging
 
 
@@ -110,17 +111,20 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
     analysis_result = analyzer.run_full_analysis(
         boundary_tol=boundary_tol, 
         conflict_strategy='exclude_one',
-        build_migration_plan=True
+        build_migration_plan=True,
+        protect_type2=True  # Enable Type 2 protection (topology-based)
     )
     
     switcher_logger.setLevel(original_level)
     
     to_migrate = analysis_result['to_migrate']
     excluded = analysis_result['excluded']
+    type2_excluded = analysis_result.get('type2_excluded', [])
     migration_plan = analysis_result.get('migration_plan', [])
     
     logger.info(f"\nComponents selected for migration: {len(to_migrate)}")
-    logger.info(f"Components excluded: {len(excluded)}")
+    logger.info(f"Components excluded (conflicts): {len(excluded)}")
+    logger.info(f"Components excluded (Type 2 protection): {len(type2_excluded)}")
     if migration_plan:
         logger.info(f"Migration plan entries: {len(migration_plan)}")
     logger.info("="*80)
@@ -200,7 +204,7 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
 
 
 def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handler=None, 
-                          distance_preservation='preserve'):
+                          distance_preservation='preserve', migration_history=None, iteration_number=None):
     """
     Apply Type 2 migrations for boundary triple points.
     
@@ -213,10 +217,13 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
         logger: Logger instance
         steiner_handler: Optional pre-created SteinerHandler (for efficiency)
         distance_preservation: VP placement strategy after migration
+        migration_history: Optional Type2MigrationHistory object (for reverse migrations)
+        iteration_number: Current iteration number (for history recording)
     
     Returns:
         dict with keys:
             - migrations_applied: int
+            - reversed_migrations: int
             - failed: bool
             - failure_type: str (if failed=True)
             - triple_point: TriplePoint (if failed=True)
@@ -228,16 +235,24 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
     logger.info("="*80)
     logger.info(f"APPLYING TYPE 2 MIGRATIONS ({len(tp_candidates)} candidates)")
     logger.info(f"  Distance preservation: {distance_preservation}")
+    if migration_history is not None:
+        logger.info(f"  Migration history: {len(migration_history.records)} triple points tracked")
+        logger.info(f"  Iteration: {iteration_number}")
     logger.info("="*80)
     
     if len(tp_candidates) == 0:
         logger.info("No Type 2 migrations to apply")
         logger.info("="*80)
-        return {'migrations_applied': 0, 'failed': False}
+        return {'migrations_applied': 0, 'reversed_migrations': 0, 'failed': False}
     
     # Create topology objects
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
+    
+    # Attach migration history and set current iteration
+    if migration_history is not None:
+        switcher.type2_migration_history = migration_history
+        migration_history.current_iteration = iteration_number
     
     # Reuse steiner_handler if provided
     if steiner_handler is None:
@@ -245,6 +260,7 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
         steiner_handler = SteinerHandler(mesh, partition)
     
     migrations_applied = 0
+    reversed_migrations = 0
     
     # Temporarily suppress verbose logging
     import logging
@@ -278,7 +294,11 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
             )
             
             if result['success']:
-                logger.info(f"  ✓ Triple point {tp_idx} (triangle {tp.triangle_idx}): Migration successful")
+                if result.get('reversed', False):
+                    logger.info(f"  ✓ Triple point {tp_idx} (triangle {tp.triangle_idx}): REVERSE migration successful (reversed {result.get('num_reversed', 1)} migration(s))")
+                    reversed_migrations += result.get('num_reversed', 1)
+                else:
+                    logger.info(f"  ✓ Triple point {tp_idx} (triangle {tp.triangle_idx}): Forward migration successful")
                 migrations_applied += 1
             else:
                 # RETURN IMMEDIATELY ON FIRST FAILURE
@@ -286,6 +306,7 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
                 contour_logger.setLevel(original_contour_level)
                 return {
                     'migrations_applied': migrations_applied,
+                    'reversed_migrations': reversed_migrations,
                     'failed': True,
                     'failure_type': 'type2',
                     'triple_point': tp,
@@ -300,6 +321,7 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
             contour_logger.setLevel(original_contour_level)
             return {
                 'migrations_applied': migrations_applied,
+                'reversed_migrations': reversed_migrations,
                 'failed': True,
                 'failure_type': 'type2',
                 'triple_point': tp,
@@ -316,12 +338,15 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
     logger.info("")
     logger.info("="*80)
     logger.info(f"Type 2 migrations completed: {migrations_applied}/{len(tp_candidates)}")
+    if reversed_migrations > 0:
+        logger.info(f"  Forward migrations: {migrations_applied - reversed_migrations}")
+        logger.info(f"  Reverse migrations: {reversed_migrations}")
     logger.info("="*80)
     
-    return {'migrations_applied': migrations_applied, 'failed': False}
+    return {'migrations_applied': migrations_applied, 'reversed_migrations': reversed_migrations, 'failed': False}
 
 
-def export_intermediate_state(partition, iteration_number, base_output_path, opt_info, logger):
+def export_intermediate_state(partition, iteration_number, base_output_path, opt_info, logger, migration_history=None, boundary_tol=None):
     """
     Export intermediate partition state in exact format as test_migration_and_continue.py.
     
@@ -333,11 +358,17 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
         base_output_path: Base path without extension (e.g., "results/run_xyz/solution_level0")
         opt_info: Dictionary with optimization results
         logger: Logger instance
+        migration_history: Optional Type2MigrationHistory object to save
+        boundary_tol: Optional boundary tolerance value to include in filename
     
     Returns:
         str: Path to exported file
     """
-    output_path = f"{base_output_path}_iteration{iteration_number}_refined_contours.h5"
+    # Construct filename with boundary_tol if provided
+    if boundary_tol is not None:
+        output_path = f"{base_output_path}_btol{boundary_tol}_iteration{iteration_number}_refined_contours.h5"
+    else:
+        output_path = f"{base_output_path}_iteration{iteration_number}_refined_contours.h5"
     
     logger.info("")
     logger.info("="*80)
@@ -355,6 +386,10 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
     with h5py.File(output_path, 'w') as f:
         # Save lambda parameters
         f.create_dataset('lambda_parameters', data=lambda_opt)
+        
+        # Save VP edge associations (critical for correct lambda-edge matching on reload)
+        vp_edges = np.array([vp.edge for vp in partition.variable_points], dtype=np.int64)
+        f.create_dataset('vp_edges', data=vp_edges)
         
         # Save indicator functions (critical for visualization after migrations)
         f.create_dataset('indicator_functions', data=indicator_functions)
@@ -375,6 +410,15 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
         opt_grp.attrs['perimeter_reduction'] = opt_info['perimeter_reduction']
         opt_grp.attrs['percent_reduction'] = opt_info['percent_reduction']
         opt_grp.create_dataset('constraint_violations', data=opt_info['final_constraint_violations'])
+        
+        # Save Type 2 migration history (NEW!)
+        # NOTE: Currently saves EVERY iteration for testing/debugging
+        #       See "Future Optimization" section in TYPE2_REVERSE_MIGRATION_IMPLEMENTATION_PLAN.md
+        if migration_history is not None and len(migration_history.records) > 0:
+            save_type2_migration_history(f, migration_history)
+            logger.info(f"✓ Saved migration history: {len(migration_history.records)} triple points tracked")
+            for orig_tri, record in migration_history.records.items():
+                logger.debug(f"  Triangle {orig_tri}: {record.triangle_sequence}")
     
     logger.info("✓ State exported successfully")
     logger.info(f"  {len(lambda_opt)} lambda parameters saved")
@@ -511,9 +555,13 @@ Example usage:
                        choices=['SLSQP', 'trust-constr'],
                        help='Optimization method (default: SLSQP)')
     
-    parser.add_argument('--log-level', type=str, default='INFO',
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug logging (verbose output with detailed diagnostics)')
+    
+    parser.add_argument('--log-level', type=str, default=None,
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level (default: INFO)')
+                       help='Logging level (default: INFO, or DEBUG if --debug flag is used). '
+                            'Note: --debug flag overrides this setting.')
     
     args = parser.parse_args()
     
@@ -530,9 +578,19 @@ Example usage:
             print("Must be 'preserve', 'midpoint', or a number between 0.0 and 1.0")
             return 1
     
-    # Setup logging
-    setup_logging(log_level=args.log_level)
+    # Setup logging: --debug flag takes precedence over --log-level
+    if args.debug:
+        log_level = 'DEBUG'
+    elif args.log_level:
+        log_level = args.log_level
+    else:
+        log_level = 'INFO'
+    
+    setup_logging(log_level=log_level)
     logger = get_logger(__name__)
+    
+    if args.debug:
+        logger.info("Debug mode enabled - verbose logging active")
     
     logger.info("="*80)
     logger.info("Iterative Perimeter Refinement with Automatic Migrations")
@@ -555,7 +613,7 @@ Example usage:
     base_output = args.output.replace('_refined_contours.h5', '').replace('.h5', '')
     
     logger.info(f"Output file: {args.output}")
-    logger.info(f"Iteration files: {base_output}_iteration{{N}}_refined_contours.h5")
+    logger.info(f"Iteration files: {base_output}_btol{args.boundary_tol}_iteration{{N}}_refined_contours.h5")
     
     # Create output directory if needed
     output_dir = os.path.dirname(args.output)
@@ -615,6 +673,18 @@ Example usage:
     logger.info(f"Convergence tolerance: {args.tolerance}")
     logger.info(f"Boundary detection tolerance: {args.boundary_tol}")
     logger.info("="*80)
+    
+    # -------------------------------------------------------------------------
+    # Initialize Type 2 Migration History (BEFORE loop)
+    # -------------------------------------------------------------------------
+    from src.core.type2_migration_history import Type2MigrationHistory
+    
+    migration_history = Type2MigrationHistory()
+    logger.info("Initialized empty Type 2 migration history")
+    
+    # -------------------------------------------------------------------------
+    # Main iteration loop
+    # -------------------------------------------------------------------------
     
     global_start_time = time.time()
     converged = False
@@ -686,7 +756,7 @@ Example usage:
             
             # Export current state
             failure_file = export_intermediate_state(
-                partition, iteration_number, base_output, opt_info, logger
+                partition, iteration_number, base_output, opt_info, logger, migration_history, args.boundary_tol
             )
             logger.error(f"State saved to: {failure_file}")
             return 1
@@ -699,7 +769,7 @@ Example usage:
         logger.info("-"*80)
         
         iteration_file = export_intermediate_state(
-            partition, iteration_number, base_output, opt_info, logger
+            partition, iteration_number, base_output, opt_info, logger, migration_history, args.boundary_tol
         )
         iteration_files.append(iteration_file)
         
@@ -752,7 +822,9 @@ Example usage:
             type2_result = apply_type2_migrations(
                 partition, mesh, type2_candidates, logger,
                 steiner_handler=optimizer.steiner_handler,
-                distance_preservation=args.distance_preservation
+                distance_preservation=args.distance_preservation,
+                migration_history=migration_history,
+                iteration_number=iteration_number
             )
             
             # Check for failure

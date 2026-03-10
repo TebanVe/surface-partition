@@ -39,29 +39,58 @@ def load_partition_from_refined_file(refined_path, verbose=False):
         print(f"  Refined: {refined_path}")
     
     # Derive base solution path
+    # Remove _refined_contours suffix
     base_solution_path = refined_path.replace('_refined_contours.h5', '.h5')
     
     # If iteration file and base doesn't exist, fall back to original
     if not os.path.exists(base_solution_path):
         if 'iteration' in base_solution_path:
-            # Try original base file (without _iterationN suffix)
+            # Try removing _iterationN suffix
             original_base = re.sub(r'_iteration\d+\.h5$', '.h5', base_solution_path)
-            if os.path.exists(original_base):
+            
+            # Also try removing _btol* pattern (boundary tolerance may be in refined filename but not in base)
+            if not os.path.exists(original_base):
+                # Match _btol followed by a number (with optional decimal/scientific notation)
+                # but stop before the .h5 extension
+                original_base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', original_base)
+                if os.path.exists(original_base_no_btol):
+                    if verbose:
+                        print(f"  Base solution (with iteration & btol): {base_solution_path} (not found)")
+                        print(f"  Base solution (with btol): {original_base} (not found)")
+                        print(f"  Using original base (no btol): {original_base_no_btol}")
+                    base_solution_path = original_base_no_btol
+                elif os.path.exists(original_base):
+                    if verbose:
+                        print(f"  Base solution (iteration-specific): {base_solution_path} (not found)")
+                        print(f"  Using original base: {original_base}")
+                    base_solution_path = original_base
+                else:
+                    raise FileNotFoundError(
+                        f"Neither iteration nor original base solution file found:\n"
+                        f"  Tried: {base_solution_path}\n"
+                        f"  Tried: {original_base}\n"
+                        f"  Tried: {original_base_no_btol}"
+                    )
+            else:
                 if verbose:
                     print(f"  Base solution (iteration-specific): {base_solution_path} (not found)")
                     print(f"  Using original base: {original_base}")
                 base_solution_path = original_base
+        else:
+            # Not an iteration file, but might still have btol in the name
+            base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', base_solution_path)
+            if os.path.exists(base_no_btol):
+                if verbose:
+                    print(f"  Base solution (with btol): {base_solution_path} (not found)")
+                    print(f"  Using base (no btol): {base_no_btol}")
+                base_solution_path = base_no_btol
             else:
                 raise FileNotFoundError(
-                    f"Neither iteration nor original base solution file found:\n"
+                    f"Base solution file not found:\n"
                     f"  Tried: {base_solution_path}\n"
-                    f"  Tried: {original_base}"
+                    f"  Tried: {base_no_btol}\n"
+                    f"The refined_contours.h5 file needs the corresponding base solution file."
                 )
-        else:
-            raise FileNotFoundError(
-                f"Base solution file not found: {base_solution_path}\n"
-                f"The refined_contours.h5 file needs the corresponding base solution file."
-            )
     else:
         if verbose:
             print(f"  Base solution: {base_solution_path}")
@@ -129,38 +158,64 @@ def load_partition_from_refined_file(refined_path, verbose=False):
     
     # Load optimized λ parameters from refined file
     with h5py.File(refined_path, 'r') as f:
-        if 'lambda_parameters' in f:
-            lambda_opt = f['lambda_parameters'][:]
+        if 'lambda_parameters' not in f:
+            raise ValueError("No lambda_parameters found in refined file")
+        
+        lambda_opt = f['lambda_parameters'][:]
+        has_vp_edges = 'vp_edges' in f
+        saved_edges = f['vp_edges'][:] if has_vp_edges else None
+        
+        # Verify VP count match
+        if len(lambda_opt) != len(partition.variable_points):
+            is_iteration_file = 'iteration' in os.path.basename(refined_path)
             
-            # Verify match
-            if len(lambda_opt) != len(partition.variable_points):
-                # Check if this is an iteration file without stored indicators
-                is_iteration_file = 'iteration' in os.path.basename(refined_path)
-                
-                error_msg = (
-                    f"Mismatch: refined file has {len(lambda_opt)} λ parameters, "
-                    f"but partition has {len(partition.variable_points)} VPs."
+            error_msg = (
+                f"Mismatch: refined file has {len(lambda_opt)} λ parameters, "
+                f"but partition has {len(partition.variable_points)} VPs."
+            )
+            
+            if is_iteration_file and not has_stored_indicators:
+                error_msg += (
+                    f"\n\nThis iteration file was created before indicator functions were "
+                    f"added to the export format.\n"
+                    f"Solution: Re-run test_migration_and_continue.py to generate a new "
+                    f"iteration file with updated indicator functions."
                 )
-                
-                if is_iteration_file and not has_stored_indicators:
-                    error_msg += (
-                        f"\n\nThis iteration file was created before indicator functions were "
-                        f"added to the export format.\n"
-                        f"Solution: Re-run test_migration_and_continue.py to generate a new "
-                        f"iteration file with updated indicator functions."
-                    )
-                else:
-                    error_msg += (
-                        f"\n\nThis likely means the partition state changed (migrations) but "
-                        f"indicator functions were not saved in the refined file."
-                    )
-                
-                raise ValueError(error_msg)
+            else:
+                error_msg += (
+                    f"\n\nThis likely means the partition state changed (migrations) but "
+                    f"indicator functions were not saved in the refined file."
+                )
             
+            raise ValueError(error_msg)
+        
+        if has_vp_edges:
+            # Edge-keyed assignment: match lambdas to VPs by edge, not by index.
+            # After migrations, the VP list order in memory diverges from the
+            # sorted-edge order used by _initialize_from_boundary_topology.
+            edge_to_lambda = {}
+            for i in range(len(lambda_opt)):
+                edge_key = (int(saved_edges[i, 0]), int(saved_edges[i, 1]))
+                edge_to_lambda[edge_key] = float(lambda_opt[i])
+            
+            matched = 0
+            unmatched = 0
+            for vp in partition.variable_points:
+                if vp.edge in edge_to_lambda:
+                    vp.lambda_param = edge_to_lambda[vp.edge]
+                    matched += 1
+                else:
+                    unmatched += 1
+            
+            if verbose:
+                print(f"  ✓ Applied λ values by edge key: {matched} matched, {unmatched} unmatched")
+            if unmatched > 0 and verbose:
+                print(f"  ⚠ {unmatched} VPs had no matching edge in saved data (kept at λ=0.5)")
+        else:
+            # Fallback: apply by index (backward compatibility with old files)
             partition.set_variable_vector(lambda_opt)
             if verbose:
-                print(f"  ✓ Applied optimized λ values: {len(lambda_opt)} parameters")
-        else:
-            raise ValueError("No lambda_parameters found in refined file")
+                print(f"  ✓ Applied optimized λ values by index: {len(lambda_opt)} parameters")
+                print(f"    (No vp_edges in file — using legacy index-based assignment)")
     
     return mesh, partition

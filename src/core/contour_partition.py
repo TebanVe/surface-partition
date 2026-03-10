@@ -533,18 +533,11 @@ class PartitionContour:
         self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
         self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
         
-        # CRITICAL FIX: Always rebuild segment connectivity to keep boundary_segments
-        # synchronized with triangle_segments after topology switches.
-        # 
-        # While VP connectivity (which VPs connect to which) doesn't change during
-        # topology switches, boundary_segments must be rebuilt because:
-        # 1. classify_all_segments() iterates over boundary_segments to compute crossings
-        # 2. Visualization uses boundary_segments for accurate rendering
-        # 3. cell_pair needs to be recomputed from current vp.belongs_to_cells
-        # 
-        # Without this rebuild, boundary_segments becomes stale after switches, causing
-        # visualization to render OLD boundary positions even though VPs have moved.
-        self._build_segment_connectivity()
+        # Force a full rebuild of boundary_segments from current triangle_segments.
+        # This is critical because Type 1 migrations move VPs to new edges without
+        # updating boundary_segments, causing stale VP-VP connectivity to accumulate.
+        # Without force_rebuild, Mode 2 would preserve stale connectivity.
+        self._build_segment_connectivity(force_rebuild=True)
         
         # Rebuild segment_to_triangle map (after triangle_segments updated)
         self._build_segment_to_triangle_map()
@@ -625,25 +618,30 @@ class PartitionContour:
         self.logger.info(f"    {num_one_vp} with 1 VP, {num_two_vp} with 2 VPs, {num_three_vp} with 3 VPs")
 
         
-    def _build_segment_connectivity(self):
+    def _build_segment_connectivity(self, force_rebuild: bool = False):
         """
         Build or update explicit segment connectivity.
         
+        Args:
+            force_rebuild: If True, discard existing boundary_segments and rebuild
+                from scratch using current triangle_segments. This is necessary after
+                Type 1 migrations which move VPs to new edges without updating
+                boundary_segments, causing stale VP-VP connectivity to accumulate.
+        
         TWO MODES OF OPERATION:
         
-        Mode 1 - Initial Build (boundary_segments is empty):
-            Build from triangle_segments as before. This establishes initial VP-VP connectivity.
+        Mode 1 - Full Build (boundary_segments is empty, or force_rebuild=True):
+            Build from triangle_segments. This establishes correct VP-VP connectivity
+            that reflects the current VP positions.
         
-        Mode 2 - Update After Topology Switch (boundary_segments exists):
+        Mode 2 - Update (boundary_segments exists and force_rebuild=False):
             PRESERVE existing segment list (don't clear). Only update cell_pair attributes.
-            This is CRITICAL because:
-            - Type 1 switches: VP moves to new edge, but segment connectivity unchanged.
-              The segment now crosses intermediate triangles. Clearing would lose this segment.
-            - Type 2 switches: _update_segments_for_type2_switch() explicitly adds/removes segments.
-              Clearing would destroy those explicit changes.
-        
-        After topology switches, boundary_segments are preserved with updated connectivity.
+            Use only within a single migration step where connectivity is known to be
+            correct (e.g., Type 2 direct segment manipulation).
         """
+        if force_rebuild:
+            self.boundary_segments = []
+
         if self.boundary_segments:
             # MODE 2: Update existing segments (after topology switch)
             # Preserve connectivity, only update cell_pair attributes

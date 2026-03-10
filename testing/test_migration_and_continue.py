@@ -67,6 +67,8 @@ from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.mesh_topology import MeshTopology
 from src.core.topology_switcher import TopologySwitcher
 from src.core.type1_component_analyzer import Type1ComponentAnalyzer
+from src.core.type2_migration_history import Type2MigrationHistory
+from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
 from src.logging_config import get_logger, setup_logging
 
 
@@ -114,7 +116,8 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
     analysis_result = analyzer.run_full_analysis(
         boundary_tol=boundary_tol, 
         conflict_strategy='exclude_one',
-        build_migration_plan=True  # Request pre-computed migration plan
+        build_migration_plan=True,  # Request pre-computed migration plan
+        protect_type2=True  # Enable Type 2 protection (topology-based)
     )
     
     # Restore logging level
@@ -122,13 +125,61 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
     
     to_migrate = analysis_result['to_migrate']
     excluded = analysis_result['excluded']
+    type2_excluded = analysis_result.get('type2_excluded', [])
     migration_plan = analysis_result.get('migration_plan', [])
     
     logger.info(f"\nComponents selected for migration: {len(to_migrate)}")
-    logger.info(f"Components excluded: {len(excluded)}")
+    logger.info(f"Components excluded (conflicts): {len(excluded)}")
+    logger.info(f"Components excluded (Type 2 protection): {len(type2_excluded)}")
     if migration_plan:
         logger.info(f"Migration plan entries: {len(migration_plan)}")
     logger.info("="*80)
+    
+    # Log boundary_segment consistency check before Type 1 migrations
+    # This helps diagnose whether Type 2 direct manipulation left stale segments
+    canonical_pairs = set()
+    for ts in partition.triangle_segments:
+        vi = ts.var_point_indices
+        if len(vi) == 2:
+            canonical_pairs.add((min(vi[0], vi[1]), max(vi[0], vi[1])))
+        elif len(vi) == 3:
+            for a in range(3):
+                for b in range(a + 1, 3):
+                    canonical_pairs.add((min(vi[a], vi[b]), max(vi[a], vi[b])))
+    
+    live_pairs = set()
+    for seg in partition.boundary_segments:
+        live_pairs.add((min(seg.vp_idx_1, seg.vp_idx_2), max(seg.vp_idx_1, seg.vp_idx_2)))
+    
+    extra_in_live = live_pairs - canonical_pairs
+    missing_in_live = canonical_pairs - live_pairs
+    
+    if extra_in_live or missing_in_live:
+        logger.warning(f"⚠ PRE-TYPE1 boundary_segments DRIFT:")
+        logger.warning(f"  Canonical (from triangle_segments): {len(canonical_pairs)} pairs")
+        logger.warning(f"  Live (boundary_segments): {len(live_pairs)} pairs")
+        if extra_in_live:
+            logger.warning(f"  Phantom segments ({len(extra_in_live)}):")
+            for pair in sorted(extra_in_live):
+                logger.warning(f"    VP {pair[0]} ↔ VP {pair[1]}")
+        if missing_in_live:
+            logger.warning(f"  Missing segments ({len(missing_in_live)}):")
+            for pair in sorted(missing_in_live):
+                logger.warning(f"    VP {pair[0]} ↔ VP {pair[1]}")
+    else:
+        logger.info(f"✓ PRE-TYPE1 boundary_segments consistent: {len(live_pairs)} pairs match")
+    
+    # Log boundary_segments for each migration plan component's VPs
+    for plan_entry in migration_plan:
+        aux = plan_entry['auxiliary_component']
+        comp_idx = plan_entry['component']['index']
+        aux_set = set(aux)
+        relevant_segs = []
+        for seg in partition.boundary_segments:
+            if seg.vp_idx_1 in aux_set or seg.vp_idx_2 in aux_set:
+                relevant_segs.append((seg.vp_idx_1, seg.vp_idx_2))
+        logger.debug(f"  Component {comp_idx} aux={aux}: "
+                     f"{len(relevant_segs)} boundary_segments touching these VPs: {relevant_segs}")
     
     if not migration_plan:
         logger.info("\n⚠ No components selected for migration after analysis")
@@ -153,27 +204,51 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
         comp = plan_entry['component']
         comp_idx = comp['index']
         
+        # Pre-execution revalidation: verify auxiliary VPs are still on edges
+        # incident to the target vertex (earlier migrations may have moved neighbors)
+        target_vertex = comp['target_vertex']
+        aux_vps = plan_entry['auxiliary_component']
+        migrating_vp = plan_entry['migrating_vp']
+        left_nb = plan_entry['left_neighbor']
+        right_nb = plan_entry['right_neighbor']
+        
+        skip_migration = False
+        for vp_idx in aux_vps:
+            vp = partition.variable_points[vp_idx]
+            if target_vertex not in vp.edge:
+                logger.warning(f"  ⚠ Component {comp_idx}: VP {vp_idx} is on edge {vp.edge} "
+                             f"which does NOT contain target vertex {target_vertex} — "
+                             f"skipping (invalidated by earlier migration)")
+                skip_migration = True
+                break
+        
+        if skip_migration:
+            failures.append((comp_idx, 'Pre-execution revalidation failed (VP edge no longer incident to target vertex)'))
+            continue
+        
         try:
             # Use pre-computed migration details (efficient path)
             result = switcher.apply_type1_switch_v2(
                 component=comp,
                 distance_preservation=distance_preservation,
-                migrating_vp=plan_entry['migrating_vp'],
-                auxiliary_component=plan_entry['auxiliary_component'],
-                left_neighbor=plan_entry['left_neighbor'],
-                right_neighbor=plan_entry['right_neighbor']
+                migrating_vp=migrating_vp,
+                auxiliary_component=aux_vps,
+                left_neighbor=left_nb,
+                right_neighbor=right_nb
             )
             
             if result['success']:
-                # Brief success message
                 logger.info(f"  ✓ Component {comp_idx}: Migration successful")
                 migrations_applied += 1
+                
+                # Rebuild boundary_segments after each migration so subsequent
+                # migrations see accurate segment connectivity
+                partition.rebuild_triangle_segments_from_current_vps()
             else:
-                # Detailed failure message
-                logger.warning(f"\n  ✗ Component {comp_idx}: Migration FAILED")
-                logger.warning(f"    VPs: {comp['vp_indices']}")
-                logger.warning(f"    Target vertex: {comp['target_vertex']}")
-                logger.warning(f"    Error: {result.get('error', 'Unknown error')}")
+                logger.error(f"\n  ✗ Component {comp_idx}: Migration FAILED")
+                logger.error(f"    VPs: {comp['vp_indices']}")
+                logger.error(f"    Target vertex: {comp['target_vertex']}")
+                logger.error(f"    Error: {result.get('error', 'Unknown error')}")
                 failures.append((comp_idx, result.get('error', 'Unknown')))
         
         except Exception as e:
@@ -202,7 +277,7 @@ def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=
 
 
 def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handler=None, 
-                          distance_preservation='preserve'):
+                          distance_preservation='preserve', migration_history=None, iteration_number=None):
     """Apply Type 2 migrations for boundary triple points.
     
     Args:
@@ -212,11 +287,15 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
         logger: Logger instance
         steiner_handler: Optional pre-created SteinerHandler (for efficiency)
         distance_preservation: VP placement strategy after migration
+        migration_history: Optional Type2MigrationHistory object (for reverse migrations)
+        iteration_number: Current iteration number (for history recording)
     """
     logger.info("")
     logger.info("="*80)
     logger.info(f"APPLYING TYPE 2 MIGRATIONS ({len(tp_candidates)} candidates)")
     logger.info(f"  Distance preservation: {distance_preservation}")
+    if migration_history is not None:
+        logger.info(f"  Migration history: {len(migration_history.records)} triple points tracked")
     logger.info("="*80)
     
     if len(tp_candidates) == 0:
@@ -227,6 +306,12 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
     # Create topology objects
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
+    
+    # Attach migration history if provided
+    if migration_history is not None:
+        switcher.type2_migration_history = migration_history
+        migration_history.current_iteration = iteration_number
+        logger.info(f"Attached migration history (iteration {iteration_number})")
     
     # Reuse steiner_handler if provided, otherwise create new
     if steiner_handler is None:
@@ -261,6 +346,8 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
             continue
         
         try:
+            seg_count_before = len(partition.boundary_segments)
+            
             result = switcher.apply_type2_switch_v4(
                 steiner_handler=steiner_handler,
                 triple_point_idx=tp_idx,
@@ -268,16 +355,54 @@ def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handl
             )
             
             if result['success']:
-                # Brief success message
+                seg_count_after = len(partition.boundary_segments)
                 logger.info(f"  ✓ Triple point {tp_idx} (triangle {tp.triangle_idx}): Migration successful")
+                logger.info(f"    boundary_segments: {seg_count_before} → {seg_count_after} "
+                           f"(net {seg_count_after - seg_count_before:+d})")
+                
+                # Consistency check: compare boundary_segments VP pairs
+                # against what triangle_segments would produce from scratch
+                canonical_pairs = set()
+                for ts in partition.triangle_segments:
+                    vi = ts.var_point_indices
+                    if len(vi) == 2:
+                        canonical_pairs.add((min(vi[0], vi[1]), max(vi[0], vi[1])))
+                    elif len(vi) == 3:
+                        for a in range(3):
+                            for b in range(a + 1, 3):
+                                canonical_pairs.add((min(vi[a], vi[b]), max(vi[a], vi[b])))
+                
+                live_pairs = set()
+                for seg in partition.boundary_segments:
+                    live_pairs.add((min(seg.vp_idx_1, seg.vp_idx_2), max(seg.vp_idx_1, seg.vp_idx_2)))
+                
+                extra_in_live = live_pairs - canonical_pairs
+                missing_in_live = canonical_pairs - live_pairs
+                
+                if extra_in_live or missing_in_live:
+                    logger.warning(f"    ⚠ boundary_segments DRIFT detected after Type 2 tp={tp_idx}:")
+                    if extra_in_live:
+                        logger.warning(f"      Phantom segments (in boundary_segments but not triangle_segments): "
+                                      f"{len(extra_in_live)}")
+                        for pair in sorted(extra_in_live)[:5]:
+                            logger.warning(f"        VP {pair[0]} ↔ VP {pair[1]}")
+                    if missing_in_live:
+                        logger.warning(f"      Missing segments (in triangle_segments but not boundary_segments): "
+                                      f"{len(missing_in_live)}")
+                        for pair in sorted(missing_in_live)[:5]:
+                            logger.warning(f"        VP {pair[0]} ↔ VP {pair[1]}")
+                else:
+                    logger.info(f"    ✓ boundary_segments consistent with triangle_segments "
+                               f"({len(live_pairs)} pairs match)")
+                
                 migrations_applied += 1
             else:
-                # Detailed failure message
-                logger.warning(f"\n  ✗ Triple point {tp_idx}: Migration FAILED")
-                logger.warning(f"    Triangle: {tp.triangle_idx}")
-                logger.warning(f"    VPs: {tp.var_point_indices}")
-                logger.warning(f"    Cells: {tp.cell_indices}")
-                logger.warning(f"    Error: {result.get('error', 'Unknown error')}")
+                # Detailed failure message (ERROR - operation failed)
+                logger.error(f"\n  ✗ Triple point {tp_idx}: Migration FAILED")
+                logger.error(f"    Triangle: {tp.triangle_idx}")
+                logger.error(f"    VPs: {tp.var_point_indices}")
+                logger.error(f"    Cells: {tp.cell_indices}")
+                logger.error(f"    Error: {result.get('error', 'Unknown error')}")
                 failures.append((tp_idx, result.get('error', 'Unknown')))
         
         except Exception as e:
@@ -379,14 +504,70 @@ def run_optimization_with_optimizer(optimizer, target_area, max_iter, tolerance,
     return result, opt_info
 
 
-def export_results(partition, opt_info, output_path, logger):
+def _check_indicator_vp_consistency(partition, mesh, logger):
+    """
+    Roundtrip consistency check: verify that partition.indicator_functions
+    produces exactly the same set of boundary edges (and thus VP count) as
+    the live partition.variable_points.
+
+    This catches the case where topology migrations updated VP edges in memory
+    but forgot to flip the corresponding mesh-vertex labels in indicator_functions.
+
+    Returns True if consistent, False if a mismatch is detected.
+    """
+    import numpy as np
+    from src.find_contours import ContourAnalyzer
+
+    logger.info("  Running indicator_functions ↔ VP roundtrip consistency check...")
+
+    # Reconstruct boundary edges purely from indicator_functions
+    vertex_labels = np.argmax(partition.indicator_functions, axis=1)
+    reconstructed_edges = set()
+    for face in mesh.faces:
+        v0, v1, v2 = face
+        l0, l1, l2 = vertex_labels[v0], vertex_labels[v1], vertex_labels[v2]
+        if l0 != l1:
+            reconstructed_edges.add(tuple(sorted((v0, v1))))
+        if l1 != l2:
+            reconstructed_edges.add(tuple(sorted((v1, v2))))
+        if l0 != l2:
+            reconstructed_edges.add(tuple(sorted((v0, v2))))
+
+    # Collect edges from live VPs
+    live_edges = {vp.edge for vp in partition.variable_points}
+
+    only_in_reconstructed = reconstructed_edges - live_edges
+    only_in_live = live_edges - reconstructed_edges
+
+    if only_in_reconstructed or only_in_live:
+        logger.error("  ✗ CONSISTENCY CHECK FAILED: indicator_functions do not match live VPs")
+        logger.error(f"    Live VPs      : {len(live_edges)} unique edges")
+        logger.error(f"    Reconstructed : {len(reconstructed_edges)} unique edges from indicator_functions")
+        logger.error(f"    Edges in indicator_functions but NOT in live VPs ({len(only_in_reconstructed)}): "
+                     f"{sorted(only_in_reconstructed)[:10]}{'...' if len(only_in_reconstructed) > 10 else ''}")
+        logger.error(f"    Edges in live VPs but NOT in indicator_functions ({len(only_in_live)}): "
+                     f"{sorted(only_in_live)[:10]}{'...' if len(only_in_live) > 10 else ''}")
+        logger.error("  *** This will cause a VP count mismatch when the file is reloaded! ***")
+        return False
+    else:
+        logger.info(f"  ✓ Consistent: {len(live_edges)} boundary edges match in both live VPs and indicator_functions")
+        return True
+
+
+def export_results(partition, opt_info, output_path, logger, migration_history=None, mesh=None):
     """Export results to HDF5 file in same format as input, including updated indicator functions."""
     logger.info("")
     logger.info("="*80)
     logger.info("EXPORTING RESULTS")
     logger.info("="*80)
     logger.info(f"Output file: {output_path}")
-    
+
+    # Run consistency check before writing (requires mesh for face iteration)
+    if mesh is not None:
+        _check_indicator_vp_consistency(partition, mesh, logger)
+    else:
+        logger.warning("  Skipping consistency check: mesh not provided to export_results")
+
     # Get optimized lambda parameters
     lambda_opt = partition.get_variable_vector()
     
@@ -398,6 +579,10 @@ def export_results(partition, opt_info, output_path, logger):
         # Save lambda parameters (same format as input)
         f.create_dataset('lambda_parameters', data=lambda_opt)
         
+        # Save VP edge associations (critical for correct lambda-edge matching on reload)
+        vp_edges = np.array([vp.edge for vp in partition.variable_points], dtype=np.int64)
+        f.create_dataset('vp_edges', data=vp_edges)
+        
         # Save indicator functions (critical for visualization after migrations)
         f.create_dataset('indicator_functions', data=indicator_functions)
         
@@ -408,6 +593,11 @@ def export_results(partition, opt_info, output_path, logger):
         f.attrs['optimization_success'] = opt_info['success']
         f.attrs['optimization_iterations'] = opt_info['n_iterations']
         f.attrs['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Save Type 2 migration history (NEW!)
+        if migration_history is not None and len(migration_history.records) > 0:
+            save_type2_migration_history(f, migration_history)
+            logger.info(f"✓ Saved migration history: {len(migration_history.records)} triple points tracked")
         
         # Save optimization info
         opt_grp = f.create_group('optimization_info')
@@ -421,6 +611,36 @@ def export_results(partition, opt_info, output_path, logger):
     logger.info(f"  {len(lambda_opt)} lambda parameters saved")
     logger.info(f"  Indicator functions saved: {indicator_functions.shape}")
     logger.info(f"  Metadata and optimization info included")
+    
+    # Perimeter roundtrip check: reload the file and compare perimeter
+    if mesh is not None:
+        try:
+            from examples.data_loader import load_partition_from_refined_file
+            from src.core.perimeter_calculator import PerimeterCalculator
+            
+            mesh_reloaded, partition_reloaded = load_partition_from_refined_file(output_path, verbose=False)
+            
+            lambda_reloaded = partition_reloaded.get_variable_vector()
+            
+            perim_calc_reloaded = PerimeterCalculator(mesh_reloaded, partition_reloaded)
+            perimeter_reloaded = perim_calc_reloaded.compute_total_perimeter(lambda_reloaded)
+            
+            in_memory_perimeter = opt_info['final_perimeter']
+            rel_diff = abs(perimeter_reloaded - in_memory_perimeter) / max(in_memory_perimeter, 1e-12)
+            
+            if rel_diff < 1e-4:
+                logger.info(f"  ✓ Roundtrip perimeter check PASSED: "
+                          f"in-memory={in_memory_perimeter:.6f}, reloaded={perimeter_reloaded:.6f} "
+                          f"(rel_diff={rel_diff:.2e})")
+            else:
+                logger.warning(f"  ⚠ Roundtrip perimeter check FAILED: "
+                             f"in-memory={in_memory_perimeter:.6f}, reloaded={perimeter_reloaded:.6f} "
+                             f"(rel_diff={rel_diff:.2e})")
+                logger.warning(f"    VP count in-memory: {len(lambda_opt)}, "
+                             f"reloaded: {len(lambda_reloaded)}")
+        except Exception as e:
+            logger.warning(f"  ⚠ Roundtrip perimeter check skipped due to error: {e}")
+    
     logger.info("="*80)
 
 
@@ -444,9 +664,12 @@ def main():
     parser.add_argument('--method', type=str, default='SLSQP',
                        choices=['SLSQP', 'trust-constr'],
                        help='Optimization method (default: SLSQP)')
-    parser.add_argument('--log-level', type=str, default='INFO',
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug logging (verbose output with detailed diagnostics)')
+    parser.add_argument('--log-level', type=str, default=None,
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level (default: INFO)')
+                       help='Logging level (default: INFO, or DEBUG if --debug flag is used). '
+                            'Note: --debug flag overrides this setting.')
     parser.add_argument('--distance-preservation', type=str, default='preserve',
                        help='VP placement strategy after Type 1 migration: '
                             '"preserve" (default, maintains original distance to target vertex), '
@@ -473,9 +696,19 @@ def main():
             print("Must be 'preserve', 'midpoint', or a number between 0.0 and 1.0")
             return 1
     
-    # Setup logging
-    setup_logging(log_level=args.log_level)
+    # Setup logging: --debug flag takes precedence over --log-level
+    if args.debug:
+        log_level = 'DEBUG'
+    elif args.log_level:
+        log_level = args.log_level
+    else:
+        log_level = 'INFO'
+    
+    setup_logging(log_level=log_level)
     logger = get_logger(__name__)
+    
+    if args.debug:
+        logger.info("Debug mode enabled - verbose logging active")
     
     logger.info("="*80)
     logger.info("TEST: Migration and Continue Optimization")
@@ -493,6 +726,11 @@ def main():
     # Detect starting iteration number from filename
     import re
     iteration_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', args.solution)
+    
+    # Also detect if boundary_tol is in the filename
+    btol_match = re.search(r'_btol([\d.]+(?:e-?\d+)?)_', args.solution)
+    has_btol_in_name = btol_match is not None
+    
     if iteration_match:
         starting_iteration = int(iteration_match.group(1))
         logger.info(f"Detected input as iteration {starting_iteration} file")
@@ -504,16 +742,24 @@ def main():
     if args.output is None:
         # Remove iteration number and _refined_contours suffix to get base path
         if iteration_match:
+            # Remove existing iteration suffix
             base_path = args.solution.replace(f'_iteration{starting_iteration}_refined_contours.h5', '')
         else:
             base_path = args.solution.replace('_refined_contours.h5', '')
+        
+        # Also remove btol from base path if present (we'll add it back consistently)
+        if btol_match:
+            base_path = base_path.replace(f'_btol{btol_match.group(1)}', '')
     else:
         # User provided output path - derive base from it
         base_path = args.output.replace(f'_iteration{starting_iteration + 1}_refined_contours.h5', '')
         base_path = base_path.replace('_refined_contours.h5', '')
+        # Remove btol if present
+        if btol_match:
+            base_path = base_path.replace(f'_btol{btol_match.group(1)}', '')
     
     logger.info(f"Base output path: {base_path}")
-    logger.info(f"Iteration files will be: {base_path}_iteration{{N}}_refined_contours.h5")
+    logger.info(f"Iteration files will be: {base_path}_btol{args.boundary_tol}_iteration{{N}}_refined_contours.h5")
     
     # Create output directory if needed
     output_dir = os.path.dirname(base_path) if os.path.dirname(base_path) else '.'
@@ -549,6 +795,28 @@ def main():
     target_area = total_area / partition.n_cells
     logger.info(f"Target area per cell: {target_area:.10f}")
     logger.info("="*80)
+    
+    # -------------------------------------------------------------------------
+    # Initialize Type 2 Migration History (BEFORE loop)
+    # -------------------------------------------------------------------------
+    
+    # Try to load migration history from input file
+    migration_history = Type2MigrationHistory()
+    if starting_iteration > 1:
+        # Starting from later iteration - try to load history
+        try:
+            with h5py.File(args.solution, 'r') as f:
+                migration_history = load_type2_migration_history(f)
+            logger.info(f"Loaded migration history from {args.solution}")
+            logger.info(f"  Tracked triple points: {len(migration_history.records)}")
+            for orig_tri, record in migration_history.records.items():
+                logger.info(f"    Triangle {orig_tri}: {record.triangle_sequence}")
+        except Exception as e:
+            logger.warning(f"Could not load migration history: {e}")
+            logger.warning("Starting with empty history")
+            migration_history = Type2MigrationHistory()
+    else:
+        logger.info("Starting with empty migration history (iteration 1)")
     
     # -------------------------------------------------------------------------
     # Stage 3: ITERATIVE REFINEMENT LOOP
@@ -612,7 +880,7 @@ def main():
             logger.info("✓ No topology switches detected - CONVERGED")
             converged = True
             # Export final state
-            output_path = f"{base_path}_iteration{current_iteration}_refined_contours.h5"
+            output_path = f"{base_path}_btol{args.boundary_tol}_iteration{current_iteration}_refined_contours.h5"
             opt_info = {
                 'success': True,
                 'n_iterations': 0,
@@ -623,7 +891,7 @@ def main():
                 'final_constraint_violations': optimizer.area_calc.compute_all_cell_areas(lambda_vec) - target_area,
                 'message': 'Converged - no switches needed'
             }
-            export_results(partition, opt_info, output_path, logger)
+            export_results(partition, opt_info, output_path, logger, migration_history, mesh=mesh)
             break
         
         # Collect candidates
@@ -648,10 +916,22 @@ def main():
             migrations = apply_type2_migrations(
                 partition, mesh, type2_candidates, logger,
                 steiner_handler=optimizer.steiner_handler,
-                distance_preservation=args.distance_preservation
+                distance_preservation=args.distance_preservation,
+                migration_history=migration_history,
+                iteration_number=current_iteration
             )
             iteration_migrations += migrations
             total_type2_migrations += migrations
+        
+        # After Type 2 migrations, rebuild boundary_segments from scratch.
+        # Type 2 directly manipulates boundary_segments (delete 2, add 3 per migration),
+        # which can leave stale VP-VP connections. Rebuilding ensures the Type 1
+        # component analysis sees canonical connectivity.
+        if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0 and iteration_migrations > 0:
+            logger.info("")
+            logger.info("Rebuilding boundary_segments after Type 2 migrations...")
+            partition.rebuild_triangle_segments_from_current_vps()
+            logger.info(f"  boundary_segments rebuilt: {len(partition.boundary_segments)} segments")
         
         # Type 1 migrations
         if args.migration_type in ['type1', 'both'] and len(type1_candidates) > 0:
@@ -691,17 +971,28 @@ def main():
             logger.error("ABORTING - Please debug the optimization failure")
             return 1
         
+        # Check optimization convergence status
         if not opt_info['success']:
-            logger.error("Optimization did not converge successfully")
-            logger.error(f"Reason: {opt_info['message']}")
-            logger.error("ABORTING - Please review optimization parameters")
-            return 1
+            logger.warning("="*80)
+            logger.warning("⚠️  OPTIMIZATION DID NOT FULLY CONVERGE")
+            logger.warning("="*80)
+            logger.warning(f"Reason: {opt_info['message']}")
+            logger.warning(f"Iterations: {opt_info['n_iterations']}")
+            logger.warning(f"Perimeter reduction achieved: {opt_info['perimeter_reduction']:.6f} ({opt_info['percent_reduction']:.4f}%)")
+            logger.warning(f"Max constraint violation: {np.max(np.abs(opt_info['final_constraint_violations'])):.2e}")
+            logger.warning("")
+            logger.warning("Continuing to save results (partial convergence may still be useful)")
+            logger.warning("Consider:")
+            logger.warning("  - Increasing --max-opt-iter for more iterations")
+            logger.warning("  - Relaxing --tolerance if constraint violations are acceptable")
+            logger.warning("  - Running another iteration starting from the saved file")
+            logger.warning("="*80)
         
         # ---------------------------------------------------------------------
         # Phase 5: Export iteration results
         # ---------------------------------------------------------------------
-        output_path = f"{base_path}_iteration{current_iteration}_refined_contours.h5"
-        export_results(partition, opt_info, output_path, logger)
+        output_path = f"{base_path}_btol{args.boundary_tol}_iteration{current_iteration}_refined_contours.h5"
+        export_results(partition, opt_info, output_path, logger, migration_history, mesh=mesh)
         
         iteration_time = time.time() - iteration_start_time
         logger.info(f"✓ Iteration {current_iteration} completed in {iteration_time:.2f}s")

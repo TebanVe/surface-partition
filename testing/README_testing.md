@@ -497,6 +497,74 @@ See `docs/REFINE_PERIMETER_ITERATIVE_PLAN.md` for complete implementation plan i
 
 ---
 
+### Test 4: Migration Debug (Type 2 then Type 1, no optimization, no export)
+
+**File**: `test_migrations_debug.py`
+
+**Status**: 🚧 IN PROGRESS
+
+**Created**: 2026-03-03
+
+**Objective**:
+Isolate and debug the migrate→migrate workflow (Type 2 first, then Type 1) without
+any optimization iterations or file exports. Designed to diagnose cases where VP
+lambda values are inadvertently altered by Type 2 migrations, causing incorrect
+component grouping in the subsequent Type 1 analysis.
+
+**What it validates**:
+- Lambda and edge values of watched VPs before and after *each* Type 2 migration
+- Whether `identify_target_vertex` classification flips for any watched VP after a Type 2 migration
+- Which components the watched VPs end up in after the post-Type2 Type 1 analysis
+- Whether watched VPs appear in each other's auxiliary components (spurious grouping)
+
+**Key differences from `test_migration_and_continue.py`**:
+- **No optimization**: skips the optimize step entirely
+- **No export**: no HDF5 output written
+- **Per-migration VP tracking**: logs edge/λ/target state of watched VPs before and after *every* individual migration
+- **Diff logging**: clearly marks TARGET FLIP when `identify_target_vertex` changes for a watched VP
+
+**Usage**:
+```bash
+# Investigate VPs 1621, 1624, 1625 across Type 2 then Type 1 migrations
+python testing/test_migrations_debug.py \
+    --solution results/run_xyz/*_iterationN_refined_contours.h5 \
+    --watch-vps 1621 1624 1625 \
+    --boundary-tol 0.001
+
+# Only run Type 2 migrations
+python testing/test_migrations_debug.py \
+    --solution results/run_xyz/*_iterationN_refined_contours.h5 \
+    --migration-type type2 \
+    --watch-vps 1621 1624 1625
+```
+
+**Command-line arguments**:
+- `--solution`: Path to refined contours HDF5 file (required)
+- `--migration-type`: `type1`, `type2`, or `both` (default: `both`)
+- `--distance-preservation`: VP placement strategy (default: `preserve`)
+- `--boundary-tol`: Boundary detection threshold (default: `1e-3`)
+- `--watch-vps`: Space-separated VP indices to track (e.g. `--watch-vps 1621 1624 1625`)
+- `--log-level`: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
+
+**Expected output sections**:
+1. `INITIAL STATE OF WATCHED VPs` — edge/λ/target before any migration
+2. Per-Type2-migration diff — shows changes (with `*** TARGET FLIP ***` marker)
+3. `WATCHED VP STATE AFTER ALL TYPE 2 MIGRATIONS` — consolidated post-Type2 view
+4. `TYPE 1 COMPONENT ANALYSIS` — which components contain the watched VPs
+5. Per-Type1-migration diff — shows any further changes
+6. `FINAL STATE OF WATCHED VPs`
+
+**Dependencies**:
+- `examples/data_loader.py`
+- `src/core/topology_switcher.py`
+- `src/core/type1_component_analyzer.py`
+- `src/core/steiner_handler.py`
+- `src/core/perimeter_optimizer.py`
+- `src/core/type2_migration_history.py`
+- `src/core/migration_utils.py`
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -516,6 +584,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-03-03 | Added Test 4 (migration debug, no opt/export) | System |
 | 2026-02-08 | Added Test 3 (iterative perimeter refinement) | System |
 | 2026-02-06 | Updated Test 2 (efficiency refactoring) | System |
 | 2026-02-04 | Added Test 2 (migration and continue optimization) | System |

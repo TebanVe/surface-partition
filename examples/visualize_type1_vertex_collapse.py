@@ -602,62 +602,199 @@ def add_edge_visualization(
         print(f"    Target edge: {target_edge} (GREEN)")
 
 
-def add_target_vertex_triangle_labels(plotter, mesh: TriMesh, target_vertex: int):
+def add_target_vertex_triangle_labels(
+    plotter, 
+    mesh: TriMesh, 
+    target_vertex: int,
+    label_all: bool = False,
+    apply_zoom: bool = False,
+    zoom_factor: float = 0.1,
+    label_font_size: int = 14
+):
     """
-    Add labels to all triangles that share the target vertex.
+    Add labels to triangles.
     
-    These are the triangles involved in the Type 1 migration.
+    If label_all=False (default): Only labels triangles sharing target_vertex (methodology triangles)
+    If label_all=True: Labels all triangles in mesh, with methodology triangles using different styling
     
     Args:
         plotter: PyVista plotter
         mesh: TriMesh object
         target_vertex: Index of the target vertex
+        label_all: If True, label all triangles
+        apply_zoom: If True and label_all=True, use spatial filtering
+        zoom_factor: Distance threshold for spatial filtering
     """
     if target_vertex is None:
         return
     
-    # Find all triangles that contain the target vertex
+    # Find all triangles that contain the target vertex (methodology triangles)
     triangles_with_target = []
     for tri_idx, face in enumerate(mesh.faces):
         v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
         if target_vertex in [v1, v2, v3]:
             triangles_with_target.append(tri_idx)
     
+    methodology_triangles = set(triangles_with_target)
     print(f"  Triangles sharing target vertex {target_vertex}: {len(triangles_with_target)} triangles")
     print(f"  Triangle indices: {triangles_with_target}")
     print()
     
-    # Add labels to these triangles
-    for tri_idx in triangles_with_target:
-        face = mesh.faces[tri_idx]
-        v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+    # Add labels to triangles
+    if label_all:
+        target_pos = mesh.vertices[target_vertex]
         
-        # Compute triangle centroid
-        centroid = (mesh.vertices[v1] + mesh.vertices[v2] + mesh.vertices[v3]) / 3.0
-        
-        # Offset centroid slightly away from surface along triangle normal
-        # This ensures labels render on top of the surface
-        edge1 = mesh.vertices[v2] - mesh.vertices[v1]
-        edge2 = mesh.vertices[v3] - mesh.vertices[v1]
-        normal = np.cross(edge1, edge2)
-        normal_len = np.linalg.norm(normal)
-        if normal_len > 1e-12:
-            normal = normal / normal_len
-            # Offset by a small amount in the normal direction
-            centroid = centroid + normal * 0.0001
-        
-        # Add label with better visibility
-        plotter.add_point_labels(
-            centroid,
-            [f"T{tri_idx}"],
-            font_size=14,
-            text_color='black',
-            point_color='yellow',
-            point_size=12,
-            render_points_as_spheres=True,
-            shape_opacity=0.9,
-            always_visible=True
-        )
+        if apply_zoom:
+            # Use spatial filtering for performance
+            max_distance = zoom_factor * 50  # Increased from 10 to capture more triangles
+            print(f"  Using spatial filtering: labeling triangles within {max_distance:.4f} units of target vertex...")
+            
+            # Batch collect
+            methodology_centroids = []
+            methodology_labels = []
+            other_centroids = []
+            other_labels = []
+            
+            labeled_count = 0
+            for tri_idx in range(len(mesh.faces)):
+                face = mesh.faces[tri_idx]
+                v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+                centroid = (mesh.vertices[v1] + mesh.vertices[v2] + mesh.vertices[v3]) / 3.0
+                
+                # Offset for visibility
+                edge1 = mesh.vertices[v2] - mesh.vertices[v1]
+                edge2 = mesh.vertices[v3] - mesh.vertices[v1]
+                normal = np.cross(edge1, edge2)
+                normal_len = np.linalg.norm(normal)
+                if normal_len > 1e-12:
+                    normal = normal / normal_len
+                    centroid = centroid + normal * 0.0001
+                
+                # Check distance
+                dist = np.linalg.norm(centroid - target_pos)
+                if dist < max_distance or tri_idx in methodology_triangles:
+                    if tri_idx in methodology_triangles:
+                        methodology_centroids.append(centroid)
+                        methodology_labels.append(f"T{tri_idx}")
+                    else:
+                        other_centroids.append(centroid)
+                        other_labels.append(f"T{tri_idx}")
+                    labeled_count += 1
+            
+            print(f"  Labeling {labeled_count} triangles (filtered from {len(mesh.faces)})...")
+            
+            # Batch add
+            if methodology_centroids:
+                plotter.add_point_labels(
+                    np.array(methodology_centroids),
+                    methodology_labels,
+                    font_size=label_font_size,
+                    text_color='black',
+                    point_color='yellow',
+                    point_size=12,
+                    render_points_as_spheres=True,
+                    shape_color='gray',
+                    shape_opacity=0.9,
+                    always_visible=True
+                )
+            
+            if other_centroids:
+                plotter.add_point_labels(
+                    np.array(other_centroids),
+                    other_labels,
+                    font_size=label_font_size,
+                    text_color='black',
+                    shape_color='white',
+                    shape_opacity=0.9,
+                    always_visible=True
+                )
+        else:
+            # No zoom - use batching only
+            print(f"  Labeling all {len(mesh.faces)} triangles using batched approach...")
+            
+            # Batch collect
+            methodology_centroids = []
+            methodology_labels = []
+            other_centroids = []
+            other_labels = []
+            
+            for tri_idx in range(len(mesh.faces)):
+                face = mesh.faces[tri_idx]
+                v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+                centroid = (mesh.vertices[v1] + mesh.vertices[v2] + mesh.vertices[v3]) / 3.0
+                
+                # Offset for visibility
+                edge1 = mesh.vertices[v2] - mesh.vertices[v1]
+                edge2 = mesh.vertices[v3] - mesh.vertices[v1]
+                normal = np.cross(edge1, edge2)
+                normal_len = np.linalg.norm(normal)
+                if normal_len > 1e-12:
+                    normal = normal / normal_len
+                    centroid = centroid + normal * 0.0001
+                
+                if tri_idx in methodology_triangles:
+                    methodology_centroids.append(centroid)
+                    methodology_labels.append(f"T{tri_idx}")
+                else:
+                    other_centroids.append(centroid)
+                    other_labels.append(f"T{tri_idx}")
+            
+            # Batch add
+            if methodology_centroids:
+                plotter.add_point_labels(
+                    np.array(methodology_centroids),
+                    methodology_labels,
+                    font_size=label_font_size,
+                    text_color='black',
+                    point_color='yellow',
+                    point_size=12,
+                    render_points_as_spheres=True,
+                    shape_color='gray',
+                    shape_opacity=0.9,
+                    always_visible=True
+                )
+            
+            if other_centroids:
+                plotter.add_point_labels(
+                    np.array(other_centroids),
+                    other_labels,
+                    font_size=label_font_size,
+                    text_color='black',
+                    shape_color='white',
+                    shape_opacity=0.9,
+                    always_visible=True
+                )
+    else:
+        # Original behavior: only methodology triangles
+        for tri_idx in triangles_with_target:
+            face = mesh.faces[tri_idx]
+            v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+            
+            # Compute triangle centroid
+            centroid = (mesh.vertices[v1] + mesh.vertices[v2] + mesh.vertices[v3]) / 3.0
+            
+            # Offset centroid slightly away from surface along triangle normal
+            edge1 = mesh.vertices[v2] - mesh.vertices[v1]
+            edge2 = mesh.vertices[v3] - mesh.vertices[v1]
+            normal = np.cross(edge1, edge2)
+            normal_len = np.linalg.norm(normal)
+            if normal_len > 1e-12:
+                normal = normal / normal_len
+                centroid = centroid + normal * 0.0001
+            
+            # Add label with better visibility (methodology triangles)
+            plotter.add_point_labels(
+                centroid,
+                [f"T{tri_idx}"],
+                font_size=label_font_size,
+                text_color='black',
+                point_color='yellow',
+                point_size=12,
+                render_points_as_spheres=True,
+                shape_color='gray',
+                shape_opacity=0.9,
+                always_visible=True
+            )
 
 
 def apply_camera_zoom(
@@ -706,41 +843,68 @@ def run_visualization(args):
     print("Using vertex-collapse strategy (component-based migration)")
     print()
     
-    # Step 1: Get boundary VPs (excluding triple point VPs)
-    boundary_vps = switcher.get_non_triple_point_boundary_vps(boundary_tol=args.boundary_tol)
-    boundary_vps_set = set(boundary_vps)
-    
-    if not boundary_vps:
-        print("ERROR: No boundary VPs found for Type 1 migration")
-        return
-    
-    # Step 2: Find connected components
-    components = analyzer.find_connected_components(boundary_vps_set)
-    print(f"✓ Found {len(components)} connected component(s)")
-    print()
-    
-    # Step 3: Analyze each component
-    component_info = []
-    for i, comp_vps in enumerate(components):
-        info = analyzer.analyze_component(comp_vps)
-        info['index'] = i
-        component_info.append(info)
-    
-    # Step 4: Detect conflicts
-    conflicts, chain_warnings = analyzer.detect_proximity_conflicts(component_info)
-    
-    # Step 5: Select components for migration
-    to_migrate, deferred = analyzer.select_components_for_migration(component_info, conflicts)
+    if args.protect_type2:
+        # Use full analysis pipeline with Type 2 protection
+        print("Using Type 2 protection (excluding components with outer neighbor VPs)...")
+        analysis_result = analyzer.run_full_analysis(
+            boundary_tol=args.boundary_tol,
+            conflict_strategy='exclude_one',
+            build_migration_plan=False,  # Don't need migration plan for visualization
+            protect_type2=True
+        )
+        
+        component_info = analysis_result['components']
+        conflicts = analysis_result['conflicts']
+        to_migrate = analysis_result['to_migrate']
+        deferred = analysis_result['excluded']
+        type2_excluded = analysis_result['type2_excluded']
+        
+        print(f"✓ Type 2 protection: {len(type2_excluded)} component(s) excluded")
+        print()
+    else:
+        # Original analysis (step-by-step, no Type 2 protection)
+        # Step 1: Get boundary VPs (excluding triple point VPs)
+        boundary_vps = switcher.get_non_triple_point_boundary_vps(boundary_tol=args.boundary_tol)
+        boundary_vps_set = set(boundary_vps)
+        
+        if not boundary_vps:
+            print("ERROR: No boundary VPs found for Type 1 migration")
+            return
+        
+        # Step 2: Find connected components
+        components = analyzer.find_connected_components(boundary_vps_set)
+        print(f"✓ Found {len(components)} connected component(s)")
+        print()
+        
+        # Step 3: Analyze each component
+        component_info = []
+        for i, comp_vps in enumerate(components):
+            info = analyzer.analyze_component(comp_vps)
+            info['index'] = i
+            component_info.append(info)
+        
+        # Step 4: Detect conflicts
+        conflicts, chain_warnings = analyzer.detect_proximity_conflicts(component_info)
+        
+        # Step 5: Select components for migration
+        to_migrate, deferred = analyzer.select_components_for_migration(component_info, conflicts)
+        type2_excluded = []  # Empty list when protection is disabled
     
     # Display component table
     print("="*80)
     print("AVAILABLE COMPONENTS FOR MIGRATION")
     print("="*80)
-    print(f"{'Idx':<5} {'Size':<6} {'Dist':<10} {'Cells':<10} {'Status':<15} {'VPs':<30}")
+    print(f"{'Idx':<5} {'Size':<6} {'Dist':<10} {'Cells':<10} {'Status':<20} {'VPs':<30}")
     print("-" * 80)
     
     for comp in component_info:
-        status = "TO MIGRATE" if comp in to_migrate else "DEFERRED"
+        if comp in to_migrate:
+            status = "TO MIGRATE"
+        elif comp in type2_excluded:
+            status = "EXCLUDED (Type 2)"
+        else:
+            status = "DEFERRED"
+        
         vp_list = str(comp['vp_indices'][:5]) + ("..." if len(comp['vp_indices']) > 5 else "")
         
         # Get cells that this component separates
@@ -750,7 +914,7 @@ def run_visualization(args):
             all_cells.update(vp.belongs_to_cells)
         cells_str = str(sorted(list(all_cells)))
         
-        print(f"{comp['index']:<5} {comp['size']:<6} {comp['min_distance']:<10.6f} {cells_str:<10} {status:<15} {vp_list:<30}")
+        print(f"{comp['index']:<5} {comp['size']:<6} {comp['min_distance']:<10.6f} {cells_str:<10} {status:<20} {vp_list:<30}")
     
     print()
     
@@ -765,12 +929,20 @@ def run_visualization(args):
     component_vps = selected_component['vp_indices']
     target_vertex = selected_component['target_vertex']
     
+    # Determine status
+    if selected_component in to_migrate:
+        status_str = "TO MIGRATE"
+    elif selected_component in type2_excluded:
+        status_str = "EXCLUDED (Type 2 protection)"
+    else:
+        status_str = "DEFERRED"
+    
     print(f"✓ Selected Component {args.component_index} for migration:")
     print(f"  Size: {selected_component['size']} VPs")
     print(f"  VPs: {component_vps}")
     print(f"  Target vertex: {target_vertex}")
     print(f"  Min distance: {selected_component['min_distance']:.6f}")
-    print(f"  Status: {'TO MIGRATE' if selected_component in to_migrate else 'DEFERRED'}")
+    print(f"  Status: {status_str}")
     print()
     # ========================================================================
     # PRE-COMPUTE MIGRATION VPs FOR VISUALIZATION
@@ -790,7 +962,19 @@ def run_visualization(args):
         preview_left, preview_right = analyzer._get_neighbors_from_auxiliary(
             preview_migrating_vp, preview_auxiliary
         )
-        
+
+        # Print lambda and target vertex for all VPs in the auxiliary (BEFORE migration)
+        print("  Auxiliary VP state BEFORE migration:")
+        for vp_idx in preview_auxiliary:
+            vp_obj = partition.variable_points[vp_idx]
+            vp_target = migration_utils.identify_target_vertex(vp_obj)
+            role = ("Migrating" if vp_idx == preview_migrating_vp
+                    else "Neighbor-L" if vp_idx == preview_left
+                    else "Neighbor-R")
+            print(f"    VP {vp_idx} ({role}): edge {vp_obj.edge}, "
+                  f"λ={vp_obj.lambda_param:.6f}, "
+                  f"approaches vertex {vp_target}")
+
         # Get current state for BEFORE visualization
         preview_migrating_vp_obj = partition.variable_points[preview_migrating_vp]
         preview_old_edge = preview_migrating_vp_obj.edge
@@ -882,7 +1066,9 @@ def run_visualization(args):
         add_edge_visualization(plotter_before, mesh, preview_old_edge, preview_target_edge)
     
     # Add triangle labels for triangles sharing target vertex
-    add_target_vertex_triangle_labels(plotter_before, mesh, target_vertex)
+    add_target_vertex_triangle_labels(plotter_before, mesh, target_vertex, 
+                                     args.label_all, args.apply_zoom, args.zoom_factor,
+                                     args.label_font_size)
     
     # Apply camera zoom if requested - focus on target vertex
     if args.apply_zoom:
@@ -1065,7 +1251,9 @@ def run_visualization(args):
     add_edge_visualization(plotter_after, mesh, new_edge_migrating, None)
     
     # Add triangle labels for triangles sharing target vertex
-    add_target_vertex_triangle_labels(plotter_after, mesh, target_vertex)
+    add_target_vertex_triangle_labels(plotter_after, mesh, target_vertex,
+                                     args.label_all, args.apply_zoom, args.zoom_factor,
+                                     args.label_font_size)
     
     # Apply camera zoom if requested (focus on target vertex)
     if args.apply_zoom:
@@ -1104,6 +1292,10 @@ def main():
                        help='VP selection method: "topology" (topology-based, recommended), '
                             '"distance" (distance-based, old method) (default: topology)')
     
+    # Type 2 protection
+    parser.add_argument('--protect-type2', action='store_true',
+                       help='Enable Type 2 protection (exclude components with outer neighbor VPs)')
+    
     # Visualization options
     parser.add_argument('--state', choices=['before', 'after', 'both'], default='before',
                        help='Which state to show (default: before)')
@@ -1113,6 +1305,11 @@ def main():
                        help='Show variable points as spheres')
     parser.add_argument('--show-steiner', action='store_true',
                        help='Show Steiner points and void triangles')
+    parser.add_argument('--label-all', action='store_true',
+                       help='Label all triangles in mesh (methodology triangles: gray box, others: white box; '
+                            'recommended with --apply-zoom to reduce clutter)')
+    parser.add_argument('--label-font-size', type=int, default=14,
+                       help='Font size for triangle labels (default: 14)')
     
     # Camera/zoom options
     parser.add_argument('--apply-zoom', action='store_true',

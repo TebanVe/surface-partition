@@ -22,6 +22,7 @@ try:
     from .steiner_handler import TriplePoint, SteinerHandler
     from . import migration_utils
     from .type1_component_analyzer import Type1ComponentAnalyzer
+    from .type2_migration_history import Type2MigrationHistory
 except ImportError:
     import sys
     import os
@@ -33,6 +34,7 @@ except ImportError:
     from core.steiner_handler import TriplePoint, SteinerHandler
     import migration_utils
     from type1_component_analyzer import Type1ComponentAnalyzer
+    from type2_migration_history import Type2MigrationHistory
 
 
 class TopologySwitcher:
@@ -63,6 +65,10 @@ class TopologySwitcher:
         self.partition = partition
         self.mesh_topology = mesh_topology
         self.logger = get_logger(__name__)
+        
+        # Initialize Type 2 migration history (empty by default)
+        # This will be populated by the workflow (e.g., refine_perimeter_iterative.py)
+        self.type2_migration_history = Type2MigrationHistory()
         
         self.logger.info(f"Initialized TopologySwitcher for {len(partition.variable_points)} variable points")
     
@@ -1086,13 +1092,13 @@ class TopologySwitcher:
         """Wrapper - delegates to Type1ComponentAnalyzer."""
         return self._get_analyzer().find_connected_components(boundary_vps_set)
     
-    def analyze_component(self, component_vps: Set[int]) -> Dict:
+    def analyze_component(self, component_vps: Set[int], boundary_tol: float = 0.1) -> Dict:
         """Wrapper - delegates to Type1ComponentAnalyzer."""
-        return self._get_analyzer().analyze_component(component_vps)
+        return self._get_analyzer().analyze_component(component_vps, boundary_tol=boundary_tol)
     
-    def detect_proximity_conflicts(self, components: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    def detect_proximity_conflicts(self, components: List[Dict], boundary_tol: float = 0.1) -> Tuple[List[Dict], List[Dict]]:
         """Wrapper - delegates to Type1ComponentAnalyzer."""
-        return self._get_analyzer().detect_proximity_conflicts(components)
+        return self._get_analyzer().detect_proximity_conflicts(components, boundary_tol=boundary_tol)
     
     # =========================================================================
     # Stage 1: Core Migration Function (Vertex-Collapse Strategy)
@@ -1370,7 +1376,8 @@ class TopologySwitcher:
             target_distance: Desired distance in [0, 0.5] range
             
         Returns:
-            Lambda value in [0, 1] that achieves target_distance
+            Lambda value in [0, 1] that achieves target_distance,
+            or -1.0 if the edge does not contain target_vertex (signals caller to abort)
         """
         # Clamp target_distance to valid range
         target_distance = max(0.0, min(0.5, target_distance))
@@ -1384,9 +1391,9 @@ class TopologySwitcher:
             # λ=0 → at edge[1], so we want: lambda = target_distance
             return target_distance
         else:
-            # Target vertex not on new edge (shouldn't happen)
-            self.logger.warning(f"New edge {new_edge} does not contain target vertex {target_vertex}, using midpoint")
-            return 0.5
+            self.logger.warning(f"New edge {new_edge} does not contain target vertex {target_vertex}, "
+                              f"aborting VP placement (would create non-boundary edge)")
+            return -1.0
     
     def _adjust_neighbor_to_free_edge(self, neighbor_vp_idx: int, 
                                       migrating_vp_idx: int,
@@ -1466,10 +1473,20 @@ class TopologySwitcher:
             edge_norm = tuple(sorted(edge))
             # Skip the neighbor's current edge and any edge with a VP
             if edge_norm != tuple(sorted(neighbor_vp.edge)) and edge_norm not in self.partition.edge_to_varpoint:
-                # Found free edge in the correct triangle!
+                # Verify the free edge contains the target vertex
+                if target_vertex is not None and target_vertex not in edge_norm:
+                    self.logger.warning(f"Free edge {edge_norm} in triangle {target_triangle} "
+                                      f"does not contain target vertex {target_vertex} — "
+                                      f"skipping (would place VP on non-boundary edge)")
+                    continue
+                
                 # Compute lambda to preserve distance to target vertex
                 if target_vertex is not None:
                     lambda_param = self._compute_lambda_for_distance(edge_norm, target_vertex, target_distance)
+                    if lambda_param < 0:
+                        self.logger.warning(f"Neighbor VP {neighbor_vp_idx}: "
+                                          f"_compute_lambda_for_distance returned sentinel for edge {edge_norm}")
+                        return False
                 else:
                     lambda_param = 0.5  # Default to midpoint if no target vertex specified
                 
@@ -1575,8 +1592,9 @@ class TopologySwitcher:
         2. Verifies edge_to_varpoint consistency
         
         Does NOT update:
-        - boundary_segments: Connectivity unchanged (VP1 still connected to VP2)
-        - segment_crossing_cache: Not used in vertex-collapse (no crossings)
+        - boundary_segments: VP-VP connectivity changes when VPs move, but this is
+          corrected by rebuild_triangle_segments_from_current_vps (force_rebuild=True)
+          which runs in reinitialize_after_switches after all migrations complete.
         
         Args:
             target_vertex: The vertex that changed cells (shared by 6 triangles)
@@ -1842,22 +1860,37 @@ class TopologySwitcher:
                 self.logger.warning(f"Invalid distance_preservation value '{distance_preservation}', using midpoint")
                 dist_migrating = dist_left = dist_right = 0.5
         
+        # Save original VP state for rollback if neighbor adjustment fails
+        vp_migrating = self.partition.variable_points[migrating_vp_idx]
+        vp_left = self.partition.variable_points[left_neighbor]
+        vp_right = self.partition.variable_points[right_neighbor]
+        orig_migrating = (vp_migrating.edge, vp_migrating.lambda_param)
+        orig_left = (vp_left.edge, vp_left.lambda_param)
+        orig_right = (vp_right.edge, vp_right.lambda_param)
+        
         # Step 6: Move migrating VP to target edge with preserved distance
         lambda_migrating = self._compute_lambda_for_distance(target_edge, target_vertex, dist_migrating)
+        if lambda_migrating < 0:
+            self.logger.warning(f"VP {migrating_vp_idx}: target edge {target_edge} does not contain "
+                              f"target vertex {target_vertex}, aborting migration")
+            return {'success': False, 'error': 'Migrating VP target edge invalid'}
         self._move_variable_point(migrating_vp_idx, target_edge, lambda_migrating)
         self.logger.debug(f"VP {migrating_vp_idx}: Moved to edge {target_edge} with λ={lambda_migrating:.6f}")
         
         # Step 6: Adjust left neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
         if not self._adjust_neighbor_to_free_edge(left_neighbor, migrating_vp_idx, 
                                                   target_vertex, dist_left):
-            self.logger.error(f"Failed to adjust left neighbor {left_neighbor}")
-            return {'success': False, 'error': f'Left neighbor adjustment failed'}
+            self.logger.warning(f"Left neighbor {left_neighbor} adjustment failed — rolling back migration")
+            self._move_variable_point(migrating_vp_idx, orig_migrating[0], orig_migrating[1])
+            return {'success': False, 'error': f'Left neighbor adjustment failed (rolled back)'}
         
         # Step 8: Adjust right neighbor (move to free edge in triangle containing its segment with its OTHER neighbor)
         if not self._adjust_neighbor_to_free_edge(right_neighbor, migrating_vp_idx,
                                                   target_vertex, dist_right):
-            self.logger.error(f"Failed to adjust right neighbor {right_neighbor}")
-            return {'success': False, 'error': f'Right neighbor adjustment failed'}
+            self.logger.warning(f"Right neighbor {right_neighbor} adjustment failed — rolling back migration")
+            self._move_variable_point(migrating_vp_idx, orig_migrating[0], orig_migrating[1])
+            self._move_variable_point(left_neighbor, orig_left[0], orig_left[1])
+            return {'success': False, 'error': f'Right neighbor adjustment failed (rolled back)'}
         
         # Step 7.5: Update indicator_functions matrix (target vertex cell flip)
         # CRITICAL: Must be done AFTER moving VPs but BEFORE rebuilding triangle_segments
@@ -2855,6 +2888,45 @@ class TopologySwitcher:
         
         target_triangle_idx = [t for t in triangles_on_shared_edge if t != triple_triangle_idx][0]
         
+        # ===================================================================
+        # CHECK FOR REVERSE MIGRATION (NEW!)
+        # ===================================================================
+        
+        reverse_info = self.type2_migration_history.check_for_reverse(
+            triple_triangle_idx,
+            target_triangle_idx
+        )
+        
+        if reverse_info is not None:
+            original_triangle, target_index = reverse_info
+            print("="*80)
+            print("🔄 REVERSE MIGRATION DETECTED!")
+            print("="*80)
+            print(f"Triple point wants to return to triangle {target_triangle_idx}")
+            print(f"This reverses previous migration(s)")
+            print(f"Current path: {self.type2_migration_history.records[original_triangle].triangle_sequence}")
+            print(f"Will truncate to index {target_index}")
+            print("="*80)
+            
+            self.logger.info("="*80)
+            self.logger.info("🔄 REVERSE MIGRATION DETECTED!")
+            self.logger.info("="*80)
+            self.logger.info(f"Triple point wants to return to triangle {target_triangle_idx}")
+            self.logger.info(f"This reverses previous migration(s)")
+            self.logger.info(f"Current path: {self.type2_migration_history.records[original_triangle].triangle_sequence}")
+            self.logger.info(f"Will truncate to index {target_index}")
+            self.logger.info("="*80)
+            
+            return self._execute_reverse_migration(
+                original_triangle,
+                target_index,
+                distance_preservation
+            )
+        
+        # Not a reverse - proceed with forward migration
+        print("Forward migration (not a reversal)")
+        self.logger.info("Forward migration (not a reversal)")
+        
         # Find target edge (free edge in target triangle)
         target_face = self.mesh.faces[target_triangle_idx]
         target_edges = [
@@ -2994,6 +3066,46 @@ class TopologySwitcher:
         self.logger.info("PHASE 2: VP MIGRATIONS")
         self.logger.info("-" * 80)
         
+        # ========================================================================
+        # CAPTURE VP STATE FOR HISTORY (before any moves)
+        # ========================================================================
+        
+        # Record state of all VPs that will be moved (for future reversal)
+        vp_state_record = {
+            'created_vp_idx': None,  # Will be set after Step 8
+            'common_vertex': common_vertex,
+            'moved_vps': {}
+        }
+        
+        # Capture vp_close_to_steiner state
+        vp_close = self.partition.variable_points[vp_close_to_steiner_idx]
+        old_dist_vp_close = self._compute_distance_to_vertex(vp_close_to_steiner_idx, common_vertex)
+        vp_state_record['moved_vps'][vp_close_to_steiner_idx] = {
+            'old_edge': vp_close.edge,
+            'old_lambda': vp_close.lambda_param,
+            'old_distance_to_common': old_dist_vp_close
+        }
+        
+        # Capture migrating_VP state
+        mig_vp = self.partition.variable_points[migrating_vp_idx]
+        old_dist_migrating = self._compute_distance_to_vertex(migrating_vp_idx, common_vertex)
+        vp_state_record['moved_vps'][migrating_vp_idx] = {
+            'old_edge': mig_vp.edge,
+            'old_lambda': mig_vp.lambda_param,
+            'old_distance_to_common': old_dist_migrating
+        }
+        
+        # Capture first_level_VP state
+        first_vp = self.partition.variable_points[first_level_vp_idx]
+        old_dist_first = self._compute_distance_to_vertex(first_level_vp_idx, common_vertex)
+        vp_state_record['moved_vps'][first_level_vp_idx] = {
+            'old_edge': first_vp.edge,
+            'old_lambda': first_vp.lambda_param,
+            'old_distance_to_common': old_dist_first
+        }
+        
+        self.logger.debug(f"Captured VP states for reversal (before migration)")
+        
         # Step 7: Move vp_close_to_steiner to target edge
         old_edge_vp_close = vp_close_to_steiner.edge
         old_lambda_vp_close = vp_close_to_steiner.lambda_param
@@ -3027,6 +3139,9 @@ class TopologySwitcher:
         steiner_vp_idx = self._create_steiner_vp(old_edge_vp_close, old_lambda_vp_close)
         result['steiner_vp_idx'] = steiner_vp_idx
         result['vp_count_change'] = 1
+        
+        # Record steiner VP index for reversal
+        vp_state_record['created_vp_idx'] = steiner_vp_idx
         
         # Step 9: Move migrating_VP along mesh line (opposite to common_vertex)
         self.logger.info(f"Step 9: Moving migrating_VP {migrating_vp_idx} opposite to vertex {common_vertex}")
@@ -3388,5 +3503,226 @@ class TopologySwitcher:
         self.logger.info(f"  New triple point in triangle: {target_triangle_idx}")
         self.logger.info("="*80)
         
+        # ===================================================================
+        # RECORD FORWARD MIGRATION IN HISTORY
+        # ===================================================================
+        
+        if self.type2_migration_history.current_iteration is not None:
+            self.type2_migration_history.record_forward_migration(
+                current_triangle=triple_triangle_idx,
+                target_triangle=target_triangle_idx,
+                iteration=self.type2_migration_history.current_iteration,
+                vp_record=vp_state_record
+            )
+            self.logger.info(f"Recorded forward migration in history: {triple_triangle_idx} → {target_triangle_idx}")
+            print(f"Recorded forward migration in history: {triple_triangle_idx} → {target_triangle_idx}")
+        else:
+            self.logger.warning("Migration history current_iteration not set - migration not recorded")
+        
         return result
+    
+    # ========================================================================
+    # TYPE 2 REVERSE MIGRATION METHODS
+    # ========================================================================
+    
+    def _execute_reverse_migration(
+        self,
+        original_triangle: int,
+        target_index: int,
+        distance_preservation: str
+    ) -> Dict:
+        """
+        Reverse one or more Type 2 migrations.
+        
+        Moves VPs back to their old edges (preserving current distance to common vertex)
+        and deletes the steiner VPs that were created during forward migrations.
+        
+        Args:
+            original_triangle: Original triangle key in history
+            target_index: Index to truncate to (reverse all migrations after this)
+            distance_preservation: How to place VPs on old edges ('preserve', 'midpoint', etc.)
+        
+        Returns:
+            Result dict with success=True, vp_count_change (negative), reversed=True
+        """
+        record = self.type2_migration_history.records[original_triangle]
+        
+        # Calculate how many migrations to reverse
+        current_index = len(record.triangle_sequence) - 1
+        num_to_reverse = current_index - target_index
+        
+        print(f"Reversing {num_to_reverse} migration(s)")
+        self.logger.info(f"Reversing {num_to_reverse} migration(s)")
+        
+        total_vp_change = 0
+        
+        # Reverse in LIFO order (most recent first)
+        for i in range(num_to_reverse):
+            migration_index = len(record.vp_records) - 1 - i
+            vp_record = record.vp_records[migration_index]
+            
+            from_tri = record.triangle_sequence[migration_index]
+            to_tri = record.triangle_sequence[migration_index + 1]
+            
+            print(f"  Reversing migration {migration_index}: {from_tri} → {to_tri}")
+            self.logger.info(f"  Reversing migration {migration_index}: {from_tri} → {to_tri}")
+            
+            vp_change = self._reverse_single_migration(vp_record, distance_preservation)
+            total_vp_change += vp_change
+        
+        # Truncate history
+        record.truncate_to_index(target_index)
+        print(f"Updated path: {record.triangle_sequence}")
+        self.logger.info(f"Updated path: {record.triangle_sequence}")
+        
+        return {
+            'success': True,
+            'vp_count_change': total_vp_change,  # Negative (deleted VPs)
+            'segment_count_change': total_vp_change,  # Same as VP change
+            'reversed': True,
+            'num_reversed': num_to_reverse,
+            'final_triangle': record.get_current_triangle()
+        }
+    
+    def _reverse_single_migration(
+        self,
+        vp_record: Dict,
+        distance_preservation: str
+    ) -> int:
+        """
+        Reverse a single Type 2 migration.
+        
+        Moves VPs back to their old edges and deletes the steiner VP.
+        Data structures are updated after each reversal (incremental updates).
+        
+        Args:
+            vp_record: Dict containing:
+                - created_vp_idx: VP that was created (to delete)
+                - moved_vps: Dict of {vp_idx: {old_edge, old_lambda, old_distance_to_common}}
+                - common_vertex: The fan center vertex
+            distance_preservation: 'preserve' or 'midpoint'
+        
+        Returns:
+            VP count change (should be -1 for deleting steiner VP)
+        """
+        common_vertex = vp_record['common_vertex']
+        
+        print(f"    Common vertex: {common_vertex}")
+        print(f"    Moving {len(vp_record['moved_vps'])} VPs back")
+        self.logger.info(f"    Common vertex: {common_vertex}")
+        self.logger.info(f"    Moving {len(vp_record['moved_vps'])} VPs back")
+        
+        # 1. Move all VPs back to their old edges
+        for vp_idx, vp_data in vp_record['moved_vps'].items():
+            old_edge = vp_data['old_edge']
+            old_lambda = vp_data['old_lambda']
+            old_distance = vp_data['old_distance_to_common']
+            
+            # Compute NEW lambda based on distance preservation strategy
+            if distance_preservation == 'preserve':
+                # Preserve CURRENT distance to common_vertex
+                current_distance = self._compute_distance_to_vertex(vp_idx, common_vertex)
+                new_lambda = self._compute_lambda_for_distance(
+                    old_edge,
+                    common_vertex,
+                    current_distance  # Use current, not old
+                )
+                print(f"      VP {vp_idx}: {old_edge}, λ={new_lambda:.6f} (preserving distance {current_distance:.6f})")
+                self.logger.info(f"      VP {vp_idx}: {old_edge}, λ={new_lambda:.6f} (preserving distance {current_distance:.6f})")
+            elif distance_preservation == 'midpoint':
+                new_lambda = 0.5
+                print(f"      VP {vp_idx}: {old_edge}, λ=0.5 (midpoint)")
+                self.logger.info(f"      VP {vp_idx}: {old_edge}, λ=0.5 (midpoint)")
+            else:
+                # Use old lambda as fallback
+                new_lambda = old_lambda
+                print(f"      VP {vp_idx}: {old_edge}, λ={new_lambda:.6f} (old lambda)")
+                self.logger.info(f"      VP {vp_idx}: {old_edge}, λ={new_lambda:.6f} (old lambda)")
+            
+            self._move_variable_point(vp_idx, old_edge, new_lambda)
+        
+        # 2. Delete the steiner VP that was created
+        created_vp_idx = vp_record['created_vp_idx']
+        print(f"    Deleting steiner VP {created_vp_idx}")
+        self.logger.info(f"    Deleting steiner VP {created_vp_idx}")
+        self._delete_variable_point(created_vp_idx)
+        
+        # 3. Update all data structures
+        print(f"    Updating data structures")
+        self.logger.info(f"    Updating data structures")
+        self.update_data_structures_after_migration()
+        
+        return -1  # One VP deleted
+    
+    def _delete_variable_point(self, vp_idx: int):
+        """
+        Delete a variable point and update all affected data structures.
+        
+        CRITICAL: This method handles VP index shifting. When a VP is deleted,
+        all VPs with higher indices must be shifted down by 1.
+        
+        Steps:
+        1. Remove VP from edge_to_varpoint mapping
+        2. Remove VP from variable_points list
+        3. Update all VP indices > vp_idx in:
+           - edge_to_varpoint
+           - boundary_segments
+           - triangle_segments (via boundary_segments)
+        
+        Args:
+            vp_idx: Index of VP to delete
+        """
+        if vp_idx >= len(self.partition.variable_points):
+            self.logger.error(f"Cannot delete VP {vp_idx}: index out of range")
+            return
+        
+        vp = self.partition.variable_points[vp_idx]
+        edge = vp.edge
+        
+        self.logger.debug(f"Deleting VP {vp_idx} on edge {edge}")
+        
+        # 1. Remove from edge_to_varpoint
+        if edge in self.partition.edge_to_varpoint:
+            if self.partition.edge_to_varpoint[edge] == vp_idx:
+                del self.partition.edge_to_varpoint[edge]
+            else:
+                self.logger.warning(f"VP {vp_idx} not found at edge {edge} in edge_to_varpoint")
+        
+        # 2. Delete from variable_points list
+        del self.partition.variable_points[vp_idx]
+        
+        # 3. Shift all higher indices down by 1
+        self.logger.debug(f"Shifting VP indices > {vp_idx} down by 1")
+        
+        # Update edge_to_varpoint
+        updated_edge_to_varpoint = {}
+        for e, idx in self.partition.edge_to_varpoint.items():
+            if idx > vp_idx:
+                updated_edge_to_varpoint[e] = idx - 1
+            else:
+                updated_edge_to_varpoint[e] = idx
+        self.partition.edge_to_varpoint = updated_edge_to_varpoint
+        
+        # Update boundary_segments (will be rebuilt by update_data_structures_after_migration)
+        # But we need to shift indices now to avoid inconsistencies
+        for segment in self.partition.boundary_segments:
+            if segment.vp_idx_1 > vp_idx:
+                segment.vp_idx_1 -= 1
+            if segment.vp_idx_2 > vp_idx:
+                segment.vp_idx_2 -= 1
+        
+        # Update triangle_segments (will also be rebuilt, but shift now)
+        for tri_seg in self.partition.triangle_segments:
+            updated_vp_indices = []
+            for idx in tri_seg.var_point_indices:
+                if idx == vp_idx:
+                    self.logger.warning(f"Deleted VP {vp_idx} found in triangle_segment for triangle {tri_seg.triangle_idx}")
+                    continue  # Skip deleted VP
+                elif idx > vp_idx:
+                    updated_vp_indices.append(idx - 1)
+                else:
+                    updated_vp_indices.append(idx)
+            tri_seg.var_point_indices = updated_vp_indices
+        
+        self.logger.debug(f"VP {vp_idx} deleted, {len(self.partition.variable_points)} VPs remaining")
 

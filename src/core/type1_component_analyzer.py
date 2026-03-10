@@ -225,12 +225,13 @@ class Type1ComponentAnalyzer:
         is_near = len(shared_vps) > 0
         return is_near, shared_vps
     
-    def analyze_component(self, component_vps: Set[int]) -> Dict:
+    def analyze_component(self, component_vps: Set[int], boundary_tol: float = 0.1) -> Dict:
         """
         Analyze a component and extract metadata.
         
         Args:
             component_vps: Set of VP indices in the component
+            boundary_tol: Tolerance for boundary VP detection
             
         Returns:
             {
@@ -259,7 +260,7 @@ class Type1ComponentAnalyzer:
         external_neighbors = all_neighbors - component_vps
         
         # Get boundary VPs set for classification
-        boundary_vps_set = set(self.partition.get_boundary_variable_points(tol=0.1))
+        boundary_vps_set = set(self.partition.get_boundary_variable_points(tol=boundary_tol))
         
         # Separate boundary and non-boundary external neighbors
         boundary_neighbors = external_neighbors & boundary_vps_set
@@ -374,7 +375,7 @@ class Type1ComponentAnalyzer:
             vp_target = identify_target_vertex(vp)
             if vp_target != target_vertex:
                 invalid_vps.append(vp_idx)
-                self.logger.warning(
+                self.logger.debug(
                     f"Component {comp_idx}:   ✗ VP {vp_idx}: edge {vp.edge}, λ={vp.lambda_param:.6f} "
                     f"approaches vertex {vp_target}, NOT target vertex {target_vertex}"
                 )
@@ -423,7 +424,7 @@ class Type1ComponentAnalyzer:
                 self.logger.debug(f"Component {comp_idx}:   ✓ VP {vp_idx} ({position}): edge {vp.edge}, λ={vp.lambda_param:.6f} approaches target vertex {target_vertex}")
             else:
                 rejected_candidates.append((position, vp_idx, vp.edge, vp_target))
-                self.logger.warning(
+                self.logger.debug(
                     f"Component {comp_idx}:   ✗ VP {vp_idx} ({position}): edge {vp.edge}, λ={vp.lambda_param:.6f} "
                     f"approaches vertex {vp_target}, NOT target vertex {target_vertex} - REJECTED"
                 )
@@ -437,7 +438,7 @@ class Type1ComponentAnalyzer:
                 error_msg += f"\n  - VP {vp_idx} ({pos}): edge {edge}, approaches {vp_target}"
             
             if strict_validation:
-                self.logger.error(error_msg)
+                self.logger.debug(error_msg)  # DEBUG: Expected filtering during validation
                 raise ValueError(error_msg)
             else:
                 # Fallback for visualization: use candidate with minimum distance regardless of validity
@@ -470,7 +471,7 @@ class Type1ComponentAnalyzer:
                 return auxiliary
         
         if rejected_candidates:
-            self.logger.info(
+            self.logger.debug(
                 f"Component {comp_idx}:   Rejected {len(rejected_candidates)} candidate(s) that don't approach target vertex {target_vertex}"
             )
         
@@ -494,7 +495,7 @@ class Type1ComponentAnalyzer:
         else:  # position == 'right'
             auxiliary = [vp_a, vp_b, third_vp]
         
-        self.logger.info(
+        self.logger.debug(
             f"Component {comp_idx}: ✓ Auxiliary component for 2-VP {vp_indices}: {auxiliary} "
             f"(third VP: {third_vp}, position: {position}, dist: {min_dist:.6f})"
         )
@@ -581,7 +582,7 @@ class Type1ComponentAnalyzer:
                 if vp_target != target_vertex:
                     valid = False
                     invalid_vps.append((vp_idx, vp.edge, vp_target))
-                    self.logger.warning(
+                    self.logger.debug(
                         f"Component {comp_idx}:     ✗ VP {vp_idx}: edge {vp.edge}, λ={vp.lambda_param:.6f} "
                         f"approaches vertex {vp_target}, NOT target vertex {target_vertex}"
                     )
@@ -592,9 +593,9 @@ class Type1ComponentAnalyzer:
             
             if valid:
                 valid_candidates.append((config_name, triplet, total_dist))
-                self.logger.info(f"Component {comp_idx}:   ✓ Triplet '{config_name}' is VALID (total_dist={total_dist:.6f})")
+                self.logger.debug(f"Component {comp_idx}:   ✓ Triplet '{config_name}' is VALID (total_dist={total_dist:.6f})")
             else:
-                self.logger.warning(
+                self.logger.debug(
                     f"Component {comp_idx}:   ✗ Triplet '{config_name}' is INVALID - {len(invalid_vps)} VP(s) don't approach target vertex"
                 )
         
@@ -605,7 +606,7 @@ class Type1ComponentAnalyzer:
             )
             
             if strict_validation:
-                self.logger.error(error_msg)
+                self.logger.debug(error_msg)  # DEBUG: Expected filtering during validation
                 raise ValueError(error_msg)
             else:
                 # Fallback for visualization: use triplet with minimum distance regardless of validity
@@ -630,7 +631,7 @@ class Type1ComponentAnalyzer:
         # Select triplet with minimum total distance from VALID candidates
         best_config, best_triplet, best_total = min(valid_candidates, key=lambda x: x[2])
         
-        self.logger.info(
+        self.logger.debug(
             f"Component {comp_idx}: ✓ Auxiliary component for 1-VP [{vp_c}]: {best_triplet} "
             f"(config: '{best_config}', total_dist: {best_total:.6f}, "
             f"rejected {len(triplet_candidates) - len(valid_candidates)} invalid triplet(s))"
@@ -761,13 +762,13 @@ class Type1ComponentAnalyzer:
     # Conflict Detection and Resolution
     # =========================================================================
     
-    def detect_proximity_conflicts(self, components: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    def detect_proximity_conflicts(self, components: List[Dict], boundary_tol: float = 0.1) -> Tuple[List[Dict], List[Dict]]:
         """
         Detect conflicts between components (shared non-boundary neighbors).
         
         A conflict exists when:
         - Components share a non-boundary neighbor VP (topological connection)
-        - Both components are near convergence (min_dist < 0.01)
+        - Both components are near convergence (min_dist < boundary_tol)
         
         Note: Conflict detection does NOT determine deferral. Deferral requires
         additional condition: at least one component has < 3 VPs (risky).
@@ -775,6 +776,10 @@ class Type1ComponentAnalyzer:
         IMPORTANT: Each conflict is between exactly 2 components (one shared VP).
         However, chains can form: Component A shares VP_ab with B, B shares VP_bc with C.
         This creates a chain: A - B - C, where B has multiple neighbors.
+        
+        Args:
+            components: List of component dicts from analyze_component()
+            boundary_tol: Tolerance for boundary detection and convergence check
         
         Returns:
             (conflicts: List[Dict], chain_warnings: List[Dict])
@@ -795,8 +800,8 @@ class Type1ComponentAnalyzer:
                     min_dist_j = comp_j['min_distance']
                     
                     # Determine if both components are near convergence
-                    proximity_threshold = 0.01
-                    both_near = min_dist_i < proximity_threshold and min_dist_j < proximity_threshold
+                    # Use boundary_tol for consistency
+                    both_near = min_dist_i < boundary_tol and min_dist_j < boundary_tol
                     
                     conflicts.append({
                         'component_i': i,
@@ -1004,8 +1009,8 @@ class Type1ComponentAnalyzer:
             # Check 1: Near triple point exclusion (safety check)
             if component.get('near_triple_point', False):
                 excluded_triple_point.append(component)
-                self.logger.warning(
-                    f"  ✗ Component {comp_idx} ({comp_size}-VP): EXCLUDED - near triple point "
+                self.logger.debug(
+                    f"Component {comp_idx} ({comp_size}-VP): Excluded - near triple point "
                     f"(shared VPs: {component.get('triple_point_shared_vps', [])})"
                 )
                 continue
@@ -1017,8 +1022,8 @@ class Type1ComponentAnalyzer:
                 valid_components.append(component)
             else:
                 excluded_prefilter.append(component)
-                # Log exclusion reason (detailed logging happens in auxiliary construction)
-                self.logger.warning(f"Component {comp_idx}: Excluded - {reason}")
+                # Log exclusion reason (DEBUG: expected filtering)
+                self.logger.debug(f"Component {comp_idx}: Excluded - {reason}")
         
         if not valid_components:
             print("\n⚠️  No valid components found for migration")
@@ -1146,7 +1151,8 @@ class Type1ComponentAnalyzer:
     
     def run_full_analysis(self, boundary_tol: float = 0.1, 
                           conflict_strategy: str = 'exclude_one',
-                          build_migration_plan: bool = True) -> Dict:
+                          build_migration_plan: bool = True,
+                          protect_type2: bool = True) -> Dict:
         """
         Run the complete Type 1 component analysis pipeline.
         
@@ -1155,8 +1161,9 @@ class Type1ComponentAnalyzer:
         2. Find connected components
         3. Analyze each component
         4. Detect conflicts
-        5. Select components for migration
-        6. Build complete migration plan (if build_migration_plan=True)
+        5. Filter for Type 2 protection (NEW!)
+        6. Select components for migration
+        7. Build complete migration plan (if build_migration_plan=True)
         
         Args:
             boundary_tol: Tolerance for boundary VP detection (default: 0.1)
@@ -1164,6 +1171,9 @@ class Type1ComponentAnalyzer:
             build_migration_plan: If True, pre-compute migrating VP and auxiliary for each
                                 component (default: True). This avoids redundant computation
                                 during the migration loop.
+            protect_type2: If True, exclude Type 1 components whose VPs are outer neighbors
+                          to boundary triple points (default: True). Uses topology-based
+                          identification (not distance-based).
         
         Returns:
             Dict containing:
@@ -1171,6 +1181,7 @@ class Type1ComponentAnalyzer:
                 - 'components': List of component dicts
                 - 'conflicts': List of conflict dicts
                 - 'chain_warnings': List of chain warning dicts
+                - 'type2_excluded': List of components excluded for Type 2 protection (NEW!)
                 - 'to_migrate': List of components selected for migration
                 - 'excluded': List of excluded components
                 - 'migration_plan': List of dicts with pre-computed migration details
@@ -1188,29 +1199,51 @@ class Type1ComponentAnalyzer:
         
         # Step 2: Find connected components
         components = self.find_connected_components(boundary_vps_set)
+        self.logger.info(f"Found {len(components)} connected component(s)")
         print(f"✓ Found {len(components)} connected component(s)")
         print()
         
         # Step 3: Analyze each component
         component_info = []
         for i, comp_vps in enumerate(components):
-            info = self.analyze_component(comp_vps)
+            info = self.analyze_component(comp_vps, boundary_tol=boundary_tol)
             info['index'] = i
             component_info.append(info)
         
         # Step 4: Detect conflicts
-        conflicts, chain_warnings = self.detect_proximity_conflicts(component_info)
+        conflicts, chain_warnings = self.detect_proximity_conflicts(component_info, boundary_tol=boundary_tol)
+        self.logger.info(f"Detected {len(conflicts)} conflict(s) between components")
         
-        # Step 5: Select components for migration
+        # Step 4.5: Filter for Type 2 protection (NEW!)
+        type2_excluded = []
+        available_for_migration = component_info
+        
+        if protect_type2:
+            available_for_migration, type2_excluded = self._filter_for_type2_protection(
+                component_info,
+                boundary_tol=boundary_tol,
+                protection_distance=None  # Unused, kept for API compatibility
+            )
+            self.logger.info(f"Type 2 Protection: {len(available_for_migration)} available, {len(type2_excluded)} excluded")
+        
+        # Step 5: Select components for migration (from available set)
         to_migrate, excluded = self.select_components_for_migration(
-            component_info, conflicts, conflict_strategy=conflict_strategy
+            available_for_migration, conflicts, conflict_strategy=conflict_strategy
         )
+        
+        # Summary logging (INFO level)
+        self.logger.info(f"Component selection complete:")
+        self.logger.info(f"  Total detected: {len(component_info)}")
+        self.logger.info(f"  Available for migration: {len(to_migrate)}")
+        self.logger.info(f"  Excluded (Type 2 protection): {len(type2_excluded)}")
+        self.logger.info(f"  Excluded (other): {len(excluded)}")
         
         result = {
             'boundary_vps': boundary_vps,
             'components': component_info,
             'conflicts': conflicts,
             'chain_warnings': chain_warnings,
+            'type2_excluded': type2_excluded,
             'to_migrate': to_migrate,
             'excluded': excluded
         }
@@ -1221,6 +1254,137 @@ class Type1ComponentAnalyzer:
             result['migration_plan'] = migration_plan
         
         return result
+    
+    def _filter_for_type2_protection(self, component_info: List[Dict],
+                                     boundary_tol: float,
+                                     protection_distance: float = None) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Filter Type 1 components to protect Type 2 triple point outer neighbors.
+        
+        Strategy: Exclude Type 1 components whose VPs are "outer neighbors" to ANY
+        triple point (not just boundary ones). This prevents Type 1 from disrupting
+        potential Type 2 migration geometry.
+        
+        For each triple point (3 VPs):
+        - Each VP has exactly 2 outer neighbors: first_level and second_level
+        - Total: 3 VPs × 2 neighbors = 6 outer level VPs per triple triangle
+        - These are identified topologically via boundary_segments (NOT by distance)
+        
+        Args:
+            component_info: List of component dicts from analyze_component
+            boundary_tol: UNUSED (kept for API compatibility)
+            protection_distance: UNUSED (kept for API compatibility)
+        
+        Returns:
+            Tuple of (available_components, excluded_components)
+        """
+        # Get ALL triple points (not just boundary ones)
+        steiner_handler = self._get_steiner_handler()
+        all_triple_points = steiner_handler.triple_points
+        
+        if not all_triple_points:
+            self.logger.info("Type 2 Protection: No triple points found - all components available")
+            return component_info, []
+        
+        self.logger.info(f"Type 2 Protection: Processing {len(all_triple_points)} triple point(s)")
+        
+        # For each triple point, identify outer neighbor VPs (topology-based)
+        protected_vps = set()  # VPs that should not migrate (outer neighbors)
+        
+        for tp in all_triple_points:
+            tp_vp_indices = list(tp.var_point_indices)
+            triple_vp_set = set(tp_vp_indices)
+            
+            self.logger.debug(f"  Processing triple point: VPs {tp_vp_indices}")
+            
+            # For each VP in the triple triangle, find its 2 outer neighbors
+            for vp_idx in tp_vp_indices:
+                # Find first_level: direct neighbor (excluding triple VPs)
+                first_level_vps = []
+                for segment in self.partition.boundary_segments:
+                    if segment.vp_idx_1 == vp_idx:
+                        neighbor = segment.vp_idx_2
+                        if neighbor not in triple_vp_set:
+                            first_level_vps.append(neighbor)
+                    elif segment.vp_idx_2 == vp_idx:
+                        neighbor = segment.vp_idx_1
+                        if neighbor not in triple_vp_set:
+                            first_level_vps.append(neighbor)
+                
+                if len(first_level_vps) != 1:
+                    self.logger.debug(
+                        f"    VP {vp_idx}: Expected 1 first-level outer neighbor, "
+                        f"found {len(first_level_vps)}: {first_level_vps} - skipping"
+                    )
+                    continue
+                
+                first_level_vp = first_level_vps[0]
+                protected_vps.add(first_level_vp)
+                self.logger.debug(f"    VP {vp_idx} → first_level: {first_level_vp}")
+                
+                # Find second_level: neighbor of first_level (excluding vp_idx and triple VPs)
+                second_level_vps = []
+                for segment in self.partition.boundary_segments:
+                    if segment.vp_idx_1 == first_level_vp:
+                        neighbor = segment.vp_idx_2
+                        if neighbor != vp_idx and neighbor not in triple_vp_set:
+                            second_level_vps.append(neighbor)
+                    elif segment.vp_idx_2 == first_level_vp:
+                        neighbor = segment.vp_idx_1
+                        if neighbor != vp_idx and neighbor not in triple_vp_set:
+                            second_level_vps.append(neighbor)
+                
+                if len(second_level_vps) != 1:
+                    self.logger.debug(
+                        f"    VP {vp_idx}: Expected 1 second-level outer neighbor via {first_level_vp}, "
+                        f"found {len(second_level_vps)}: {second_level_vps} - skipping"
+                    )
+                    continue
+                
+                second_level_vp = second_level_vps[0]
+                protected_vps.add(second_level_vp)
+                self.logger.debug(f"    VP {vp_idx} → second_level: {second_level_vp}")
+        
+        # Summary logging (INFO level)
+        self.logger.info(f"Type 2 Protection: {len(all_triple_points)} triple points, {len(protected_vps)} protected VPs, {len(component_info)} components analyzed")
+        self.logger.debug(f"  Protected VPs: {sorted(protected_vps)}")
+        
+        # Filter components
+        available = []
+        excluded = []
+        
+        for comp in component_info:
+            comp_vps = comp['vp_indices']  # Correct key name
+            
+            # Check if any VP in this component is protected
+            conflicting_vps = [vp for vp in comp_vps if vp in protected_vps]
+            
+            if conflicting_vps:
+                excluded.append(comp)
+                self.logger.debug(
+                    f"Type 2 Protection: Excluding Component {comp['index']} "
+                    f"(size {comp['size']}, target vertex {comp['target_vertex']}) - "
+                    f"contains protected VP(s): {conflicting_vps}"
+                )
+            else:
+                available.append(comp)
+        
+        self.logger.info(f"Type 2 Protection: {len(available)} available, {len(excluded)} excluded")
+        
+        return available, excluded
+    
+    def _get_steiner_handler(self):
+        """Get or create SteinerHandler instance."""
+        # Check if we already have a steiner handler in cache
+        if hasattr(self, '_steiner_handler_cache') and self._steiner_handler_cache is not None:
+            return self._steiner_handler_cache
+        
+        # Create new SteinerHandler
+        from .steiner_handler import SteinerHandler
+        steiner_handler = SteinerHandler(self.mesh, self.partition)
+        self._steiner_handler_cache = steiner_handler
+        
+        return steiner_handler
     
     def _build_migration_plan(self, to_migrate: List[Dict]) -> List[Dict]:
         """

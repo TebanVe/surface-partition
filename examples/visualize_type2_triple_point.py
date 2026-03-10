@@ -406,42 +406,35 @@ def render_regions(
     target_region: Optional[int] = None,
     target_color: str = '#FF8C42',  # Bright warm orange
     backface_culling: bool = False,
+    opacity: float = 1.0,
 ):
     """Render all regions with precise boundaries (simplified for vertex-collapse).
     
     Args:
         backface_culling: If True, hide back-facing triangles (default: False to match Type 1)
+        opacity: Opacity for non-highlighted regions (default: 1.0)
     """
-    # Warm, vibrant color palette
-    warm_palette = [
-        '#FFB366',  # Warm orange
-        '#FF8C66',  # Coral
-        '#FFD966',  # Golden yellow
-        '#FF9999',  # Salmon pink
-        '#FFCC99',  # Peach
-        '#FFB3BA',  # Light pink
-        '#FFDFBA',  # Light peach
-        '#FFFFBA',  # Light yellow
-        '#BAFFC9',  # Light mint
-        '#BAE1FF',  # Light blue
-        '#E0BBE4',  # Light lavender
-        '#FFDFD3',  # Light coral
+    # Pastel color palette (matches visualize_partition.py)
+    pale_palette = [
+        '#FFE5B4', '#E0BBE4', '#FFDAC1', '#B5EAD7', '#C7CEEA',
+        '#FFB7B2', '#FFDFD3', '#E2F0CB', '#B4F8C8', '#A0C4FF',
+        '#FFC6FF', '#FFCFD2', '#FDE2E4', '#FAD2E1', '#BEE1E6'
     ]
     
-    print(f"  Rendering all {partition.n_cells} regions (precise boundaries)...")
+    print(f"  Rendering all {partition.n_cells} regions (precise boundaries, opacity: {opacity})...")
     
     for cell_idx in range(partition.n_cells):
         if target_region is not None and cell_idx == target_region:
             color = target_color
-            opacity = 1.0
+            cell_opacity = 1.0
         else:
-            color = warm_palette[cell_idx % len(warm_palette)]
-            opacity = 0.85
+            color = pale_palette[cell_idx % len(pale_palette)]
+            cell_opacity = opacity
         
         # Use simplified rendering function (no crossing cache)
         render_single_region_simple(
             plotter, mesh, partition, area_calc, steiner_handler,
-            cell_idx, color, opacity=opacity, backface_culling=backface_culling
+            cell_idx, color, opacity=cell_opacity, backface_culling=backface_culling
         )
     
     print(f"  ✓ Region rendering complete")
@@ -492,9 +485,11 @@ def add_triangle_label(
     tri_idx: int,
     label_text: str,
     color: str = 'black',
-    font_size: int = 12
+    font_size: int = 12,
+    shape_color: str = 'gray',
+    shape_opacity: float = 0.8
 ):
-    """Add a text label at the centroid of a triangle with gray background."""
+    """Add a text label at the centroid of a triangle with customizable styling."""
     # Get triangle vertices
     face = mesh.faces[tri_idx]
     v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
@@ -502,15 +497,15 @@ def add_triangle_label(
     # Compute centroid
     centroid = (v0 + v1 + v2) / 3.0
     
-    # Add text at centroid with gray box background
+    # Add text at centroid with customizable box background
     plotter.add_point_labels(
         [centroid],
         [label_text],
         font_size=font_size,
         text_color=color,
         font_family='arial',
-        shape_color='gray',
-        shape_opacity=0.8,  # Gray background
+        shape_color=shape_color,
+        shape_opacity=shape_opacity,
         always_visible=True
     )
 
@@ -620,9 +615,35 @@ def run_visualization(args):
     mesh, partition = load_partition_from_refined_file(args.solution)
     print("\n✓ Loaded partition state from refined file\n")
     
+    # Load migration history if present
+    print("Checking for Type 2 migration history...")
+    migration_history = None
+    try:
+        import h5py
+        from src.core.type2_migration_io import load_type2_migration_history
+        with h5py.File(args.solution, 'r') as f:
+            migration_history = load_type2_migration_history(f)
+        if len(migration_history.records) > 0:
+            print(f"✓ Found migration history: {len(migration_history.records)} triple points tracked")
+            for orig_tri, record in migration_history.records.items():
+                print(f"  Triangle {orig_tri}: Path = {record.triangle_sequence}")
+                print(f"                    Iterations = {record.iteration_sequence}")
+        else:
+            print("  No migration history in file")
+    except Exception as e:
+        print(f"  No migration history found ({e})")
+    print()
+    
     # Initialize topology components
     mesh_topology = MeshTopology(mesh)
     switcher = TopologySwitcher(mesh, partition, mesh_topology)
+    
+    # Attach migration history to switcher if present
+    if migration_history is not None:
+        switcher.type2_migration_history = migration_history
+        print("✓ Migration history attached to topology switcher")
+        print()
+    
     steiner_handler = SteinerHandler(mesh, partition)
     
     # Triple point analysis
@@ -839,7 +860,8 @@ def run_visualization(args):
         render_regions(
             plotter_before, mesh, partition, area_calc, steiner_handler,
             target_region=None,
-            backface_culling=args.enable_backface_culling
+            backface_culling=args.enable_backface_culling,
+            opacity=args.opacity
         )
         
         # Add Steiner visualization if requested
@@ -955,8 +977,115 @@ def run_visualization(args):
             if T_first_VP is not None:
                 methodology_triangles[T_first_VP] = f"T{T_first_VP}"
             
-            for tri_idx, label in methodology_triangles.items():
-                add_triangle_label(plotter_before, mesh, tri_idx, label, color='black', font_size=12)
+            # Label triangles based on --label-all flag
+            if args.label_all:
+                # Use spatial filtering when zoomed in for performance
+                if args.apply_zoom:
+                    # Only label triangles within distance of zoom focus
+                    max_distance = args.zoom_factor * 50  # Increased from 10 to capture more triangles
+                    print(f"  Labeling triangles within {max_distance:.4f} units of focus point...")
+                    
+                    # Batch collect centroids and labels
+                    methodology_centroids = []
+                    methodology_labels = []
+                    other_centroids = []
+                    other_labels = []
+                    
+                    labeled_count = 0
+                    for tri_idx in range(len(mesh.faces)):
+                        face = mesh.faces[tri_idx]
+                        v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
+                        centroid = (v0 + v1 + v2) / 3.0
+                        
+                        # Check if within distance OR is methodology triangle
+                        dist = np.linalg.norm(centroid - steiner_pos)
+                        if dist < max_distance or tri_idx in methodology_triangles:
+                            if tri_idx in methodology_triangles:
+                                methodology_centroids.append(centroid)
+                                methodology_labels.append(methodology_triangles[tri_idx])
+                            else:
+                                other_centroids.append(centroid)
+                                other_labels.append(f"T{tri_idx}")
+                            labeled_count += 1
+                    
+                    print(f"  Labeling {labeled_count} triangles (filtered from {len(mesh.faces)})...")
+                    print(f"    Methodology triangles: {len(methodology_centroids)}")
+                    print(f"    Other triangles: {len(other_centroids)}")
+                    
+                    # Batch add methodology triangles (gray background)
+                    if methodology_centroids:
+                        plotter_before.add_point_labels(
+                            np.array(methodology_centroids),
+                            methodology_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='gray',
+                            shape_opacity=0.8,
+                            always_visible=True
+                        )
+                    
+                    # Batch add other triangles (white background)
+                    if other_centroids:
+                        plotter_before.add_point_labels(
+                            np.array(other_centroids),
+                            other_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='white',
+                            shape_opacity=0.9,
+                            always_visible=True
+                        )
+                else:
+                    # No zoom - use batching only (no spatial filter)
+                    print(f"  Labeling all {len(mesh.faces)} triangles using batched approach...")
+                    
+                    # Batch collect centroids and labels
+                    methodology_centroids = []
+                    methodology_labels = []
+                    other_centroids = []
+                    other_labels = []
+                    
+                    for tri_idx in range(len(mesh.faces)):
+                        face = mesh.faces[tri_idx]
+                        v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
+                        centroid = (v0 + v1 + v2) / 3.0
+                        
+                        if tri_idx in methodology_triangles:
+                            methodology_centroids.append(centroid)
+                            methodology_labels.append(methodology_triangles[tri_idx])
+                        else:
+                            other_centroids.append(centroid)
+                            other_labels.append(f"T{tri_idx}")
+                    
+                    # Batch add methodology triangles
+                    if methodology_centroids:
+                        plotter_before.add_point_labels(
+                            np.array(methodology_centroids),
+                            methodology_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='gray',
+                            shape_opacity=0.8,
+                            always_visible=True
+                        )
+                    
+                    # Batch add other triangles
+                    if other_centroids:
+                        plotter_before.add_point_labels(
+                            np.array(other_centroids),
+                            other_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='white',
+                            shape_opacity=0.6,
+                            always_visible=True
+                        )
+            else:
+                # Original behavior: only methodology triangles
+                for tri_idx, label in methodology_triangles.items():
+                    add_triangle_label(plotter_before, mesh, tri_idx, label, 
+                                     color='black', font_size=args.label_font_size,
+                                     shape_color='gray', shape_opacity=0.8)
         
         print("Triangle labels added")
         print()
@@ -1013,8 +1142,26 @@ def run_visualization(args):
         )
         
         if not migration_v4_result['success']:
-            print("ERROR: Type 2 migration failed!")
-            print(migration_v4_result)
+            print()
+            print("="*80)
+            print("⚠️  ERROR: Type 2 migration failed!")
+            print("="*80)
+            print(f"Reason: {migration_v4_result.get('error', 'Unknown error')}")
+            print()
+            print("The BEFORE state has been rendered successfully.")
+            print("Since AFTER state cannot be generated, only BEFORE will be displayed.")
+            print("="*80)
+            print()
+            
+            # If we already showed BEFORE in non-blocking mode, show it again in blocking mode
+            if args.state == 'both' and show_before:
+                print("Showing BEFORE state window (migration failed, AFTER unavailable)...")
+                plotter_before.show()
+            
+            # Exit gracefully
+            print("\n" + "="*80)
+            print("Visualization complete (BEFORE state only)")
+            print("="*80)
             return
         
         print()
@@ -1044,7 +1191,8 @@ def run_visualization(args):
         render_regions(
             plotter_after, mesh, partition_after, area_calc_after, steiner_handler_after,
             target_region=None,
-            backface_culling=args.enable_backface_culling
+            backface_culling=args.enable_backface_culling,
+            opacity=args.opacity
         )
         
         # Add Steiner visualization (new triple point)
@@ -1289,8 +1437,115 @@ def run_visualization(args):
             for tri_idx in sorted(methodology_triangles.keys()):
                 print(f"    {methodology_triangles[tri_idx]}")
             
-            for tri_idx, label in methodology_triangles.items():
-                add_triangle_label(plotter_after, mesh, tri_idx, label, color='black', font_size=12)
+            # Label triangles based on --label-all flag
+            if args.label_all:
+                # Use spatial filtering when zoomed in for performance
+                if args.apply_zoom:
+                    # Only label triangles within distance of zoom focus
+                    max_distance = args.zoom_factor * 50  # Increased from 10 to capture more triangles
+                    print(f"  Labeling triangles within {max_distance:.4f} units of focus point...")
+                    
+                    # Batch collect centroids and labels
+                    methodology_centroids = []
+                    methodology_labels = []
+                    other_centroids = []
+                    other_labels = []
+                    
+                    labeled_count = 0
+                    for tri_idx in range(len(mesh.faces)):
+                        face = mesh.faces[tri_idx]
+                        v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
+                        centroid = (v0 + v1 + v2) / 3.0
+                        
+                        # Check if within distance OR is methodology triangle
+                        dist = np.linalg.norm(centroid - steiner_pos)
+                        if dist < max_distance or tri_idx in methodology_triangles:
+                            if tri_idx in methodology_triangles:
+                                methodology_centroids.append(centroid)
+                                methodology_labels.append(methodology_triangles[tri_idx])
+                            else:
+                                other_centroids.append(centroid)
+                                other_labels.append(f"T{tri_idx}")
+                            labeled_count += 1
+                    
+                    print(f"  Labeling {labeled_count} triangles (filtered from {len(mesh.faces)})...")
+                    print(f"    Methodology triangles: {len(methodology_centroids)}")
+                    print(f"    Other triangles: {len(other_centroids)}")
+                    
+                    # Batch add methodology triangles (gray background)
+                    if methodology_centroids:
+                        plotter_after.add_point_labels(
+                            np.array(methodology_centroids),
+                            methodology_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='gray',
+                            shape_opacity=0.8,
+                            always_visible=True
+                        )
+                    
+                    # Batch add other triangles (white background)
+                    if other_centroids:
+                        plotter_after.add_point_labels(
+                            np.array(other_centroids),
+                            other_labels,
+                            font_size=args.label_font_size,
+                            text_color='black',
+                            shape_color='white',
+                            shape_opacity=0.6,
+                            always_visible=True
+                        )
+                else:
+                    # No zoom - use batching only (no spatial filter)
+                    print(f"  Labeling all {len(mesh.faces)} triangles using batched approach...")
+                    
+                    # Batch collect centroids and labels
+                    methodology_centroids = []
+                    methodology_labels = []
+                    other_centroids = []
+                    other_labels = []
+                    
+                    for tri_idx in range(len(mesh.faces)):
+                        face = mesh.faces[tri_idx]
+                        v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
+                        centroid = (v0 + v1 + v2) / 3.0
+                        
+                        if tri_idx in methodology_triangles:
+                            methodology_centroids.append(centroid)
+                            methodology_labels.append(methodology_triangles[tri_idx])
+                        else:
+                            other_centroids.append(centroid)
+                            other_labels.append(f"T{tri_idx}")
+                    
+                    # Batch add methodology triangles
+                    if methodology_centroids:
+                        plotter_after.add_point_labels(
+                            np.array(methodology_centroids),
+                            methodology_labels,
+                            font_size=12,
+                            text_color='black',
+                            shape_color='gray',
+                            shape_opacity=0.8,
+                            always_visible=True
+                        )
+                    
+                    # Batch add other triangles
+                    if other_centroids:
+                        plotter_after.add_point_labels(
+                            np.array(other_centroids),
+                            other_labels,
+                            font_size=12,
+                            text_color='black',
+                            shape_color='white',
+                            shape_opacity=0.6,
+                            always_visible=True
+                        )
+            else:
+                # Original behavior: only methodology triangles
+                for tri_idx, label in methodology_triangles.items():
+                    add_triangle_label(plotter_after, mesh, tri_idx, label,
+                                     color='black', font_size=args.label_font_size,
+                                     shape_color='gray', shape_opacity=0.8)
             
             print("Triangle labels added")
             print()
@@ -1353,6 +1608,11 @@ def main():
                        help='Show Steiner points and void triangles')
     parser.add_argument('--enable-backface-culling', action='store_true',
                        help='Hide back-facing triangles (default: show all faces like Type 1)')
+    parser.add_argument('--label-all', action='store_true',
+                       help='Label all triangles in mesh (methodology triangles: gray box, others: white box; '
+                            'recommended with --apply-zoom to reduce clutter)')
+    parser.add_argument('--label-font-size', type=int, default=12,
+                       help='Font size for triangle labels (default: 12)')
     
     # Camera/zoom options
     parser.add_argument('--apply-zoom', action='store_true',
@@ -1363,6 +1623,8 @@ def main():
                        help='Size of VP spheres (default: 0.0005)')
     parser.add_argument('--steiner-size', type=float, default=0.000005,
                        help='Size of Steiner point spheres (default: 0.000005)')
+    parser.add_argument('--opacity', type=float, default=1.0,
+                       help='Opacity of non-highlighted regions (0.0-1.0, default: 1.0)')
     
     args = parser.parse_args()
     
