@@ -3575,7 +3575,10 @@ class TopologySwitcher:
             print(f"  Reversing migration {migration_index}: {from_tri} → {to_tri}")
             self.logger.info(f"  Reversing migration {migration_index}: {from_tri} → {to_tri}")
             
-            vp_change = self._reverse_single_migration(vp_record, distance_preservation)
+            vp_change = self._reverse_single_migration(
+                vp_record, distance_preservation,
+                source_triangle=int(from_tri), target_triangle=int(to_tri)
+            )
             total_vp_change += vp_change
         
         # Truncate history
@@ -3595,7 +3598,9 @@ class TopologySwitcher:
     def _reverse_single_migration(
         self,
         vp_record: Dict,
-        distance_preservation: str
+        distance_preservation: str,
+        source_triangle: int = None,
+        target_triangle: int = None
     ) -> int:
         """
         Reverse a single Type 2 migration.
@@ -3612,6 +3617,9 @@ class TopologySwitcher:
                 - old_cell: Cell before the forward migration's flip (added 2026-03-12)
                 - new_cell: Cell after the forward migration's flip (added 2026-03-12)
             distance_preservation: 'preserve' or 'midpoint'
+            source_triangle: Triangle the triple point is returning to (from_tri)
+            target_triangle: Triangle the triple point is leaving (to_tri, the one the
+                forward migration went to). Used for fallback cell-flip derivation.
         
         Returns:
             VP count change (should be -1 for deleting steiner VP)
@@ -3628,6 +3636,14 @@ class TopologySwitcher:
             old_edge = vp_data['old_edge']
             old_lambda = vp_data['old_lambda']
             old_distance = vp_data['old_distance_to_common']
+            
+            edge_norm = tuple(sorted(old_edge))
+            existing = self.partition.edge_to_varpoint.get(edge_norm)
+            if existing is not None and existing != vp_idx:
+                self.logger.warning(
+                    f"    Edge conflict: VP {vp_idx} moving to {old_edge} "
+                    f"but VP {existing} already occupies it"
+                )
             
             # Compute NEW lambda based on distance preservation strategy
             if distance_preservation == 'preserve':
@@ -3672,22 +3688,40 @@ class TopologySwitcher:
             self.logger.info(f"    Reversed indicator_functions: vertex {common_vertex} "
                            f"flipped back cell {fwd_new_cell} → {fwd_old_cell}")
         else:
-            # Fallback for records created before this fix: derive from current state
+            # Fallback for records created before this fix: derive from mesh topology.
+            #
+            # Key insight: the forward migration went from source_triangle to
+            # target_triangle. Both triangles share an edge (common_vertex + one
+            # other vertex S). The NON-shared vertex of target_triangle (V_to) is
+            # in the cell that common_vertex was in BEFORE the forward flip.
+            # Proof: the forward made target_triangle a valid triple point by
+            # flipping common_vertex OUT of cell(V_to), which had been a duplicate.
             self.logger.warning(
                 f"    vp_record missing old_cell/new_cell (pre-fix history). "
-                f"Deriving cell flip from current indicator_functions."
+                f"Deriving cell flip from mesh triangle topology."
             )
             vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
             current_cell = int(vertex_labels[common_vertex])
-            # The common_vertex should border exactly the cells of the moved VPs
-            neighbor_cells = set()
-            for vp_idx in vp_record['moved_vps']:
-                if vp_idx < len(self.partition.variable_points):
-                    vp = self.partition.variable_points[vp_idx]
-                    neighbor_cells.update(vp.belongs_to_cells)
-            neighbor_cells.discard(current_cell)
-            if len(neighbor_cells) == 1:
-                target_cell = neighbor_cells.pop()
+            target_cell = None
+            
+            if source_triangle is not None and target_triangle is not None:
+                src_verts = set(self.mesh.faces[source_triangle])
+                tgt_verts = set(self.mesh.faces[target_triangle])
+                non_shared = tgt_verts - src_verts
+                if len(non_shared) == 1:
+                    v_to = non_shared.pop()
+                    target_cell = int(vertex_labels[v_to])
+                    self.logger.info(
+                        f"    Derived cell flip from non-shared vertex {v_to} "
+                        f"(cell {target_cell}) of target triangle {target_triangle}"
+                    )
+                else:
+                    self.logger.error(
+                        f"    Triangles {source_triangle} and {target_triangle} "
+                        f"share {3 - len(non_shared)} vertices (expected 2)"
+                    )
+            
+            if target_cell is not None and target_cell != current_cell:
                 self._update_indicator_functions_for_target_vertex(
                     common_vertex, current_cell, target_cell
                 )
@@ -3698,7 +3732,8 @@ class TopologySwitcher:
             else:
                 self.logger.error(
                     f"    Could not derive cell flip for vertex {common_vertex}: "
-                    f"current_cell={current_cell}, neighbor_cells={neighbor_cells}"
+                    f"current_cell={current_cell}, target_cell={target_cell}, "
+                    f"source_triangle={source_triangle}, target_triangle={target_triangle}"
                 )
         
         # 4. Update belongs_to_cells for all moved VPs (after indicator_functions fix)
