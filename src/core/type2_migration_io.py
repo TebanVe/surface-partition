@@ -80,6 +80,12 @@ def save_type2_migration_history(h5_file: h5py.File, history: Type2MigrationHist
             # Save common vertex
             mig_group.create_dataset('common_vertex', data=vp_rec['common_vertex'])
             
+            # Save cell flip info (for reverse migrations)
+            if 'old_cell' in vp_rec:
+                mig_group.create_dataset('old_cell', data=vp_rec['old_cell'])
+            if 'new_cell' in vp_rec:
+                mig_group.create_dataset('new_cell', data=vp_rec['new_cell'])
+            
             # Save moved VPs data as compound dataset
             moved_vps = vp_rec['moved_vps']
             if len(moved_vps) > 0:
@@ -177,6 +183,12 @@ def load_type2_migration_history(h5_file: h5py.File) -> Type2MigrationHistory:
                 'common_vertex': common_vertex,
                 'moved_vps': moved_vps
             }
+            
+            # Load cell flip info if present (added 2026-03-12)
+            if 'old_cell' in mig_group:
+                vp_record['old_cell'] = int(mig_group['old_cell'][()])
+            if 'new_cell' in mig_group:
+                vp_record['new_cell'] = int(mig_group['new_cell'][()])
             
             record.vp_records.append(vp_record)
         

@@ -1653,18 +1653,22 @@ class TopologySwitcher:
         # rebuild_triangle_segments_from_current_vps() automatically calls
         # _build_segment_connectivity() at the end, which rebuilds boundary_segments
         
-        # Step 2: Verify edge_to_varpoint consistency
+        # Step 2: Rebuild edge_to_varpoint from the authoritative source (vp.edge)
+        # Migrations (especially reverse) can leave this dict out of sync with
+        # actual VP edges. Rebuilding is O(n_vps) and guarantees consistency.
+        rebuilt_map = {}
         for vp_idx, vp in enumerate(self.partition.variable_points):
             edge_norm = tuple(sorted(vp.edge))
-            if edge_norm not in self.partition.edge_to_varpoint:
-                self.logger.warning(f"VP {vp_idx} edge {edge_norm} not in edge_to_varpoint!")
-            elif self.partition.edge_to_varpoint[edge_norm] != vp_idx:
-                self.logger.warning(f"VP {vp_idx} edge {edge_norm} mapped to different VP "
-                                  f"{self.partition.edge_to_varpoint[edge_norm]}!")
+            if edge_norm in rebuilt_map:
+                self.logger.warning(
+                    f"Duplicate edge {edge_norm}: VP {rebuilt_map[edge_norm]} and VP {vp_idx}")
+            rebuilt_map[edge_norm] = vp_idx
+        self.partition.edge_to_varpoint = rebuilt_map
         
         self.logger.debug(f"Data structures updated after migration: "
                          f"{len(self.partition.triangle_segments)} triangle segments, "
-                         f"{len(self.partition.boundary_segments)} boundary segments")
+                         f"{len(self.partition.boundary_segments)} boundary segments, "
+                         f"{len(rebuilt_map)} edge_to_varpoint entries")
     
     def apply_type1_switch_v2(self, component: Dict, 
                               distance_preservation: str = 'preserve',
@@ -3269,6 +3273,10 @@ class TopologySwitcher:
         self.logger.info(f"Step 11: Common vertex {common_vertex} flipped: "
                         f"cell {old_cell} → cell {new_cell}")
         
+        # Record cell flip in vp_state_record so reverse migrations can undo it
+        vp_state_record['old_cell'] = old_cell
+        vp_state_record['new_cell'] = new_cell
+        
         # Step 11b: Update belongs_to_cells for all moved VPs
         # CRITICAL: This must happen AFTER the cell flip (Step 11) so that
         # _determine_cells_for_edge() uses the FINAL indicator_functions state
@@ -3592,7 +3600,8 @@ class TopologySwitcher:
         """
         Reverse a single Type 2 migration.
         
-        Moves VPs back to their old edges and deletes the steiner VP.
+        Moves VPs back to their old edges, reverses the indicator_functions
+        cell flip, updates belongs_to_cells, and deletes the steiner VP.
         Data structures are updated after each reversal (incremental updates).
         
         Args:
@@ -3600,6 +3609,8 @@ class TopologySwitcher:
                 - created_vp_idx: VP that was created (to delete)
                 - moved_vps: Dict of {vp_idx: {old_edge, old_lambda, old_distance_to_common}}
                 - common_vertex: The fan center vertex
+                - old_cell: Cell before the forward migration's flip (added 2026-03-12)
+                - new_cell: Cell after the forward migration's flip (added 2026-03-12)
             distance_preservation: 'preserve' or 'midpoint'
         
         Returns:
@@ -3647,7 +3658,57 @@ class TopologySwitcher:
         self.logger.info(f"    Deleting steiner VP {created_vp_idx}")
         self._delete_variable_point(created_vp_idx)
         
-        # 3. Update all data structures
+        # 3. Reverse the indicator_functions cell flip for common_vertex
+        # The forward migration flipped common_vertex from old_cell → new_cell,
+        # so the reverse must flip it back: new_cell → old_cell.
+        if 'old_cell' in vp_record and 'new_cell' in vp_record:
+            fwd_old_cell = vp_record['old_cell']
+            fwd_new_cell = vp_record['new_cell']
+            self._update_indicator_functions_for_target_vertex(
+                common_vertex, fwd_new_cell, fwd_old_cell
+            )
+            print(f"    Reversed indicator_functions: vertex {common_vertex} "
+                  f"flipped back cell {fwd_new_cell} → {fwd_old_cell}")
+            self.logger.info(f"    Reversed indicator_functions: vertex {common_vertex} "
+                           f"flipped back cell {fwd_new_cell} → {fwd_old_cell}")
+        else:
+            # Fallback for records created before this fix: derive from current state
+            self.logger.warning(
+                f"    vp_record missing old_cell/new_cell (pre-fix history). "
+                f"Deriving cell flip from current indicator_functions."
+            )
+            vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+            current_cell = int(vertex_labels[common_vertex])
+            # The common_vertex should border exactly the cells of the moved VPs
+            neighbor_cells = set()
+            for vp_idx in vp_record['moved_vps']:
+                if vp_idx < len(self.partition.variable_points):
+                    vp = self.partition.variable_points[vp_idx]
+                    neighbor_cells.update(vp.belongs_to_cells)
+            neighbor_cells.discard(current_cell)
+            if len(neighbor_cells) == 1:
+                target_cell = neighbor_cells.pop()
+                self._update_indicator_functions_for_target_vertex(
+                    common_vertex, current_cell, target_cell
+                )
+                print(f"    Reversed indicator_functions (derived): vertex {common_vertex} "
+                      f"flipped cell {current_cell} → {target_cell}")
+                self.logger.info(f"    Reversed indicator_functions (derived): vertex {common_vertex} "
+                               f"flipped cell {current_cell} → {target_cell}")
+            else:
+                self.logger.error(
+                    f"    Could not derive cell flip for vertex {common_vertex}: "
+                    f"current_cell={current_cell}, neighbor_cells={neighbor_cells}"
+                )
+        
+        # 4. Update belongs_to_cells for all moved VPs (after indicator_functions fix)
+        for vp_idx in vp_record['moved_vps']:
+            if vp_idx < len(self.partition.variable_points):
+                vp = self.partition.variable_points[vp_idx]
+                new_cells = self._determine_cells_for_edge(vp.edge)
+                vp.belongs_to_cells = new_cells
+        
+        # 5. Update all data structures (now indicator_functions is correct)
         print(f"    Updating data structures")
         self.logger.info(f"    Updating data structures")
         self.update_data_structures_after_migration()
