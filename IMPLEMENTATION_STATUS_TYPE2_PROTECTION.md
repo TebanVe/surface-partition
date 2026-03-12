@@ -1,18 +1,18 @@
 # Type 2 Protection Implementation Status
 
 **Date**: February 17, 2026  
-**Updated**: February 17, 2026 (Corrected to topology-based approach)  
+**Updated**: March 12, 2026 (Relaxed to first-level-only protection)  
 **Status**: ✅ Implemented and Ready for Testing
 
 ## Overview
 
-This document tracks the implementation of **Type 2 Protection** - a conditional exclusion strategy that prevents Type 1 migrations from disrupting Type 2 migration geometry by excluding Type 1 components that contain **outer neighbor VPs** of boundary triple points.
+This document tracks the implementation of **Type 2 Protection** - a conditional exclusion strategy that prevents Type 1 migrations from disrupting Type 2 migration geometry by excluding Type 1 components that contain **first-level outer neighbor VPs** of triple points.
 
 ## Problem Statement
 
 Type 1 and Type 2 migrations can conflict when:
 1. A boundary triple point is preparing for Type 2 migration
-2. Type 1 components want to migrate VPs that are "outer neighbors" to this triple point
+2. Type 1 components want to migrate VPs that are first-level outer neighbors to this triple point
 3. Type 1 migration moves these VPs, breaking the geometric assumptions (fan structure) needed for Type 2
 
 This creates opposing forces: Type 2 wants to pull inward (collapse), while Type 1 wants to pull outward (vertex approach).
@@ -21,21 +21,30 @@ This creates opposing forces: Type 2 wants to pull inward (collapse), while Type
 
 **Approach**: Conditional Type 1 Exclusion (Strategy 2 from analysis)
 
-**Core Idea**: Temporarily exclude Type 1 components that contain **outer neighbor VPs** of boundary triple points, allowing Type 2 to proceed first. Over subsequent iterations, excluded Type 1 components may either:
+**Core Idea**: Temporarily exclude Type 1 components that contain **first-level outer neighbor VPs** of triple points, allowing Type 2 to proceed first. Over subsequent iterations, excluded Type 1 components may either:
 - Migrate safely after Type 2 completes (topology has changed)
 - No longer need migration (optimization resolves them)
 
-## Key Insight: Topology-Based Protection (Not Distance-Based)
+## Key Insight: First-Level-Only Protection
+
+### Why Only First-Level Matters
+
+During a Type 2 migration, the **first-level outer neighbor** is the VP that actually gets
+**moved** to a free edge in T_second_VP. If a Type 1 migration moves it beforehand, Type 2
+loses the VP it needs to migrate. The **second-level outer neighbor** is only used to
+**identify** T_second_VP (via the segment between first-level and second-level) but is not
+itself moved during the Type 2 migration.
+
+Protecting the second-level VP was found to be too aggressive in practice: it blocks valid
+Type 1 migrations, and the resulting lack of degrees of freedom can force the optimizer to
+reverse previously successful Type 2 migrations.
 
 ### The Correct Criterion
 
-For each boundary triple point (3 VPs forming a triple triangle):
-- Each VP has exactly **2 outer neighbors**:
+For each triple point (3 VPs forming a triple triangle):
+- Each VP has exactly **1 protected outer neighbor**:
   1. `first_level_outer_neighbor`: Direct neighbor via boundary_segments (excluding triple VPs)
-  2. `second_level_outer_neighbor`: Neighbor of first_level (excluding migrating VP and triple VPs)
-- **Total: 3 VPs × 2 neighbors = 6 protected VPs per triple triangle**
-
-These 6 VPs are the **exact VPs** that Type 2 migration depends on for its fan structure!
+- **Total: 3 VPs × 1 neighbor = 3 protected VPs per triple triangle**
 
 ### Why Topology-Based Is Correct
 
@@ -77,37 +86,28 @@ protect_type2: bool = True
 
 ### 2. New Method: `_filter_for_type2_protection()`
 
-**Purpose**: Identify and exclude Type 1 components containing outer neighbor VPs
+**Purpose**: Identify and exclude Type 1 components containing first-level outer neighbor VPs
 
 **Algorithm**:
-1. Identify boundary triple points (at least one VP with λ < boundary_tol or λ > 1-boundary_tol)
-2. For each boundary triple point's 3 VPs:
+1. For each triple point's 3 VPs:
    - Find `first_level_outer_neighbor` via boundary_segments
-   - Find `second_level_outer_neighbor` via boundary_segments
-   - Mark both as protected (6 total per triple point)
-3. Exclude any Type 1 component containing protected VPs
+   - Mark as protected (3 total per triple point)
+2. Exclude any Type 1 component containing protected VPs
 
 **Outer Neighbor Identification (Topology-Based)**:
 ```python
 # For each VP in triple triangle:
-# Step 1: Find first_level (direct neighbor, excluding triple VPs)
+# Find first_level (direct neighbor, excluding triple VPs)
 for segment in partition.boundary_segments:
     if segment.vp_idx_1 == vp_idx:
         neighbor = segment.vp_idx_2
         if neighbor not in triple_vp_set:
             first_level_vp = neighbor
-            
-# Step 2: Find second_level (neighbor of first_level, excluding migrating VP and triple VPs)
-for segment in partition.boundary_segments:
-    if segment.vp_idx_1 == first_level_vp:
-        neighbor = segment.vp_idx_2
-        if neighbor != vp_idx and neighbor not in triple_vp_set:
-            second_level_vp = neighbor
 ```
 
 **Logging**:
-- Number of boundary triple points found
-- First and second level outer neighbors for each triple point VP
+- Number of triple points found
+- First-level outer neighbor for each triple point VP
 - Total count of protected VPs
 - Details of excluded components with conflicting VPs
 
@@ -146,18 +146,14 @@ When enabled, the visualization shows which components would be excluded for Typ
 ### Console Output Example
 
 ```
-Type 2 Protection: Found 1 boundary triple point(s)
+Type 2 Protection: Processing 1 triple point(s)
   Processing triple point: VPs [1234, 1235, 1236]
-    VP 1234 → first_level: 1932
-    VP 1234 → second_level: 1933
-    VP 1235 → first_level: 1937
-    VP 1235 → second_level: 1938
-    VP 1236 → first_level: 1940
-    VP 1236 → second_level: 1941
-Type 2 Protection: Found 6 protected outer neighbor VP(s)
-  Protected VPs: [1932, 1933, 1937, 1938, 1940, 1941]
+    VP 1234 → first_level (protected): 1932
+    VP 1235 → first_level (protected): 1937
+    VP 1236 → first_level (protected): 1940
+Type 2 Protection: 1 triple points, 3 protected VPs, 8 components analyzed
 Type 2 Protection: EXCLUDING Component 3 (size 2, target vertex 1234) - contains protected VP(s): [1932]
-Type 2 Protection: 5 components available, 1 excluded
+Type 2 Protection: 7 available, 1 excluded
 
 Components selected for migration: 5
 Components excluded (conflicts): 2
@@ -226,18 +222,11 @@ analysis_result = analyzer.run_full_analysis(
 - Final perimeter length
 - Optimization convergence
 
-### Phase 3: Parameter Sensitivity
-Test different protection distances:
-```python
-type2_protection_distance=boundary_tol * 3  # Tighter
-type2_protection_distance=boundary_tol * 7  # Wider
-type2_protection_distance=boundary_tol * 10 # Very wide
-```
-
-**Analyze**:
-- Trade-off between Type 2 protection and Type 1 opportunity
-- Optimal distance for this geometry
-- Edge cases (too tight → Type 2 still fails, too wide → over-exclusion)
+### Phase 3: Regression Check
+Verify that relaxing from 6 to 3 protected VPs does not cause Type 2 failures:
+- Run several iterations and confirm Type 2 migrations succeed
+- Check that previously blocked Type 1 components now migrate
+- Confirm no Type 2 reversals caused by optimizer back-pressure
 
 ## Success Criteria
 
@@ -281,10 +270,6 @@ Users can control Type 2 protection behavior:
 # Disable protection entirely (original behavior)
 protect_type2=False
 
-# Custom protection distance
-type2_protection_distance=0.8  # Absolute distance
-type2_protection_distance=boundary_tol * 8  # Relative to boundary tolerance
-
 # Access excluded components for analysis
 type2_excluded = analysis_result['type2_excluded']
 for comp in type2_excluded:
@@ -310,9 +295,11 @@ for comp in type2_excluded:
 
 ## Notes
 
-- Protection distance of `boundary_tol * 5` is a reasonable starting point
-- Euclidean distance is used (could explore geodesic distance in future)
-- Triple point "center" is average of its VP positions (simple but effective)
+- Only the first-level outer neighbor is protected (the VP that Type 2 actually migrates)
+- Second-level protection was removed (March 2026) because it blocked valid Type 1 migrations
+  and created optimizer back-pressure that reversed Type 2 migrations
+- Topology-based identification via boundary_segments (not distance-based)
+- Protection is recomputed fresh each iteration (not cached across iterations)
 - Implementation is non-invasive (can be disabled without code changes)
 
 ---

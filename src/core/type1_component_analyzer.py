@@ -1261,14 +1261,17 @@ class Type1ComponentAnalyzer:
         """
         Filter Type 1 components to protect Type 2 triple point outer neighbors.
         
-        Strategy: Exclude Type 1 components whose VPs are "outer neighbors" to ANY
-        triple point (not just boundary ones). This prevents Type 1 from disrupting
-        potential Type 2 migration geometry.
+        Strategy: Exclude Type 1 components whose VPs are first-level outer
+        neighbors to ANY triple point. The first-level VP is the one that Type 2
+        actually migrates (to a free edge in T_second_VP), so it must remain in
+        place. The second-level VP is only used to identify T_second_VP and is not
+        itself moved during Type 2; protecting it is unnecessary and blocks valid
+        Type 1 migrations.
         
         For each triple point (3 VPs):
-        - Each VP has exactly 2 outer neighbors: first_level and second_level
-        - Total: 3 VPs × 2 neighbors = 6 outer level VPs per triple triangle
-        - These are identified topologically via boundary_segments (NOT by distance)
+        - Each VP has exactly 1 protected outer neighbor: first_level
+        - Total: 3 VPs × 1 neighbor = 3 protected VPs per triple triangle
+        - Identified topologically via boundary_segments (NOT by distance)
         
         Args:
             component_info: List of component dicts from analyze_component
@@ -1288,8 +1291,8 @@ class Type1ComponentAnalyzer:
         
         self.logger.info(f"Type 2 Protection: Processing {len(all_triple_points)} triple point(s)")
         
-        # For each triple point, identify outer neighbor VPs (topology-based)
-        protected_vps = set()  # VPs that should not migrate (outer neighbors)
+        # For each triple point, identify first-level outer neighbor VPs (topology-based)
+        protected_vps = set()
         
         for tp in all_triple_points:
             tp_vp_indices = list(tp.var_point_indices)
@@ -1297,9 +1300,7 @@ class Type1ComponentAnalyzer:
             
             self.logger.debug(f"  Processing triple point: VPs {tp_vp_indices}")
             
-            # For each VP in the triple triangle, find its 2 outer neighbors
             for vp_idx in tp_vp_indices:
-                # Find first_level: direct neighbor (excluding triple VPs)
                 first_level_vps = []
                 for segment in self.partition.boundary_segments:
                     if segment.vp_idx_1 == vp_idx:
@@ -1320,30 +1321,7 @@ class Type1ComponentAnalyzer:
                 
                 first_level_vp = first_level_vps[0]
                 protected_vps.add(first_level_vp)
-                self.logger.debug(f"    VP {vp_idx} → first_level: {first_level_vp}")
-                
-                # Find second_level: neighbor of first_level (excluding vp_idx and triple VPs)
-                second_level_vps = []
-                for segment in self.partition.boundary_segments:
-                    if segment.vp_idx_1 == first_level_vp:
-                        neighbor = segment.vp_idx_2
-                        if neighbor != vp_idx and neighbor not in triple_vp_set:
-                            second_level_vps.append(neighbor)
-                    elif segment.vp_idx_2 == first_level_vp:
-                        neighbor = segment.vp_idx_1
-                        if neighbor != vp_idx and neighbor not in triple_vp_set:
-                            second_level_vps.append(neighbor)
-                
-                if len(second_level_vps) != 1:
-                    self.logger.debug(
-                        f"    VP {vp_idx}: Expected 1 second-level outer neighbor via {first_level_vp}, "
-                        f"found {len(second_level_vps)}: {second_level_vps} - skipping"
-                    )
-                    continue
-                
-                second_level_vp = second_level_vps[0]
-                protected_vps.add(second_level_vp)
-                self.logger.debug(f"    VP {vp_idx} → second_level: {second_level_vp}")
+                self.logger.debug(f"    VP {vp_idx} → first_level (protected): {first_level_vp}")
         
         # Summary logging (INFO level)
         self.logger.info(f"Type 2 Protection: {len(all_triple_points)} triple points, {len(protected_vps)} protected VPs, {len(component_info)} components analyzed")
