@@ -1,8 +1,8 @@
 """
-Utility functions for loading partition data from refined contours files.
+Utility functions for loading partition data from solution files.
 
-This module provides the load_partition_from_refined_file function used by
-visualization scripts to load mesh and partition data.
+This module provides loaders for both base solution files and refined contours
+files, used by visualization scripts to construct mesh and partition objects.
 """
 
 import os
@@ -10,6 +10,50 @@ import h5py
 from src.find_contours import ContourAnalyzer
 from src.core.tri_mesh import TriMesh
 from src.core.contour_partition import PartitionContour
+
+
+def load_partition_from_base_file(base_path, use_initial=False, verbose=False):
+    """
+    Load partition from a base solution .h5 file.
+
+    The base file contains mesh geometry (vertices, faces) and optimization
+    densities (x_opt or x0).  Variable points are placed at the default
+    lambda=0.5 (edge midpoints) since no refined lambda parameters exist.
+
+    Args:
+        base_path: Path to the base solution .h5 file
+        use_initial: If True, use x0 (initial condition) instead of x_opt
+        verbose: Print progress messages
+
+    Returns:
+        tuple: (mesh, partition) ready for visualization
+    """
+    if verbose:
+        print(f"Loading from base solution file...")
+        print(f"  Base: {base_path}")
+
+    analyzer = ContourAnalyzer(base_path)
+    analyzer.load_results(use_initial_condition=use_initial)
+
+    mesh = TriMesh(analyzer.vertices, analyzer.faces)
+    if verbose:
+        print(f"  ✓ Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+
+    indicator_functions = analyzer.compute_indicator_functions()
+    if verbose:
+        print(f"  ✓ Computed indicator functions: {indicator_functions.shape[1]} cells")
+
+    _contours, boundary_topology = analyzer.extract_contours_with_topology()
+
+    n_boundary_triangles = sum(len(v) for v in boundary_topology.values())
+    if verbose:
+        print(f"  ✓ Extracted boundary topology: {n_boundary_triangles} boundary triangles")
+
+    partition = PartitionContour(mesh, indicator_functions, boundary_topology=boundary_topology)
+    if verbose:
+        print(f"  ✓ Created partition: {len(partition.variable_points)} VPs (default λ=0.5)")
+
+    return mesh, partition
 
 
 def load_partition_from_refined_file(refined_path, verbose=False):

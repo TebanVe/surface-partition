@@ -621,9 +621,15 @@ def export_results(partition, opt_info, output_path, logger, migration_history=N
             mesh_reloaded, partition_reloaded = load_partition_from_refined_file(output_path, verbose=False)
             
             lambda_reloaded = partition_reloaded.get_variable_vector()
+            partition_reloaded.set_variable_vector(lambda_reloaded)
             
             perim_calc_reloaded = PerimeterCalculator(mesh_reloaded, partition_reloaded)
-            perimeter_reloaded = perim_calc_reloaded.compute_total_perimeter(lambda_reloaded)
+            regular_perimeter_reloaded = perim_calc_reloaded.compute_total_perimeter(lambda_reloaded)
+            
+            steiner_handler_reloaded = SteinerHandler(mesh_reloaded, partition_reloaded)
+            steiner_perimeter_reloaded = steiner_handler_reloaded.get_total_perimeter_contribution()
+            
+            perimeter_reloaded = regular_perimeter_reloaded + steiner_perimeter_reloaded
             
             in_memory_perimeter = opt_info['final_perimeter']
             rel_diff = abs(perimeter_reloaded - in_memory_perimeter) / max(in_memory_perimeter, 1e-12)
@@ -632,10 +638,14 @@ def export_results(partition, opt_info, output_path, logger, migration_history=N
                 logger.info(f"  ✓ Roundtrip perimeter check PASSED: "
                           f"in-memory={in_memory_perimeter:.6f}, reloaded={perimeter_reloaded:.6f} "
                           f"(rel_diff={rel_diff:.2e})")
+                logger.info(f"    Regular={regular_perimeter_reloaded:.6f}, "
+                          f"Steiner={steiner_perimeter_reloaded:.6f}")
             else:
                 logger.warning(f"  ⚠ Roundtrip perimeter check FAILED: "
                              f"in-memory={in_memory_perimeter:.6f}, reloaded={perimeter_reloaded:.6f} "
                              f"(rel_diff={rel_diff:.2e})")
+                logger.warning(f"    Regular={regular_perimeter_reloaded:.6f}, "
+                             f"Steiner={steiner_perimeter_reloaded:.6f}")
                 logger.warning(f"    VP count in-memory: {len(lambda_opt)}, "
                              f"reloaded: {len(lambda_reloaded)}")
         except Exception as e:

@@ -3,14 +3,19 @@
 Visualize Partition Results (Simple Cell Viewer)
 
 Simple visualization for viewing partition states without migration logic.
+Accepts both base solution .h5 files and refined_contours .h5 files.
 
-Usage:
+Usage (refined contours):
     python examples/visualize_partition.py \
         --solution path/to/*_refined_contours.h5 \
         --region 2 \
         --show-steiner \
         --vp-size 0.0004 \
         --steiner-size 0.0008
+
+Usage (base solution):
+    python examples/visualize_partition.py \
+        --solution path/to/solution.h5
 
 Author: Partition Visualization
 Date: February 2026
@@ -21,6 +26,7 @@ import sys
 import argparse
 import numpy as np
 import re
+import h5py
 from pathlib import Path
 from typing import Optional, List
 
@@ -37,6 +43,7 @@ from src.core.tri_mesh import TriMesh
 from src.core.contour_partition import PartitionContour
 from src.core.steiner_handler import SteinerHandler
 from src.core.area_calculator import AreaCalculator
+from src.core.perimeter_calculator import PerimeterCalculator
 
 # Import working functions from existing script
 from examples.visualize_type2_triple_point import (
@@ -44,33 +51,83 @@ from examples.visualize_type2_triple_point import (
     add_steiner_visualization,
     add_vp_visualization
 )
-from examples.data_loader import load_partition_from_refined_file
+from examples.data_loader import load_partition_from_refined_file, load_partition_from_base_file
 
 
-def load_partition_smart(refined_path, verbose=False):
-    """
-    Load partition from refined contours file.
-    
-    This function properly delegates to load_partition_from_refined_file which:
-    - For original refined files: Reconstructs from base solution + lambda params
-    - For iteration files: Uses stored partition state (handles changed VP count after migrations)
-    
-    The key insight: Iteration files store FULL partition state, not just lambda parameters.
-    """
-    if verbose:
-        print(f"Loading from refined contours file...")
-        print(f"  Refined: {refined_path}")
-    
+def _is_refined_file(path):
+    """Detect whether an .h5 file is a refined contours file or a base solution."""
+    if 'refined_contours' in os.path.basename(path):
+        return True
     try:
-        # Use the proper loader that handles all cases correctly
-        # This loader knows how to handle iteration files with changed VP counts
-        mesh, partition = load_partition_from_refined_file(refined_path, verbose=verbose)
-        
+        with h5py.File(path, 'r') as f:
+            return 'lambda_parameters' in f
+    except Exception:
+        return False
+
+
+def _get_iteration_number(path):
+    """Extract iteration number from a refined contours file.
+
+    Checks HDF5 attrs first, then falls back to parsing the filename.
+    Returns None for base solution files or when no iteration is identified.
+    """
+    try:
+        with h5py.File(path, 'r') as f:
+            iter_num = f.attrs.get('iteration_number')
+            if iter_num is not None:
+                return int(iter_num)
+    except Exception:
+        pass
+
+    match = re.search(r'_iteration(\d+)', os.path.basename(path))
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def _build_source_label(is_refined, solution_path):
+    """Build a human-readable source label for the plot title."""
+    if not is_refined:
+        return "Base"
+    iter_num = _get_iteration_number(solution_path)
+    if iter_num is not None:
+        return f"Refined - iter {iter_num}"
+    return "Refined"
+
+
+def load_partition_smart(solution_path, use_initial=False, verbose=False):
+    """
+    Load partition from either a base solution or refined contours file.
+
+    Detection logic:
+    - If the filename contains 'refined_contours' or the file has
+      'lambda_parameters', delegate to load_partition_from_refined_file.
+    - Otherwise treat it as a base solution file.
+
+    Returns:
+        tuple: (mesh, partition, is_refined) -- the boolean indicates which
+               loader was used so callers can adjust titles / messages.
+    """
+    refined = _is_refined_file(solution_path)
+
+    try:
+        if refined:
+            if verbose:
+                print(f"Detected refined contours file")
+            mesh, partition = load_partition_from_refined_file(solution_path, verbose=verbose)
+        else:
+            if verbose:
+                print(f"Detected base solution file")
+            mesh, partition = load_partition_from_base_file(
+                solution_path, use_initial=use_initial, verbose=verbose
+            )
+
         if verbose:
             print(f"  ✓ Successfully loaded partition with {len(partition.variable_points)} VPs")
-        
-        return mesh, partition
-    
+
+        return mesh, partition, refined
+
     except Exception as e:
         raise RuntimeError(f"Failed to load partition: {str(e)}")
 
@@ -119,7 +176,9 @@ def main():
     
     # Required arguments
     parser.add_argument('--solution', required=True,
-                       help='Path to refined_contours.h5 file')
+                       help='Path to .h5 file (base solution or refined_contours)')
+    parser.add_argument('--use-initial', action='store_true',
+                       help='Use initial condition (x0) instead of optimized result (base solution only)')
     
     # Optional highlighting
     parser.add_argument('--region', type=int, default=None,
@@ -163,12 +222,16 @@ def main():
         return 1
     
     try:
-        mesh, partition = load_partition_smart(args.solution, verbose=True)
+        mesh, partition, is_refined = load_partition_smart(
+            args.solution, use_initial=args.use_initial, verbose=True
+        )
     except Exception as e:
         print(f"ERROR: Failed to load partition: {e}")
         return 1
     
-    print(f"✓ Loaded partition: {partition.n_cells} cells, {len(partition.variable_points)} VPs")
+    source_label = _build_source_label(is_refined, args.solution)
+    print(f"✓ Loaded partition ({source_label}): {partition.n_cells} cells, "
+          f"{len(partition.variable_points)} VPs")
     
     # ========================================================================
     # Initialize Handlers
@@ -178,6 +241,25 @@ def main():
     area_calc = AreaCalculator(mesh, partition)
     steiner_handler = SteinerHandler(mesh, partition)
     print(f"✓ Found {len(steiner_handler.triple_points)} triple points")
+
+    # ========================================================================
+    # Compute Metrics
+    # ========================================================================
+
+    lambda_vec = partition.get_variable_vector()
+    perim_calc = PerimeterCalculator(mesh, partition)
+    regular_perimeter = perim_calc.compute_total_perimeter(lambda_vec)
+    steiner_perimeter = steiner_handler.get_total_perimeter_contribution()
+    total_perimeter = regular_perimeter + steiner_perimeter
+
+    total_area = float(mesh.M.sum())
+    target_area = total_area / partition.n_cells
+
+    print(f"\nMetrics:")
+    print(f"  Total perimeter: {total_perimeter:.6f}")
+    print(f"    Regular: {regular_perimeter:.6f}  |  Steiner: {steiner_perimeter:.6f}")
+    print(f"  Total surface area: {total_area:.6f}")
+    print(f"  Target area/cell:   {target_area:.6f}")
     
     # ========================================================================
     # Create Visualization
@@ -227,11 +309,13 @@ def main():
             plotter.camera.clipping_range = (args.zoom_factor * 0.1, args.zoom_factor * 10)
     
     # Set title
-    title_parts = [f"Partition: {partition.n_cells} cells"]
+    title_parts = [f"Partition ({source_label}): {partition.n_cells} cells"]
     if args.region is not None:
         title_parts.append(f"Region {args.region}")
-    
-    plotter.add_title(" | ".join(title_parts), font_size=14)
+    title_parts.append(f"Perimeter: {total_perimeter:.4f}")
+    title_parts.append(f"Target area/cell: {target_area:.4f}")
+
+    plotter.add_title(" | ".join(title_parts), font_size=12)
     
     print("✓ Visualization ready")
     print("="*80)
