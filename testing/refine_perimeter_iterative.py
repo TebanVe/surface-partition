@@ -48,10 +48,20 @@ from src.core.tri_mesh import TriMesh
 from src.core.contour_partition import PartitionContour
 from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.mesh_topology import MeshTopology
-from src.core.topology_switcher import TopologySwitcher
-from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
 from src.logging_config import get_logger, setup_logging
+
+# Early parse for --use-legacy (before migration-specific imports)
+_preparser = argparse.ArgumentParser(add_help=False)
+_preparser.add_argument('--use-legacy', action='store_true', help='Use legacy TopologySwitcher')
+_preargs, _ = _preparser.parse_known_args()
+
+if _preargs.use_legacy:
+    from src.core.topology_switcher_legacy import TopologySwitcher
+    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
+    from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
+else:
+    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+    from src.core.migration_types import TriplePointHistory
 
 
 def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=0.01, 
@@ -376,20 +386,28 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
     logger.info("="*80)
     logger.info(f"Output file: {output_path}")
     
-    # Get optimized lambda parameters
-    lambda_opt = partition.get_variable_vector()
+    # Get optimized lambda parameters and edges for ACTIVE VPs only.
+    # indicator_functions reflects active topology, so lambda/edge arrays must match.
+    active_lambdas = []
+    active_edges = []
+    for vp in partition.variable_points:
+        if getattr(vp, 'active', True):
+            active_lambdas.append(vp.lambda_param)
+            active_edges.append(vp.edge)
+
+    lambda_opt = np.array(active_lambdas)
+    vp_edges_arr = np.array(active_edges, dtype=np.int64)
     
     # Get indicator functions (updated after migrations)
     indicator_functions = partition.indicator_functions
     
     # Create HDF5 file
     with h5py.File(output_path, 'w') as f:
-        # Save lambda parameters
+        # Save lambda parameters (active VPs only)
         f.create_dataset('lambda_parameters', data=lambda_opt)
         
-        # Save VP edge associations (critical for correct lambda-edge matching on reload)
-        vp_edges = np.array([vp.edge for vp in partition.variable_points], dtype=np.int64)
-        f.create_dataset('vp_edges', data=vp_edges)
+        # Save VP edge associations (active VPs only)
+        f.create_dataset('vp_edges', data=vp_edges_arr)
         
         # Save indicator functions (critical for visualization after migrations)
         f.create_dataset('indicator_functions', data=indicator_functions)
@@ -555,6 +573,9 @@ Example usage:
                        choices=['SLSQP', 'trust-constr'],
                        help='Optimization method (default: SLSQP)')
     
+    parser.add_argument('--use-legacy', action='store_true',
+                       help='Use legacy TopologySwitcher')
+    
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging (verbose output with detailed diagnostics)')
     
@@ -595,6 +616,7 @@ Example usage:
     logger.info("="*80)
     logger.info("Iterative Perimeter Refinement with Automatic Migrations")
     logger.info("="*80)
+    logger.info(f"Migration path: {'legacy (TopologySwitcher)' if args.use_legacy else 'MigrationOrchestrator'}")
     logger.info(f"Input solution: {args.solution}")
     logger.info(f"Maximum iterations: {args.max_iterations}")
     logger.info(f"Distance preservation: {args.distance_preservation}")
@@ -675,12 +697,14 @@ Example usage:
     logger.info("="*80)
     
     # -------------------------------------------------------------------------
-    # Initialize Type 2 Migration History (BEFORE loop)
+    # Initialize Type 2 Migration History (legacy path only)
     # -------------------------------------------------------------------------
-    from src.core.type2_migration_history import Type2MigrationHistory
-    
-    migration_history = Type2MigrationHistory()
-    logger.info("Initialized empty Type 2 migration history")
+    if args.use_legacy:
+        from src.core.type2_migration_history import Type2MigrationHistory
+        migration_history = Type2MigrationHistory()
+        logger.info("Initialized empty Type 2 migration history")
+    else:
+        migration_history = None
     
     # -------------------------------------------------------------------------
     # Main iteration loop
@@ -708,9 +732,8 @@ Example usage:
         logger.info(f"Phase 1: Optimizing current topology...")
         logger.info("-"*80)
         
-        # Create optimizer
-        if topology_iteration == 0:
-            optimizer = PerimeterOptimizer(partition, mesh, target_area)
+        # Create fresh optimizer each iteration (VP count may change after migrations)
+        optimizer = PerimeterOptimizer(partition, mesh, target_area)
         
         # Calculate initial perimeter
         x0 = partition.get_variable_vector()
@@ -780,33 +803,54 @@ Example usage:
         logger.info(f"Phase 3: Detecting topology switches...")
         logger.info("-"*80)
         
-        switches_needed, switch_info = optimizer.check_topology_switches_needed(
-            tol=args.boundary_tol
-        )
-        
-        if not switches_needed:
-            logger.info("")
-            logger.info("="*80)
-            logger.info("CONVERGENCE ACHIEVED")
-            logger.info("="*80)
-            logger.info("No topology switches needed")
-            logger.info(f"Final perimeter: {final_perimeter:.10f}")
-            converged = True
-            break
-        
-        # Extract candidates manually
-        type1_candidates = []
-        for vp_idx, vp in enumerate(partition.variable_points):
-            if vp.on_boundary(tol=args.boundary_tol):
-                type1_candidates.append(vp_idx)
-        
-        type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(
-            tol=args.boundary_tol
-        )
-        
-        logger.info(f"Switches detected:")
-        logger.info(f"  Type 1 candidates (boundary VPs): {len(type1_candidates)}")
-        logger.info(f"  Type 2 candidates (boundary triple points): {len(type2_candidates)}")
+        if args.use_legacy:
+            switches_needed, switch_info = optimizer.check_topology_switches_needed(
+                tol=args.boundary_tol
+            )
+            
+            if not switches_needed:
+                logger.info("")
+                logger.info("="*80)
+                logger.info("CONVERGENCE ACHIEVED")
+                logger.info("="*80)
+                logger.info("No topology switches needed")
+                logger.info(f"Final perimeter: {final_perimeter:.10f}")
+                converged = True
+                break
+            
+            # Extract candidates manually
+            type1_candidates = []
+            for vp_idx, vp in enumerate(partition.variable_points):
+                if vp.on_boundary(tol=args.boundary_tol):
+                    type1_candidates.append(vp_idx)
+            
+            type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(
+                tol=args.boundary_tol
+            )
+            
+            logger.info(f"Switches detected:")
+            logger.info(f"  Type 1 candidates (boundary VPs): {len(type1_candidates)}")
+            logger.info(f"  Type 2 candidates (boundary triple points): {len(type2_candidates)}")
+        else:
+            # New MigrationOrchestrator API
+            mesh_topology = MeshTopology(mesh)
+            orchestrator = MigrationOrchestrator(
+                partition, mesh, mesh_topology,
+                MigrationConfig(delta=args.boundary_tol)
+            )
+            detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
+            
+            if not detection.type1_triggers and not detection.type2_triggers:
+                logger.info("")
+                logger.info("="*80)
+                logger.info("CONVERGENCE ACHIEVED")
+                logger.info("="*80)
+                logger.info("No topology switches needed")
+                logger.info(f"Final perimeter: {final_perimeter:.10f}")
+                converged = True
+                break
+            
+            logger.info(f"Switches detected: {len(detection.type1_triggers)} Type 1, {len(detection.type2_triggers)} Type 2")
         
         # ---------------------------------------------------------------------
         # PHASE 4: Apply Migrations (Type 2 first, then Type 1)
@@ -817,44 +861,70 @@ Example usage:
         
         iteration_migrations = 0
         
-        # Type 2 migrations first
-        if len(type2_candidates) > 0:
-            type2_result = apply_type2_migrations(
-                partition, mesh, type2_candidates, logger,
-                steiner_handler=optimizer.steiner_handler,
-                distance_preservation=args.distance_preservation,
-                migration_history=migration_history,
-                iteration_number=iteration_number
-            )
-            
-            # Check for failure
-            if type2_result.get('failed'):
-                handle_type2_migration_failure(
-                    type2_result, iteration_file, args.boundary_tol, logger
+        if args.use_legacy:
+            type1_result = {'migrations_applied': 0}
+            type2_result = {'migrations_applied': 0}
+            # Type 2 migrations first
+            if len(type2_candidates) > 0:
+                type2_result = apply_type2_migrations(
+                    partition, mesh, type2_candidates, logger,
+                    steiner_handler=optimizer.steiner_handler,
+                    distance_preservation=args.distance_preservation,
+                    migration_history=migration_history,
+                    iteration_number=iteration_number
                 )
+                
+                # Check for failure
+                if type2_result.get('failed'):
+                    handle_type2_migration_failure(
+                        type2_result, iteration_file, args.boundary_tol, logger
+                    )
+                    return 1
+                
+                iteration_migrations += type2_result['migrations_applied']
+                total_type2_migrations += type2_result['migrations_applied']
+            
+            # Type 1 migrations second
+            if len(type1_candidates) > 0:
+                type1_result = apply_type1_migrations(
+                    partition, mesh, type1_candidates, logger,
+                    boundary_tol=args.boundary_tol,
+                    distance_preservation=args.distance_preservation,
+                    steiner_handler=optimizer.steiner_handler
+                )
+                
+                # Check for failure
+                if type1_result.get('failed'):
+                    handle_type1_migration_failure(
+                        type1_result, iteration_file, args.boundary_tol, logger
+                    )
+                    return 1
+                
+                iteration_migrations += type1_result['migrations_applied']
+                total_type1_migrations += type1_result['migrations_applied']
+            
+            _t1_count = type1_result.get('migrations_applied', 0)
+            _t2_count = type2_result.get('migrations_applied', 0)
+        else:
+            # New MigrationOrchestrator API
+            mig_result = orchestrator.execute_migrations(mode='batch')
+            
+            if mig_result.failed:
+                logger.error("")
+                logger.error("="*80)
+                logger.error("MIGRATION FAILURE")
+                logger.error("="*80)
+                logger.error(f"Error: {mig_result.error_message}")
+                logger.error(f"State saved to: {iteration_file}")
+                logger.error("="*80)
                 return 1
             
-            iteration_migrations += type2_result['migrations_applied']
-            total_type2_migrations += type2_result['migrations_applied']
-        
-        # Type 1 migrations second
-        if len(type1_candidates) > 0:
-            type1_result = apply_type1_migrations(
-                partition, mesh, type1_candidates, logger,
-                boundary_tol=args.boundary_tol,
-                distance_preservation=args.distance_preservation,
-                steiner_handler=optimizer.steiner_handler
-            )
+            iteration_migrations = mig_result.type1_applied + mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
+            total_type1_migrations += mig_result.type1_applied
+            total_type2_migrations += mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
             
-            # Check for failure
-            if type1_result.get('failed'):
-                handle_type1_migration_failure(
-                    type1_result, iteration_file, args.boundary_tol, logger
-                )
-                return 1
-            
-            iteration_migrations += type1_result['migrations_applied']
-            total_type1_migrations += type1_result['migrations_applied']
+            _t1_count = mig_result.type1_applied
+            _t2_count = mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
         
         if iteration_migrations == 0:
             logger.warning("")
@@ -868,21 +938,19 @@ Example usage:
             return 1
         
         logger.info(f"\nMigrations applied in iteration {iteration_number}: {iteration_migrations}")
-        logger.info(f"  Type 1: {type1_result.get('migrations_applied', 0)}")
-        logger.info(f"  Type 2: {type2_result.get('migrations_applied', 0) if len(type2_candidates) > 0 else 0}")
+        logger.info(f"  Type 1: {_t1_count}")
+        logger.info(f"  Type 2: {_t2_count}")
         
         # ---------------------------------------------------------------------
-        # PHASE 5: Reinitialize for Next Iteration
+        # PHASE 5: Prepare for Next Iteration
         # ---------------------------------------------------------------------
         logger.info("")
-        logger.info(f"Phase 5: Reinitializing for next iteration...")
+        logger.info(f"Phase 5: Preparing for next iteration...")
         logger.info("-"*80)
         
-        optimizer.reinitialize_after_switches()
-        
-        logger.info(f"✓ Optimizer reinitialized")
-        logger.info(f"  New triple point count: {len(optimizer.steiner_handler.triple_points)}")
-        logger.info(f"  New VP count: {len(partition.variable_points)}")
+        active_vps = sum(1 for vp in partition.variable_points if vp.active)
+        logger.info(f"  Total VPs: {len(partition.variable_points)} ({active_vps} active)")
+        logger.info(f"  Optimizer will be rebuilt at start of next iteration")
         
         logger.info("")
         logger.info("="*80)
@@ -905,30 +973,10 @@ Example usage:
     global_elapsed = time.time() - global_start_time
     
     # -------------------------------------------------------------------------
-    # Step 4: Export Final State
-    # -------------------------------------------------------------------------
-    logger.info("")
-    logger.info("="*80)
-    logger.info("EXPORTING FINAL CONVERGED STATE")
-    logger.info("="*80)
-    
-    # Ensure partition has final result
-    partition.set_variable_vector(result.x)
-    
-    # Save to HDF5 (use existing save_refined_contours method)
-    partition.save_refined_contours(
-        output_path=args.output,
-        perimeter=final_perimeter,
-        areas=final_areas.tolist(),
-        optimization_info=opt_info
-    )
-    
-    logger.info(f"✓ Final state saved to: {args.output}")
-    logger.info("="*80)
-    
-    # -------------------------------------------------------------------------
     # Final Summary
     # -------------------------------------------------------------------------
+    final_file = iteration_files[-1] if iteration_files else None
+    
     logger.info("")
     logger.info("="*80)
     logger.info("REFINEMENT COMPLETE")
@@ -943,14 +991,17 @@ Example usage:
     logger.info(f"Convergence: {'Yes' if converged else 'No (max iterations reached)'}")
     logger.info("")
     logger.info("Output files:")
-    logger.info(f"  Final state: {args.output}")
     if iteration_files:
-        logger.info(f"  Intermediate states ({len(iteration_files)}):")
         for f in iteration_files:
-            logger.info(f"    - {f}")
+            logger.info(f"  - {f}")
+        logger.info(f"Final pre-migration state: {final_file}")
     logger.info("")
-    logger.info("To visualize results:")
-    logger.info(f"  python examples/visualize_partition.py --solution {args.output}")
+    if final_file:
+        logger.info("To continue with migration + optimization:")
+        logger.info(f"  python testing/test_migration_and_continue.py --solution {final_file} --migration-type both")
+        logger.info("")
+        logger.info("To visualize:")
+        logger.info(f"  python examples/visualize_partition.py --solution {final_file}")
     logger.info("="*80)
     
     return 0

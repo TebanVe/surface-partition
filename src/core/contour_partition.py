@@ -70,11 +70,14 @@ class VariablePoint:
         lambda_param: Parameter value in [0, 1]. λ=1 → edge[0], λ=0 → edge[1]
         global_idx: Index in the global variable vector
         belongs_to_cells: Set of cell indices that this point belongs to (boundary between these cells)
+        active: Whether this VP is active. Destroyed VPs are marked inactive but never
+                removed from the list, preserving index stability for snapshot rollback.
     """
     edge: Tuple[int, int]
     lambda_param: float
     global_idx: int
     belongs_to_cells: Set[int]
+    active: bool = True
     
     def evaluate(self, vertices: np.ndarray) -> np.ndarray:
         """Compute actual 3D/2D coordinates given lambda."""
@@ -98,43 +101,50 @@ class TriangleSegment:
     Attributes:
         triangle_idx: Index of the mesh triangle containing this segment
         vertex_indices: Tuple of 3 vertex indices (v1, v2, v3) of the triangle
-        vertex_labels: Tuple of 3 cell labels for the vertices
         boundary_edges: List of edges that cross cell boundaries (normalized: smaller index first)
         var_point_indices: List of variable point indices corresponding to boundary_edges
+        vertex_labels: (DEPRECATED) Kept as optional field for legacy code compatibility.
+                      New code should use partition.vertex_labels[ts.vertex_indices] instead.
     """
     triangle_idx: int
     vertex_indices: Tuple[int, int, int]
-    vertex_labels: Tuple[int, int, int]
     boundary_edges: List[Tuple[int, int]]
     var_point_indices: List[int]
+    vertex_labels: Optional[Tuple[int, ...]] = None
     
-    def num_cells(self) -> int:
+    def num_cells(self, vertex_labels_arr: Optional[np.ndarray] = None) -> int:
         """
         Return number of distinct cells in this triangle.
         
-        NOTE: This uses vertex_labels which may become stale after topology switches.
-        For triple point detection after switches, use is_triple_point() instead.
+        Args:
+            vertex_labels_arr: 1D array mapping vertex index to cell label.
+                              If not provided, uses the stored vertex_labels or heuristic.
         """
-        return len(set(self.vertex_labels))
+        if vertex_labels_arr is not None:
+            labels = set(int(vertex_labels_arr[v]) for v in self.vertex_indices)
+            return len(labels)
+        if self.vertex_labels is not None:
+            return len(set(self.vertex_labels))
+        return min(len(self.var_point_indices) + 1, 3)
     
     def is_triple_point(self) -> bool:
         """
         Check if this is a triple point (3 different cells meet).
-        
-        Uses the number of variable points instead of vertex_labels, which ensures
-        correctness even after topology switches when vertex_labels become stale.
         
         A triangle is a triple point if it has exactly 3 variable points
         (one on each edge of the void triangle interior).
         """
         return len(self.var_point_indices) == 3
     
-    def get_cell_indices(self) -> Set[int]:
+    def get_cell_indices(self, vertex_labels_arr: Optional[np.ndarray] = None) -> Set[int]:
         """Get set of unique cell indices in this triangle."""
-        return set(self.vertex_labels)
+        if vertex_labels_arr is not None:
+            return set(int(vertex_labels_arr[v]) for v in self.vertex_indices)
+        if self.vertex_labels is not None:
+            return set(self.vertex_labels)
+        return set()
 
 
-@dataclass
 @dataclass
 class BoundarySegment:
     """
@@ -179,16 +189,13 @@ class PartitionContour:
     - Topology information (which mesh triangle edges form which cell boundaries)
     - Conversion to/from indicator functions
     
-    Attributes:
-        mesh: The underlying TriMesh
-        n_cells: Number of partition cells
-        variable_points: List of all VariablePoint objects
-        triangle_segments: List of TriangleSegment objects (triangle-based storage)
-        indicator_functions: (N, n_cells) array of φ_i from equation (5.1)
-        edge_to_varpoint: Map from mesh triangle edge tuple to variable point index
-        segment_to_triangle: Map from (vp1, vp2) tuple to triangle_idx for O(1) lookup
-        triple_points: List of detected triple points (computed on demand)
-        
+    Internal storage uses efficient representations:
+    - _vertex_labels: 1D int array (replaces N x n_cells indicator_functions matrix)
+    - _triangle_segments: Dict[tri_idx, TriangleSegment] for O(1) lookup
+    - _vp_adjacency: Dict[vp_idx, Set[int]] for O(1) neighbor lookup
+    
+    Backward-compatible properties reconstruct the old formats on demand.
+    
     IMPORTANT: segment_to_triangle must be rebuilt after topology switches (Type 1 or Type 2)
     """
     
@@ -206,17 +213,24 @@ class PartitionContour:
         """
         self.mesh = mesh
         self.logger = get_logger(__name__)
-        self.indicator_functions = indicator_functions
+        self._vertex_labels: np.ndarray = np.argmax(indicator_functions, axis=1)
         self.n_cells = indicator_functions.shape[1]
         
         # Global data structures
         self.variable_points: List[VariablePoint] = []
-        self.triangle_segments: List[TriangleSegment] = []  # Triangle-centric storage
+        self._triangle_segments: Dict[int, TriangleSegment] = {}
         self.edge_to_varpoint: Dict[Tuple[int, int], int] = {}
-        self.segment_to_triangle: Dict[Tuple[int, int], int] = {}  # Inverse map: (vp1, vp2) -> triangle
-        self.triple_points: Optional[List] = None  # Computed on demand
+        self.segment_to_triangle: Dict[Tuple[int, int], int] = {}
+        self.triple_points: Optional[List] = None
         
-        # Explicit segment connectivity
+        # VP adjacency: vp_idx -> set of neighbor vp_indices
+        self._vp_adjacency: Dict[int, Set[int]] = {}
+        
+        # Active VP index management
+        self._active_vp_indices: List[int] = []
+        self._vp_idx_to_opt_idx: Dict[int, int] = {}
+        
+        # Legacy boundary_segments list (kept for transition period)
         self.boundary_segments: List[BoundarySegment] = []
         
         # Choose initialization method based on available data
@@ -230,8 +244,89 @@ class PartitionContour:
         # Build segment-to-triangle inverse map for efficient lookups
         self._build_segment_to_triangle_map()
         
+        # Build VP adjacency from triangle segments
+        self._rebuild_vp_adjacency()
+        
+        # Initialize active VP indices (all VPs active at construction)
+        self.rebuild_active_vp_indices()
+        
         self.logger.info(f"Initialized PartitionContour: {len(self.variable_points)} variable points, "
                         f"{self.n_cells} partition cells")
+    
+    # =========================================================================
+    # Backward-compatible properties
+    # =========================================================================
+    
+    @property
+    def vertex_labels(self) -> np.ndarray:
+        """1D array of cell labels per vertex (the canonical representation)."""
+        return self._vertex_labels
+    
+    @vertex_labels.setter
+    def vertex_labels(self, value: np.ndarray):
+        self._vertex_labels = value
+    
+    @property
+    def indicator_functions(self) -> np.ndarray:
+        """Reconstruct (N, n_cells) indicator matrix on demand (for HDF5 export and legacy code)."""
+        ind = np.zeros((len(self._vertex_labels), self.n_cells))
+        ind[np.arange(len(self._vertex_labels)), self._vertex_labels] = 1.0
+        return ind
+    
+    @indicator_functions.setter
+    def indicator_functions(self, value: np.ndarray):
+        self._vertex_labels = np.argmax(value, axis=1)
+    
+    @property
+    def triangle_segments(self) -> List[TriangleSegment]:
+        """Backward-compat: return list view of triangle segments for iteration."""
+        return list(self._triangle_segments.values())
+    
+    @triangle_segments.setter
+    def triangle_segments(self, value: List[TriangleSegment]):
+        """Accept list assignment and convert to dict internally."""
+        self._triangle_segments = {ts.triangle_idx: ts for ts in value}
+    
+    def get_triangle_segment(self, tri_idx: int) -> Optional[TriangleSegment]:
+        """O(1) lookup of TriangleSegment by triangle index."""
+        return self._triangle_segments.get(tri_idx)
+    
+    # =========================================================================
+    # Active VP index management
+    # =========================================================================
+    
+    def rebuild_active_vp_indices(self):
+        """Rebuild the active VP index list after migrations."""
+        self._active_vp_indices = [i for i, vp in enumerate(self.variable_points) if vp.active]
+        self._vp_idx_to_opt_idx = {vp_idx: opt_idx for opt_idx, vp_idx in enumerate(self._active_vp_indices)}
+    
+    @property
+    def active_vp_indices(self) -> List[int]:
+        return self._active_vp_indices
+    
+    # =========================================================================
+    # VP adjacency
+    # =========================================================================
+    
+    def _rebuild_vp_adjacency(self):
+        """Rebuild VP adjacency dict from current triangle segments."""
+        self._vp_adjacency = {}
+        for ts in self._triangle_segments.values():
+            vp_indices = ts.var_point_indices
+            if len(vp_indices) == 2:
+                a, b = vp_indices
+                self._vp_adjacency.setdefault(a, set()).add(b)
+                self._vp_adjacency.setdefault(b, set()).add(a)
+            elif len(vp_indices) == 3:
+                for i in range(3):
+                    for j in range(i + 1, 3):
+                        a, b = vp_indices[i], vp_indices[j]
+                        self._vp_adjacency.setdefault(a, set()).add(b)
+                        self._vp_adjacency.setdefault(b, set()).add(a)
+    
+    def get_vp_neighbors(self, vp_idx: int) -> Set[int]:
+        """Get neighbor VP indices for a given VP. O(1)."""
+        return self._vp_adjacency.get(vp_idx, set())
     
     def _initialize_from_indicators(self):
         """
@@ -240,99 +335,73 @@ class PartitionContour:
         
         Uses triangle-based segment storage for geometrically valid contour extraction.
         """
-        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        vertex_labels = self._vertex_labels
         
-        # Iterate over all mesh triangles to find boundary edges
         for tri_idx, face in enumerate(self.mesh.faces):
             v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
             label1, label2, label3 = vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]
             
-            # Track boundary edges and variable points for this triangle
             boundary_edges_in_triangle = []
             var_points_in_triangle = []
             
-            # Check each edge of the mesh triangle
             edges = [(v1, v2), (v2, v3), (v3, v1)]
             labels = [(label1, label2), (label2, label3), (label3, label1)]
             
             for edge, (lab_a, lab_b) in zip(edges, labels):
                 if lab_a != lab_b:
-                    # This mesh triangle edge crosses a cell boundary
-                    # Normalize edge representation (smaller index first)
                     normalized_edge = tuple(sorted(edge))
                     
                     if normalized_edge not in self.edge_to_varpoint:
-                        # Create new variable point at midpoint (λ = 0.5)
                         var_point = VariablePoint(
                             edge=normalized_edge,
                             lambda_param=0.5,
                             global_idx=len(self.variable_points),
-                            belongs_to_cells={lab_a, lab_b}
+                            belongs_to_cells={int(lab_a), int(lab_b)}
                         )
                         self.variable_points.append(var_point)
                         self.edge_to_varpoint[normalized_edge] = var_point.global_idx
                         var_point_idx = var_point.global_idx
                     else:
-                        # Update cell membership if this mesh triangle edge appears in multiple triangles
                         var_idx = self.edge_to_varpoint[normalized_edge]
-                        self.variable_points[var_idx].belongs_to_cells.update([lab_a, lab_b])
+                        self.variable_points[var_idx].belongs_to_cells.update([int(lab_a), int(lab_b)])
                         var_point_idx = var_idx
                     
-                    # Add to this triangle's boundary edges
                     boundary_edges_in_triangle.append(normalized_edge)
                     var_points_in_triangle.append(var_point_idx)
             
-            # Create TriangleSegment if this triangle has boundary edges
             if boundary_edges_in_triangle:
                 tri_seg = TriangleSegment(
                     triangle_idx=tri_idx,
                     vertex_indices=(v1, v2, v3),
-                    vertex_labels=(label1, label2, label3),
                     boundary_edges=boundary_edges_in_triangle,
                     var_point_indices=var_points_in_triangle
                 )
-                self.triangle_segments.append(tri_seg)
+                self._triangle_segments[tri_idx] = tri_seg
         
-        # Log triangle segment statistics
-        num_two_cell = sum(1 for ts in self.triangle_segments if ts.num_cells() == 2)
-        num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
-        self.logger.info(f"Created {len(self.triangle_segments)} triangle segments: "
+        num_two_cell = sum(1 for ts in self._triangle_segments.values() if ts.num_cells(vertex_labels) == 2)
+        num_triple = sum(1 for ts in self._triangle_segments.values() if ts.is_triple_point())
+        self.logger.info(f"Created {len(self._triangle_segments)} triangle segments: "
                         f"{num_two_cell} two-cell, {num_triple} triple-point")
         
-        # Phase 4: Build explicit segment connectivity
         self._build_segment_connectivity()
     
     def _initialize_from_boundary_topology(self, boundary_topology: Dict):
         """
         Initialize from pre-computed boundary topology (efficient path).
         
-        This method avoids redundant triangle scanning by reusing topology information
-        already computed by ContourAnalyzer.extract_contours_with_topology().
-        
         Two-pass structure:
         - Pass 1: Create unique variable points on boundary edges
         - Pass 2: Create triangle segments linking triangles to their variable points
         
-        Why two passes:
-        - Each edge can be shared by multiple triangles (typically 2)
-        - We need ONE variable point per unique edge (for optimization)
-        - We need triangle_segments[] for segment extraction and area calculation
-        
         Args:
             boundary_topology: Dict[region_idx] -> List[BoundaryTriangleInfo]
         """
-        # PASS 1: Create unique variable points on all boundary edges
-        # Scan all regions to find all unique edges and which cells they separate
-        all_edges_info = {}  # edge -> set of cells on this edge
+        all_edges_info = {}
         
         for region_idx, tri_infos in boundary_topology.items():
             for tri_info in tri_infos:
-                # For each crossed edge in this triangle
                 for edge in tri_info.crossed_edges:
                     normalized_edge = tuple(sorted(edge))
-                    
-                    # Determine which cells this edge separates
-                    # by examining the vertex labels at the edge endpoints
                     v_start_idx = tri_info.vertices.index(edge[0])
                     v_end_idx = tri_info.vertices.index(edge[1])
                     label_start = tri_info.vertex_labels[v_start_idx]
@@ -342,16 +411,13 @@ class PartitionContour:
                         all_edges_info[normalized_edge] = set()
                     all_edges_info[normalized_edge].update([label_start, label_end])
         
-        # Create variable points for all unique edges
-        # CRITICAL: Sort edges to ensure deterministic VP ordering across runs
-        # This ensures VP indices match regardless of dict iteration order
         sorted_edges = sorted(all_edges_info.keys())
         
         for normalized_edge in sorted_edges:
             cells = all_edges_info[normalized_edge]
             var_point = VariablePoint(
                 edge=normalized_edge,
-                lambda_param=0.5,  # Initial position at midpoint
+                lambda_param=0.5,
                 global_idx=len(self.variable_points),
                 belongs_to_cells=cells
             )
@@ -360,24 +426,14 @@ class PartitionContour:
         
         self.logger.info(f"Pass 1 complete: Created {len(self.variable_points)} unique variable points")
         
-        # PASS 2: Create triangle segments
-        # This maps each triangle to its variable points
-        # Essential for: segment extraction, area calculation, triple point detection
-        # 
-        # NOTE: boundary_topology is organized by region (cell), so triangles bordering
-        # multiple regions appear in multiple region lists (e.g., a triangle between
-        # cells 0 and 2 appears in both boundary_topology[0] and boundary_topology[2]).
-        # Use seen_triangles set to avoid creating duplicate TriangleSegment entries.
         seen_triangles = set()
         
         for region_idx, tri_infos in boundary_topology.items():
             for tri_info in tri_infos:
-                # Skip if we've already processed this triangle
                 if tri_info.triangle_idx in seen_triangles:
                     continue
                 seen_triangles.add(tri_info.triangle_idx)
                 
-                # Find variable point indices for this triangle's crossed edges
                 var_point_indices = []
                 boundary_edges_normalized = []
                 
@@ -386,28 +442,23 @@ class PartitionContour:
                     var_point_indices.append(self.edge_to_varpoint[normalized_edge])
                     boundary_edges_normalized.append(normalized_edge)
                 
-                # Create triangle segment (once per unique triangle)
                 tri_seg = TriangleSegment(
                     triangle_idx=tri_info.triangle_idx,
                     vertex_indices=tri_info.vertices,
-                    vertex_labels=tri_info.vertex_labels,
                     boundary_edges=boundary_edges_normalized,
                     var_point_indices=var_point_indices
                 )
-                self.triangle_segments.append(tri_seg)
+                self._triangle_segments[tri_info.triangle_idx] = tri_seg
         
-        # PASS 3: Fix triple point triangles
-        # boundary_topology is per-region, so triple point triangles only have 2 crossed_edges
-        # listed (not all 3). We need to complete them by finding the missing 3rd VP.
-        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        # Fix triple point triangles that may have only 2 crossed_edges from boundary_topology
+        vertex_labels = self._vertex_labels
         
-        for tri_seg in self.triangle_segments:
-            if len(tri_seg.var_point_indices) == 2:  # Potential incomplete triple point
+        for tri_seg in self._triangle_segments.values():
+            if len(tri_seg.var_point_indices) == 2:
                 v1, v2, v3 = tri_seg.vertex_indices
-                labels = {vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]}
+                labels = {int(vertex_labels[v1]), int(vertex_labels[v2]), int(vertex_labels[v3])}
                 
-                if len(labels) == 3:  # Triple point: all 3 vertices in different cells
-                    # Find the missing 3rd edge
+                if len(labels) == 3:
                     tri_edges = [
                         tuple(sorted([v1, v2])),
                         tuple(sorted([v2, v3])),
@@ -416,22 +467,22 @@ class PartitionContour:
                     
                     for edge in tri_edges:
                         if edge not in tri_seg.boundary_edges and edge in self.edge_to_varpoint:
-                            # Found the missing edge!
                             tri_seg.boundary_edges.append(edge)
                             tri_seg.var_point_indices.append(self.edge_to_varpoint[edge])
         
-        # Log statistics
-        num_two_cell = sum(1 for ts in self.triangle_segments if ts.num_cells() == 2)
-        num_triple = sum(1 for ts in self.triangle_segments if ts.is_triple_point())
-        self.logger.info(f"Pass 2 complete: Created {len(self.triangle_segments)} triangle segments: "
+        num_two_cell = sum(1 for ts in self._triangle_segments.values() if ts.num_cells(vertex_labels) == 2)
+        num_triple = sum(1 for ts in self._triangle_segments.values() if ts.is_triple_point())
+        self.logger.info(f"Pass 2 complete: Created {len(self._triangle_segments)} triangle segments: "
                         f"{num_two_cell} two-cell, {num_triple} triple-point")
         
-        # Phase 4: Build explicit segment connectivity
         self._build_segment_connectivity()
     
     def get_variable_vector(self) -> np.ndarray:
         """
         Return current λ parameters as optimization vector.
+        
+        Returns all VP lambdas (both active and inactive) for backward compatibility.
+        Use get_active_variable_vector() after migrations mark VPs inactive.
         
         Returns:
             Array of shape (n_variable_points,) with λ values
@@ -442,60 +493,56 @@ class PartitionContour:
         """
         Update all λ parameters from optimization vector.
         
-        Args:
-            lambda_vec: Array of shape (n_variable_points,) with new λ values
-        """
-        if len(lambda_vec) != len(self.variable_points):
-            raise ValueError(f"Lambda vector size {len(lambda_vec)} doesn't match "
-                           f"number of variable points {len(self.variable_points)}")
+        Accepts vectors sized to either all VPs or active VPs only.
         
-        for i, lam in enumerate(lambda_vec):
-            self.variable_points[i].lambda_param = float(np.clip(lam, 0.0, 1.0))
+        Args:
+            lambda_vec: Array of λ values
+        """
+        if len(lambda_vec) == len(self.variable_points):
+            for i, lam in enumerate(lambda_vec):
+                self.variable_points[i].lambda_param = float(np.clip(lam, 0.0, 1.0))
+        elif len(lambda_vec) == len(self._active_vp_indices):
+            for k, vp_idx in enumerate(self._active_vp_indices):
+                self.variable_points[vp_idx].lambda_param = float(np.clip(lambda_vec[k], 0.0, 1.0))
+        else:
+            raise ValueError(f"Lambda vector size {len(lambda_vec)} doesn't match "
+                           f"total VPs ({len(self.variable_points)}) or "
+                           f"active VPs ({len(self._active_vp_indices)})")
+    
+    def get_active_variable_vector(self) -> np.ndarray:
+        """Return λ parameters for active VPs only (the optimization vector after migrations)."""
+        return np.array([self.variable_points[i].lambda_param for i in self._active_vp_indices])
+    
+    def set_active_variable_vector(self, vec: np.ndarray):
+        """Update λ parameters for active VPs only."""
+        if len(vec) != len(self._active_vp_indices):
+            raise ValueError(f"Vector size {len(vec)} doesn't match "
+                           f"active VP count {len(self._active_vp_indices)}")
+        for k, vp_idx in enumerate(self._active_vp_indices):
+            self.variable_points[vp_idx].lambda_param = float(np.clip(vec[k], 0.0, 1.0))
     
     def rebuild_triangle_segments_from_current_vps(self):
         """
-        Rebuild triangle_segments list based on current variable point positions.
+        Rebuild triangle_segments based on current variable point positions.
         
-        CRITICAL for topology switching: After VPs move to new edges, the triangle_segments
-        list becomes stale. This method re-scans the mesh and rebuilds the list based on
-        current VP locations.
-        
-        CRITICAL: After topology switches, triangles can have 1, 2, or 3 VPs:
-        - 1 VP: Partial segment (e.g., T3 with only VP5 after Type 2 switch)
-        - 2 VPs: Normal boundary segment
-        - 3 VPs: Triple point
-        
-        All must be included (>= 1) to maintain complete representation.
-        
-        Example: After Type 2 switch moving VP1 from T1 to T2:
-        - T3 loses VP1, keeps only VP5 (1 VP) - must be included
-        - T5 has VP1 on edge shared with T2 (1 VP) - must be included
-        - T2 becomes triple point with VP1, VP3, VP4 (3 VPs)
-        
-        This preserves existing variable_points and their lambda values - it only updates
-        the triangle-to-VP mapping (which triangles contain which VPs).
+        Re-scans the mesh and rebuilds the dict based on current VP locations.
+        Only active VPs are considered. Preserves existing variable_points and
+        their lambda values - only updates the triangle-to-VP mapping.
         """
         self.logger.info("Rebuilding triangle_segments from current VPs...")
         
-        # Clear existing triangle segments
-        self.triangle_segments = []
+        self._triangle_segments = {}
         
-        # Create map: edge -> VP index for quick lookup
         edge_to_vp = {}
         for vp_idx, vp in enumerate(self.variable_points):
+            if not vp.active:
+                continue
             normalized_edge = tuple(sorted(vp.edge))
             edge_to_vp[normalized_edge] = vp_idx
         
-        # Get vertex labels (still used for vertex_labels attribute in TriangleSegment)
-        # Note: These may be stale after switches, but they're only used for diagnostics
-        vertex_labels = np.argmax(self.indicator_functions, axis=1)
-        
-        # Re-scan all mesh triangles
         for tri_idx, face in enumerate(self.mesh.faces):
             v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-            labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
             
-            # Find VPs on this triangle's edges
             tri_edges = [
                 tuple(sorted([v1, v2])),
                 tuple(sorted([v2, v3])),
@@ -510,79 +557,50 @@ class PartitionContour:
                     boundary_edges.append(edge)
                     var_point_indices.append(edge_to_vp[edge])
             
-            # CRITICAL CHANGE: Include triangles with >= 1 VP (was >= 2)
-            # This ensures triangles like T3 (VP5 only) and T5 (VP1 only) are included
-            # These represent partial segments that span multiple triangles
             if len(var_point_indices) >= 1:
                 tri_seg = TriangleSegment(
                     triangle_idx=tri_idx,
                     vertex_indices=(v1, v2, v3),
-                    vertex_labels=tuple(labels),
                     boundary_edges=boundary_edges,
                     var_point_indices=var_point_indices
                 )
-                self.triangle_segments.append(tri_seg)
+                self._triangle_segments[tri_idx] = tri_seg
         
-        # Log statistics with breakdown
-        num_one_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 1)
-        num_two_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
-        num_three_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 3)
+        segments_list = list(self._triangle_segments.values())
+        num_one_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 1)
+        num_two_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 2)
+        num_three_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 3)
         
-        self.logger.info(f"Rebuilt {len(self.triangle_segments)} triangle segments:")
-        self.logger.info(f"  {num_one_vp} with 1 VP (partial segments from switches)")
-        self.logger.info(f"  {num_two_vp} with 2 VPs (normal boundaries)")
-        self.logger.info(f"  {num_three_vp} with 3 VPs (triple points)")
+        self.logger.info(f"Rebuilt {len(self._triangle_segments)} triangle segments:")
+        self.logger.info(f"  {num_one_vp} with 1 VP, {num_two_vp} with 2 VPs, {num_three_vp} with 3 VPs")
         
-        # Force a full rebuild of boundary_segments from current triangle_segments.
-        # This is critical because Type 1 migrations move VPs to new edges without
-        # updating boundary_segments, causing stale VP-VP connectivity to accumulate.
-        # Without force_rebuild, Mode 2 would preserve stale connectivity.
         self._build_segment_connectivity(force_rebuild=True)
-        
-        # Rebuild segment_to_triangle map (after triangle_segments updated)
         self._build_segment_to_triangle_map()
+        self._rebuild_vp_adjacency()
     
     def rebuild_triangle_segments_for_affected_triangles(self, affected_triangles: List[int]):
         """
-        Optimized rebuild for Type 1 migration - only updates specified triangles.
-        
-        This is much faster than rebuild_triangle_segments_from_current_vps() when only
-        a small number of triangles are affected (e.g., 6 triangles for Type 1 migration).
-        
-        CRITICAL: For Type 1 vertex-collapse migration:
-        - Only 6 triangles affected (those sharing the target vertex)
-        - 2 triangles GAIN segments (were empty → now have VPs)
-        - 2 triangles LOSE segments (had VPs → now empty)
-        - 2 triangles KEEP segments but TILT (VPs move to different edges)
+        Optimized rebuild - only updates specified triangles in the dict.
         
         Args:
             affected_triangles: List of triangle indices to rebuild
         """
         self.logger.info(f"Rebuilding triangle_segments for {len(affected_triangles)} affected triangles...")
         
-        # Remove old entries for affected triangles
-        affected_set = set(affected_triangles)
-        self.triangle_segments = [
-            ts for ts in self.triangle_segments 
-            if ts.triangle_idx not in affected_set
-        ]
+        for tri_idx in affected_triangles:
+            self._triangle_segments.pop(tri_idx, None)
         
-        # Create map: edge -> VP index for quick lookup
         edge_to_vp = {}
         for vp_idx, vp in enumerate(self.variable_points):
+            if not vp.active:
+                continue
             normalized_edge = tuple(sorted(vp.edge))
             edge_to_vp[normalized_edge] = vp_idx
         
-        # Get vertex labels (may be stale but only used for diagnostics)
-        vertex_labels = np.argmax(self.indicator_functions, axis=1)
-        
-        # Rebuild only affected triangles
         for tri_idx in affected_triangles:
             face = self.mesh.faces[tri_idx]
             v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-            labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
             
-            # Find VPs on this triangle's edges
             tri_edges = [
                 tuple(sorted([v1, v2])),
                 tuple(sorted([v2, v3])),
@@ -597,24 +615,22 @@ class PartitionContour:
                     boundary_edges.append(edge)
                     var_point_indices.append(edge_to_vp[edge])
             
-            # Include triangles with >= 1 VP
             if len(var_point_indices) >= 1:
                 tri_seg = TriangleSegment(
                     triangle_idx=tri_idx,
                     vertex_indices=(v1, v2, v3),
-                    vertex_labels=tuple(labels),
                     boundary_edges=boundary_edges,
                     var_point_indices=var_point_indices
                 )
-                self.triangle_segments.append(tri_seg)
+                self._triangle_segments[tri_idx] = tri_seg
         
-        # Log statistics
-        num_one_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 1)
-        num_two_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
-        num_three_vp = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 3)
+        segments_list = list(self._triangle_segments.values())
+        num_one_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 1)
+        num_two_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 2)
+        num_three_vp = sum(1 for ts in segments_list if len(ts.var_point_indices) == 3)
         
         self.logger.info(f"Rebuilt {len(affected_triangles)} affected triangles:")
-        self.logger.info(f"  Total triangle_segments: {len(self.triangle_segments)}")
+        self.logger.info(f"  Total triangle_segments: {len(self._triangle_segments)}")
         self.logger.info(f"    {num_one_vp} with 1 VP, {num_two_vp} with 2 VPs, {num_three_vp} with 3 VPs")
 
         
@@ -666,7 +682,7 @@ class PartitionContour:
         self.logger.info("Building segment connectivity from scratch (initial build)")
         seen_segments = set()
         
-        for tri_seg in self.triangle_segments:
+        for tri_seg in self._triangle_segments.values():
             var_indices = tri_seg.var_point_indices
             
             if len(var_indices) == 2:
@@ -719,28 +735,12 @@ class PartitionContour:
         return self.variable_points[var_point_idx].evaluate(self.mesh.vertices)
     
     def _build_segment_to_triangle_map(self) -> None:
-        """
-        Build inverse map: segment (vp1, vp2) -> triangle_idx.
-        
-        This map provides O(1) lookup for finding which triangle contains
-        a given segment between two variable points.
-        
-        IMPORTANT: This map must be rebuilt after ANY topology switch operation:
-        - Type 1 (vertex collapse): VPs move to new edges, segments change
-        - Type 2 (triple point collapse): Steiner point removed, segments reorganized
-        
-        Call rebuild_segment_to_triangle_map() after any migration.
-        """
+        """Build inverse map: segment (vp1, vp2) -> triangle_idx for O(1) lookup."""
         self.segment_to_triangle = {}
         
-        for tri_seg in self.triangle_segments:
-            # Only create mapping for triangles with exactly 2 VPs (normal segments)
-            # Triple points (3 VPs) and partial segments (1 VP) are not included
+        for tri_seg in self._triangle_segments.values():
             if len(tri_seg.var_point_indices) == 2:
-                # Normalize segment key (min, max) for consistent lookup
                 seg_key = tuple(sorted(tri_seg.var_point_indices))
-                
-                # Store mapping
                 self.segment_to_triangle[seg_key] = tri_seg.triangle_idx
             
         self.logger.debug(f"Built segment_to_triangle map with {len(self.segment_to_triangle)} entries")
@@ -758,22 +758,14 @@ class PartitionContour:
         self.logger.info("Rebuilt segment_to_triangle map")
     
     def validate_segment_to_triangle_map(self) -> bool:
-        """
-        Validate that segment_to_triangle map is consistent with triangle_segments.
+        """Validate that segment_to_triangle map is consistent with triangle_segments."""
+        expected_count = sum(1 for ts in self._triangle_segments.values() if len(ts.var_point_indices) == 2)
         
-        Returns:
-            True if consistent, False otherwise
-        """
-        # Count how many 2-VP segments we should have
-        expected_count = sum(1 for ts in self.triangle_segments if len(ts.var_point_indices) == 2)
-        
-        # Check sizes match
         if len(self.segment_to_triangle) != expected_count:
             self.logger.error(f"Map size mismatch: {len(self.segment_to_triangle)} vs {expected_count} (2-VP segments)")
             return False
         
-        # Check each 2-VP entry
-        for tri_seg in self.triangle_segments:
+        for tri_seg in self._triangle_segments.values():
             if len(tri_seg.var_point_indices) == 2:
                 seg_key = tuple(sorted(tri_seg.var_point_indices))
                 mapped_tri = self.segment_to_triangle.get(seg_key)
@@ -786,24 +778,19 @@ class PartitionContour:
     
     def get_triangle_based_segments(self) -> List[Tuple[int, int]]:
         """
-        NEW - Phase 1: Extract all segments from triangle_segments.
+        Extract all segments from triangle_segments.
         
         Returns list of (var_idx_i, var_idx_j) tuples for all contour segments.
         Each segment is returned once, even though it may belong to multiple cells.
-        
-        This method will be used in Phase 2 to refactor PerimeterCalculator.
-        
-        Returns:
-            List of unique segment pairs as (var_point_idx1, var_point_idx2)
         """
         segments = []
         seen_segments = set()
+        vertex_labels = self._vertex_labels
         
-        for tri_seg in self.triangle_segments:
+        for tri_seg in self._triangle_segments.values():
             var_indices = tri_seg.var_point_indices
             
-            if tri_seg.num_cells() == 2:
-                # Two-cell triangle: one segment connecting the two variable points
+            if tri_seg.num_cells(vertex_labels) == 2:
                 if len(var_indices) == 2:
                     seg = tuple(sorted(var_indices))
                     if seg not in seen_segments:
@@ -811,7 +798,6 @@ class PartitionContour:
                         seen_segments.add(seg)
             
             elif tri_seg.is_triple_point():
-                # Triple-point triangle: three segments forming a small triangle
                 if len(var_indices) == 3:
                     for i in range(3):
                         for j in range(i+1, 3):
@@ -824,10 +810,7 @@ class PartitionContour:
     
     def get_cell_segments_from_triangles(self, cell_idx: int) -> List[Tuple[int, int]]:
         """
-        NEW - Phase 1: Get segments for a specific cell from triangle_segments.
-        
-        This is a replacement for CellContour.get_segments() that will be used
-        in Phase 2 to refactor PerimeterCalculator.
+        Get segments for a specific cell from triangle_segments.
         
         Args:
             cell_idx: Index of the cell
@@ -837,16 +820,15 @@ class PartitionContour:
         """
         segments = []
         seen_segments = set()
+        vertex_labels = self._vertex_labels
         
-        for tri_seg in self.triangle_segments:
-            # Only process triangles that involve this cell
-            if cell_idx not in tri_seg.get_cell_indices():
+        for tri_seg in self._triangle_segments.values():
+            if cell_idx not in tri_seg.get_cell_indices(vertex_labels):
                 continue
             
             var_indices = tri_seg.var_point_indices
             
-            if tri_seg.num_cells() == 2:
-                # Two-cell triangle: add the segment if not already seen
+            if tri_seg.num_cells(vertex_labels) == 2:
                 if len(var_indices) == 2:
                     seg = tuple(sorted(var_indices))
                     if seg not in seen_segments:
@@ -854,10 +836,7 @@ class PartitionContour:
                         seen_segments.add(seg)
             
             elif tri_seg.is_triple_point():
-                # Triple-point triangle: segments handled entirely by SteinerHandler
-                # Per paper Figure 7: each cell gets (2 Steiner edges - 1 original edge)
-                # Do NOT add original triangle edges to regular perimeter calculation
-                continue  # Skip this triangle
+                continue
         
         return segments
     
@@ -894,10 +873,11 @@ class PartitionContour:
             self.logger.info(f"Converted to visualization format (Phase 4 boundary_segments): "
                             f"{total_segments} total segments")
         else:
-            # Fallback to Phase 3 triangle-based extraction (for backward compatibility)
+            # Fallback to triangle-based extraction (for backward compatibility)
             self.logger.warning("No boundary_segments found, using fallback triangle-based extraction")
-        for tri_seg in self.triangle_segments:
-            if tri_seg.num_cells() == 2:
+        vertex_labels = self._vertex_labels
+        for tri_seg in self._triangle_segments.values():
+            if tri_seg.num_cells(vertex_labels) == 2:
                 if len(tri_seg.var_point_indices) == 2:
                     vp_idx1, vp_idx2 = tri_seg.var_point_indices
                     
@@ -906,7 +886,7 @@ class PartitionContour:
                     
                     segment = np.vstack([p1, p2])
                     
-                    cells_in_triangle = tri_seg.get_cell_indices()
+                    cells_in_triangle = tri_seg.get_cell_indices(vertex_labels)
                     for cell_idx in cells_in_triangle:
                         contours_dict[cell_idx].append(segment)
             
@@ -922,7 +902,7 @@ class PartitionContour:
                     seg23 = np.vstack([p2, p3])
                     seg31 = np.vstack([p3, p1])
                     
-                    cells_in_triangle = tri_seg.get_cell_indices()
+                    cells_in_triangle = tri_seg.get_cell_indices(vertex_labels)
                     for cell_idx in cells_in_triangle:
                         contours_dict[cell_idx].append(seg12)
                         contours_dict[cell_idx].append(seg23)
@@ -1021,30 +1001,21 @@ class PartitionContour:
     
     def identify_triple_points(self) -> List[Tuple[int, List[int]]]:
         """
-        Identify mesh triangles where three different partition cells meet (triple points).
+        Identify mesh triangles where three different partition cells meet.
         
-        These are mesh triangles with three variable points from three different cells,
-        creating small void spaces that need Steiner tree treatment (Section 5).
-        
-        DEPRECATED: This method uses indicator_functions which become stale after
-        topology switches. Use identify_triple_points_from_current_vps() instead
-        for post-switch scenarios. This method is kept for initial creation and
-        backward compatibility. Will be removed after full testing confirms the
-        new method works correctly in all scenarios.
+        Uses vertex_labels directly.
         
         Returns:
             List of (triangle_idx, [var_point_idx1, var_point_idx2, var_point_idx3])
         """
         triple_points = []
-        vertex_labels = np.argmax(self.indicator_functions, axis=1)
+        vertex_labels = self._vertex_labels
         
         for tri_idx, face in enumerate(self.mesh.faces):
             v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-            labels = {vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]}
+            labels = {int(vertex_labels[v1]), int(vertex_labels[v2]), int(vertex_labels[v3])}
             
-            # Triple point: all 3 vertices belong to different partition cells
             if len(labels) == 3:
-                # Find the 3 variable points on this mesh triangle's edges
                 edges = [
                     tuple(sorted([v1, v2])),
                     tuple(sorted([v2, v3])),

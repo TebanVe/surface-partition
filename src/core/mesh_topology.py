@@ -54,9 +54,11 @@ class MeshTopology:
         self.vertex_to_edges: Dict[int, Set[Tuple[int, int]]] = {}
         self.vertex_to_triangles: Dict[int, List[int]] = {}
         self.edge_to_triangles: Dict[Tuple[int, int], List[int]] = {}
+        self._vertex_neighbors: Dict[int, Set[int]] = {}
         
         # Build connectivity
         self._build_connectivity()
+        self._build_vertex_neighbors()
         
         self.logger.info(f"Built MeshTopology: {len(self.vertex_to_edges)} vertices, "
                         f"{len(self.edge_to_triangles)} unique edges")
@@ -173,8 +175,6 @@ class MeshTopology:
         """
         Get edges adjacent to current_edge through a specific vertex.
         
-        This is used for Type 1 switching to find candidate edges.
-        
         Args:
             current_edge: Current edge containing variable point
             vertex_idx: Vertex that variable point is approaching
@@ -182,12 +182,23 @@ class MeshTopology:
         Returns:
             List of adjacent edges (excluding current_edge)
         """
-        # Get all edges at the vertex
         all_edges = self.get_edges_at_vertex(vertex_idx)
-        
-        # Normalize current edge for comparison
         normalized_current = tuple(sorted(current_edge))
-        
-        # Return edges that aren't the current edge
         return [e for e in all_edges if e != normalized_current]
+    
+    def _build_vertex_neighbors(self):
+        """Build cached vertex neighbor lookup from edge data."""
+        self._vertex_neighbors = {}
+        for edge in self.edge_to_triangles:
+            v1, v2 = edge
+            self._vertex_neighbors.setdefault(v1, set()).add(v2)
+            self._vertex_neighbors.setdefault(v2, set()).add(v1)
+    
+    def get_vertex_neighbors(self, vertex_idx: int) -> Set[int]:
+        """All vertices directly connected to vertex_idx. Cached O(1)."""
+        return self._vertex_neighbors.get(vertex_idx, set())
+    
+    def are_neighbors(self, v1: int, v2: int) -> bool:
+        """Check if two vertices are at mesh distance 1."""
+        return v2 in self._vertex_neighbors.get(v1, set())
 

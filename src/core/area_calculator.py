@@ -101,8 +101,7 @@ class AreaCalculator:
         remains accurate throughout the optimization process. The vp.belongs_to_cells
         attribute (properly maintained) can be used where beneficial for performance.
         """
-        # Cache vertex labels from indicator functions (for this method only)
-        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        vertex_labels = self.partition.vertex_labels
         
         for cell_idx in range(self.partition.n_cells):
             interior = []
@@ -236,8 +235,7 @@ class AreaCalculator:
         v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
         gradient = np.zeros(len(lambda_vec))
         
-        # Use indicator_functions to get vertex labels
-        vertex_labels = np.argmax(self.partition.indicator_functions, axis=1)
+        vertex_labels = self.partition.vertex_labels
         labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
         
         # Count how many vertices belong to this partition cell

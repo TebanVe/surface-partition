@@ -184,7 +184,7 @@ def main():
 						}
 						for tp in steiner_handler.triple_points:
 							# Compute Steiner point
-							steiner_pt = tp.compute_steiner_point()
+							steiner_pt = tp.compute_steiner_point(partition=partition)
 							steiner_info['steiner_points'].append(steiner_pt)
 							
 							# Get void triangle vertices (the 3 variable points)

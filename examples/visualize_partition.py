@@ -230,8 +230,9 @@ def main():
         return 1
     
     source_label = _build_source_label(is_refined, args.solution)
+    active_vps = sum(1 for vp in partition.variable_points if vp.active)
     print(f"✓ Loaded partition ({source_label}): {partition.n_cells} cells, "
-          f"{len(partition.variable_points)} VPs")
+          f"{active_vps} VPs ({len(partition.variable_points)} total)")
     
     # ========================================================================
     # Initialize Handlers
@@ -282,7 +283,7 @@ def main():
     
     # Add VP visualization if requested
     if args.show_vps:
-        all_vp_indices = list(range(len(partition.variable_points)))
+        all_vp_indices = [i for i, vp in enumerate(partition.variable_points) if vp.active]
         vp_colors = ['red'] * len(all_vp_indices)
         vp_labels = [f'VP{i}' for i in all_vp_indices]
         add_vp_visualization(plotter, partition, mesh, all_vp_indices, vp_colors, vp_labels, args.vp_size)

@@ -81,6 +81,18 @@ class PerimeterOptimizer:
         self.perim_calc = perim_calc if perim_calc is not None else PerimeterCalculator(mesh, partition)
         self.steiner_handler = steiner_handler if steiner_handler is not None else SteinerHandler(mesh, partition)
         
+        # Active VP mapping: after migrations some VPs are inactive and should
+        # not be optimized.  The calculators work with full-sized vectors indexed
+        # by absolute VP position, so we expand/compress at the optimizer boundary.
+        self._active_indices = np.array(
+            [i for i, vp in enumerate(partition.variable_points)
+             if getattr(vp, 'active', True)],
+            dtype=int
+        )
+        self._n_total = len(partition.variable_points)
+        self._n_active = len(self._active_indices)
+        self._use_active_mapping = (self._n_active < self._n_total)
+        
         # Optimization state
         self.iteration = 0
         self.objective_history = []
@@ -88,9 +100,33 @@ class PerimeterOptimizer:
         
         self.logger.info(f"Initialized PerimeterOptimizer:")
         self.logger.info(f"  {partition.n_cells} partition cells")
-        self.logger.info(f"  {len(partition.variable_points)} variable points")
+        if self._use_active_mapping:
+            self.logger.info(f"  {self._n_total} variable points ({self._n_active} active, "
+                           f"{self._n_total - self._n_active} inactive)")
+        else:
+            self.logger.info(f"  {self._n_total} variable points (all active)")
         self.logger.info(f"  {len(self.steiner_handler.triple_points)} triple points")
         self.logger.info(f"  Target area per partition cell: {target_area:.6f}")
+    
+    def _to_full(self, active_vec: np.ndarray) -> np.ndarray:
+        """Expand an active-only vector to a full-sized vector (inactive VPs keep current λ)."""
+        if not self._use_active_mapping:
+            return active_vec
+        full = self.partition.get_variable_vector()
+        full[self._active_indices] = active_vec
+        return full
+    
+    def _to_active(self, full_vec: np.ndarray) -> np.ndarray:
+        """Compress a full-sized vector to active-only."""
+        if not self._use_active_mapping:
+            return full_vec
+        return full_vec[self._active_indices]
+    
+    def _to_active_2d(self, full_matrix: np.ndarray) -> np.ndarray:
+        """Compress columns of a full-sized matrix (e.g. Jacobian) to active-only."""
+        if not self._use_active_mapping:
+            return full_matrix
+        return full_matrix[:, self._active_indices]
     
     def objective(self, lambda_vec: np.ndarray) -> float:
         """
@@ -99,15 +135,17 @@ class PerimeterOptimizer:
         Includes both regular segment perimeters and Steiner tree contributions.
         
         Args:
-            lambda_vec: Current variable point parameters
+            lambda_vec: Variable point parameters (active-only during optimization,
+                       or full-sized for external calls)
             
         Returns:
             Total perimeter length
         """
-        self.partition.set_variable_vector(lambda_vec)
+        full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
+        self.partition.set_variable_vector(full_vec)
         
         # Regular perimeter from contours
-        regular_perimeter = self.perim_calc.compute_total_perimeter(lambda_vec)
+        regular_perimeter = self.perim_calc.compute_total_perimeter(full_vec)
         
         # Steiner tree contributions from triple points
         steiner_perimeter = self.steiner_handler.get_total_perimeter_contribution()
@@ -121,22 +159,23 @@ class PerimeterOptimizer:
         Compute gradient of objective function ∂(perimeter)/∂λ.
         
         Args:
-            lambda_vec: Current variable point parameters
+            lambda_vec: Variable point parameters (active-only during optimization)
             
         Returns:
-            Gradient array of shape (n_variable_points,)
+            Gradient array (active-only during optimization)
         """
-        self.partition.set_variable_vector(lambda_vec)
+        full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
+        self.partition.set_variable_vector(full_vec)
         
         # Regular perimeter gradient (analytical)
-        regular_gradient = self.perim_calc.compute_total_perimeter_gradient(lambda_vec)
+        regular_gradient = self.perim_calc.compute_total_perimeter_gradient(full_vec)
         
         # Steiner tree gradient (finite differences, as suggested in paper)
         steiner_gradient = self.steiner_handler.compute_total_gradient_finite_difference()
         
         total_gradient = regular_gradient + steiner_gradient
         
-        return total_gradient
+        return self._to_active(total_gradient) if len(lambda_vec) == self._n_active else total_gradient
     
     def constraint_area_equality(self, lambda_vec: np.ndarray) -> np.ndarray:
         """
@@ -145,15 +184,16 @@ class PerimeterOptimizer:
         For n cells, we constrain n-1 cells (last one is determined by conservation).
         
         Args:
-            lambda_vec: Current variable point parameters
+            lambda_vec: Variable point parameters (active-only during optimization)
             
         Returns:
             Constraint violations array of shape (n_cells - 1,)
         """
-        self.partition.set_variable_vector(lambda_vec)
+        full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
+        self.partition.set_variable_vector(full_vec)
         
         # Compute regular areas
-        areas = self.area_calc.compute_all_cell_areas(lambda_vec)
+        areas = self.area_calc.compute_all_cell_areas(full_vec)
         
         # Add Steiner tree area contributions
         steiner_areas = self.steiner_handler.get_total_area_contribution()
@@ -171,15 +211,16 @@ class PerimeterOptimizer:
         Per paper section 5: Uses finite differences for Steiner area gradients.
         
         Args:
-            lambda_vec: Current variable point parameters
+            lambda_vec: Variable point parameters (active-only during optimization)
             
         Returns:
-            Jacobian array of shape (n_cells - 1, n_variable_points)
+            Jacobian array (columns correspond to active VPs during optimization)
         """
-        self.partition.set_variable_vector(lambda_vec)
+        full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
+        self.partition.set_variable_vector(full_vec)
         
         # Regular area Jacobian (from boundary triangles, analytical)
-        jacobian = self.area_calc.compute_area_jacobian(lambda_vec)
+        jacobian = self.area_calc.compute_area_jacobian(full_vec)
         
         # Add Steiner tree area gradients (finite differences, per paper line 366)
         steiner_gradients = self.steiner_handler.compute_area_gradients_finite_difference(
@@ -190,7 +231,7 @@ class PerimeterOptimizer:
         for cell_idx in range(self.partition.n_cells - 1):
             jacobian[cell_idx, :] += steiner_gradients[cell_idx]
         
-        return jacobian
+        return self._to_active_2d(jacobian) if len(lambda_vec) == self._n_active else jacobian
     
     def _callback(self, *args, **kwargs):
         """
@@ -266,9 +307,13 @@ class PerimeterOptimizer:
         """
         self.logger.info(f"Starting perimeter optimization with method={method}")
         self.logger.info(f"  max_iter={max_iter}, tol={tol}")
+        if self._use_active_mapping:
+            self.logger.info(f"  Optimizing {self._n_active} active VPs "
+                           f"(skipping {self._n_total - self._n_active} inactive)")
         
-        # Initial guess: current λ values (all 0.5 from initialization)
-        lambda0 = self.partition.get_variable_vector()
+        # Initial guess: current λ values for active VPs only
+        lambda0 = self.partition.get_active_variable_vector() if self._use_active_mapping \
+                   else self.partition.get_variable_vector()
         
         # Box constraints: λ ∈ [0, 1]
         bounds = [(0.0, 1.0) for _ in lambda0]
@@ -346,7 +391,8 @@ class PerimeterOptimizer:
             Dictionary with optimization information
         """
         final_perimeter = self.objective(result.x)
-        final_areas = self.area_calc.compute_all_cell_areas(result.x)
+        full_x = self._to_full(result.x) if len(result.x) == self._n_active else result.x
+        final_areas = self.area_calc.compute_all_cell_areas(full_x)
         
         # Add Steiner contributions to areas
         steiner_areas = self.steiner_handler.get_total_area_contribution()
@@ -457,23 +503,18 @@ class PerimeterOptimizer:
             self.logger.info(f"  Mesh Triangle: {tp.triangle_idx}")
             self.logger.info(f"  Cells meeting: {sorted(tp.cell_indices)}")
             
-            # Get TriangleSegment for this triple point (contains vertex info)
-            tri_seg = None
-            for ts in self.partition.triangle_segments:
-                if ts.triangle_idx == tp.triangle_idx and ts.is_triple_point():
-                    tri_seg = ts
-                    break
+            tri_seg = self.partition.get_triangle_segment(tp.triangle_idx)
             
-            if tri_seg:
+            if tri_seg and tri_seg.is_triple_point():
                 v_indices = tri_seg.vertex_indices
-                v_labels = tri_seg.vertex_labels
+                v_labels = tuple(int(self.partition.vertex_labels[v]) for v in v_indices)
                 self.logger.info(f"  Triangle vertices: v{v_indices[0]} (Cell {v_labels[0]}), "
                                f"v{v_indices[1]} (Cell {v_labels[1]}), "
                                f"v{v_indices[2]} (Cell {v_labels[2]})")
                 
                 # Get Steiner point position
                 if tp.steiner_point is None:
-                    tp.compute_steiner_point()
+                    tp.compute_steiner_point(partition=self.partition)
                 steiner_pos = tp.steiner_point
                 
                 # Check distance to each edge of the mesh triangle

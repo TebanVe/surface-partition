@@ -39,9 +39,19 @@ except ImportError:
 from src.core.tri_mesh import TriMesh
 from src.core.contour_partition import PartitionContour
 from src.core.mesh_topology import MeshTopology
-from src.core.topology_switcher import TopologySwitcher
 from src.core.steiner_handler import SteinerHandler, TriplePoint
 from src.core.area_calculator import AreaCalculator
+
+# Pre-parse --use-legacy before conditional imports
+import argparse as _argparse
+_preparser = _argparse.ArgumentParser(add_help=False)
+_preparser.add_argument('--use-legacy', action='store_true')
+_preargs, _ = _preparser.parse_known_args()
+
+if _preargs.use_legacy:
+    from src.core.topology_switcher_legacy import TopologySwitcher
+else:
+    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
 # Import data loading from the reference script
 from examples.data_loader import load_partition_from_refined_file
@@ -124,8 +134,7 @@ def _vertex_on_cell_side_for_viz(
     distances = np.linalg.norm(mesh.vertices - vertex_pos, axis=1)
     vertex_idx = np.argmin(distances)
     
-    # Check if vertex belongs to cell_idx using indicator_functions
-    vertex_labels = np.argmax(partition.indicator_functions, axis=1)
+    vertex_labels = partition.vertex_labels
     vertex_cell = int(vertex_labels[vertex_idx])
     
     return vertex_cell == cell_idx
@@ -145,10 +154,9 @@ def compute_cell_portion_in_triangle_simple(
     Returns:
         (N, 3) array of polygon vertices, or None if triangle doesn't contribute
     """
-    # Get mesh vertices and labels
     face = mesh.faces[tri_idx]
     v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-    vertex_labels = np.argmax(partition.indicator_functions, axis=1)
+    vertex_labels = partition.vertex_labels
     labels = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
     
     if debug and tri_idx in [18150, 18152]:
@@ -171,6 +179,8 @@ def compute_cell_portion_in_triangle_simple(
             
             for vp_idx in tri_seg.var_point_indices:
                 vp = partition.variable_points[vp_idx]
+                if not getattr(vp, 'active', True):
+                    continue
                 
                 if debug and tri_idx in [18150, 18152]:
                     print(f"  VP {vp_idx}:")
@@ -191,6 +201,8 @@ def compute_cell_portion_in_triangle_simple(
             if tri_seg.triangle_idx == tri_idx:
                 for vp_idx in tri_seg.var_point_indices:
                     vp = partition.variable_points[vp_idx]
+                    if not getattr(vp, 'active', True):
+                        continue
                     if cell_idx in vp.belongs_to_cells:
                         is_boundary = True
                         vp_positions.append(vp.evaluate(mesh.vertices))
@@ -285,7 +297,8 @@ def compute_triple_point_cell_portion(
     if not triple_point or cell_idx not in triple_point.cell_indices:
         return None
     
-    steiner_pos = triple_point.compute_steiner_point()
+    vp_positions_for_steiner = [partition.evaluate_variable_point(vi) for vi in triple_point.var_point_indices]
+    steiner_pos = triple_point.compute_steiner_point(vp_positions=vp_positions_for_steiner)
     
     # Get the two VPs that bound this cell (from triple point mapping)
     if cell_idx not in triple_point.cell_to_varpoint_pair:
@@ -456,17 +469,18 @@ def add_steiner_visualization(
     print(f"  Adding {len(triple_points)} Steiner points and void triangles...")
     
     for tp in triple_points:
-        # Compute Steiner point
-        steiner_pt = tp.compute_steiner_point()
+        vp_positions_for_steiner = [partition.evaluate_variable_point(vi) for vi in tp.var_point_indices]
+        steiner_pt = tp.compute_steiner_point(vp_positions=vp_positions_for_steiner)
         
         # Add Steiner point as orange sphere
         sphere = pv.Sphere(radius=steiner_size, center=steiner_pt)
         plotter.add_mesh(sphere, color='orange', opacity=1.0)
         
-        # Get VP positions for void triangle
         vp_positions = []
         for vp_idx in tp.var_point_indices:
             vp = partition.variable_points[vp_idx]
+            if not getattr(vp, 'active', True):
+                continue
             vp_pos = vp.evaluate(mesh.vertices)
             vp_positions.append(vp_pos)
         
@@ -572,28 +586,29 @@ def add_triple_point_triangle_labels(
         add_triangle_label(plotter, mesh, tri_idx, f"T{tri_idx}", color='black', font_size=12)
 
 
-def compute_steiner_distance_to_boundary(triple_point: TriplePoint, mesh: TriMesh) -> float:
+def compute_steiner_distance_to_boundary(triple_point: TriplePoint, mesh: TriMesh,
+                                        partition: PartitionContour) -> float:
     """
     Compute distance from Steiner point to closest edge of the triangle.
     
     Args:
         triple_point: TriplePoint object
         mesh: TriMesh
+        partition: PartitionContour (for Steiner point computation)
     
     Returns:
         Distance to closest edge
     """
-    steiner_pos = triple_point.compute_steiner_point()
+    vp_positions_for_steiner = [partition.evaluate_variable_point(vi) for vi in triple_point.var_point_indices]
+    steiner_pos = triple_point.compute_steiner_point(vp_positions=vp_positions_for_steiner)
     tri_idx = triple_point.triangle_idx
     face = mesh.faces[tri_idx]
     
-    # Get triangle vertices
     v0, v1, v2 = [mesh.vertices[int(i)] for i in face]
     edges = [(v0, v1), (v1, v2), (v2, v0)]
     
     min_dist = float('inf')
     for edge_v1, edge_v2 in edges:
-        # Distance from point to line segment
         dist = triple_point._point_to_segment_distance(steiner_pos, edge_v1, edge_v2)
         min_dist = min(min_dist, dist)
     
@@ -636,13 +651,17 @@ def run_visualization(args):
     
     # Initialize topology components
     mesh_topology = MeshTopology(mesh)
-    switcher = TopologySwitcher(mesh, partition, mesh_topology)
-    
-    # Attach migration history to switcher if present
-    if migration_history is not None:
-        switcher.type2_migration_history = migration_history
-        print("✓ Migration history attached to topology switcher")
-        print()
+    if _preargs.use_legacy:
+        switcher = TopologySwitcher(mesh, partition, mesh_topology)
+        if migration_history is not None:
+            switcher.type2_migration_history = migration_history
+            print("✓ Migration history attached to topology switcher")
+            print()
+    else:
+        orchestrator = MigrationOrchestrator(
+            partition, mesh, mesh_topology,
+            MigrationConfig(delta=args.boundary_tol)
+        )
     
     steiner_handler = SteinerHandler(mesh, partition)
     
@@ -671,7 +690,7 @@ def run_visualization(args):
     for i, tp in enumerate(boundary_triple_points):
         vp_str = str(tp.var_point_indices)
         cells_str = str(sorted(tp.cell_indices))
-        dist = compute_steiner_distance_to_boundary(tp, mesh)
+        dist = compute_steiner_distance_to_boundary(tp, mesh, partition)
         print(f"{i:<5} {tp.triangle_idx:<10} {vp_str:<30} {cells_str:<15} {dist:<20.6f}")
     
     print()
@@ -696,7 +715,7 @@ def run_visualization(args):
     
     print(f"  Cells: {sorted(selected_tp.cell_indices)}")
     
-    dist = compute_steiner_distance_to_boundary(selected_tp, mesh)
+    dist = compute_steiner_distance_to_boundary(selected_tp, mesh, partition)
     print(f"  Steiner distance to boundary: {dist:.6f}")
     print()
     
@@ -709,112 +728,123 @@ def run_visualization(args):
     print("="*80)
     print()
     
-    # Perform migration analysis using new strategy
-    migration_result = switcher.apply_type2_switch_v3(steiner_handler, args.triple_point_index)
-    
-    if not migration_result['success']:
-        print(f"❌ ERROR: Migration analysis failed: {migration_result.get('error', 'Unknown error')}")
-        return
-    
-    if 'warning' in migration_result:
-        print(f"⚠️  WARNING: {migration_result['warning']}")
+    if _preargs.use_legacy:
+        # ------- Legacy path: TopologySwitcher analysis -------
+        migration_result = switcher.apply_type2_switch_v3(steiner_handler, args.triple_point_index)
+
+        if not migration_result['success']:
+            print(f"❌ ERROR: Migration analysis failed: {migration_result.get('error', 'Unknown error')}")
+            return
+
+        if 'warning' in migration_result:
+            print(f"⚠️  WARNING: {migration_result['warning']}")
+            print()
+
+        print("Migration Analysis Results:")
+        print(f"  Triple triangle: {migration_result['triple_triangle_idx']}")
+        print(f"  Target triangle: {migration_result['target_triangle_idx']}")
+        print(f"  Shared edge (Steiner approaching): {migration_result['shared_edge']}")
+        print(f"  Target edge (free edge in target triangle): {migration_result['target_edge']}")
         print()
-    
-    # Display migration analysis
-    print("Migration Analysis Results:")
-    print(f"  Triple triangle: {migration_result['triple_triangle_idx']}")
-    print(f"  Target triangle: {migration_result['target_triangle_idx']}")
-    print(f"  Shared edge (Steiner approaching): {migration_result['shared_edge']}")
-    print(f"  Target edge (free edge in target triangle): {migration_result['target_edge']}")
-    print()
-    
-    print("VP Classification:")
-    print(f"  Anchor VP: {migration_result['anchor_vp_idx']} (on shared edge)")
-    print(f"  Migrating VP: {migration_result['migrating_vp_idx']} (will move to target edge)")
-    print(f"    Edge: {migration_result['migrating_vp_edge']}")
-    if migration_result['shared_vertex'] is not None:
-        print(f"    Shared vertex with target edge: {migration_result['shared_vertex']}")
-    print(f"  Non-migrating VP: {migration_result['non_migrating_vp_idx']} (stays in place)")
-    print(f"    Edge: {migration_result['non_migrating_vp_edge']}")
-    print()
-    
-    print("Connectivity Analysis:")
-    for vp_idx, info in migration_result['connectivity_analysis'].items():
-        print(f"  VP {vp_idx}:")
-        print(f"    Edge: {info['edge']}")
-        print(f"    Shared vertices with target edge: {info['shared_vertices']} (count={info['num_shared']})")
-    print()
-    
-    # Find outer neighbors of migrating VP (two levels deep)
-    migrating_vp_idx = migration_result['migrating_vp_idx']
-    triple_vp_set = set(selected_tp.var_point_indices)
-    
-    def get_neighbors(vp_idx):
-        """Get all neighbors of a VP via boundary_segments."""
-        neighbors = []
-        for seg in partition.boundary_segments:
-            if vp_idx == seg.vp_idx_1:
-                neighbors.append(seg.vp_idx_2)
-            elif vp_idx == seg.vp_idx_2:
-                neighbors.append(seg.vp_idx_1)
-        return neighbors
-    
-    # Level 1: Direct outer neighbor (excluding triple triangle VPs)
-    all_neighbors = get_neighbors(migrating_vp_idx)
-    direct_outer_neighbors = [vp for vp in all_neighbors if vp not in triple_vp_set]
-    
-    # Level 2: Neighbors of the direct outer neighbor (excluding migrating VP)
-    second_level_neighbors = []
-    for direct_neighbor in direct_outer_neighbors:
-        neighbor_neighbors = get_neighbors(direct_neighbor)
-        # Exclude the migrating VP itself
-        second_level = [vp for vp in neighbor_neighbors if vp != migrating_vp_idx]
-        second_level_neighbors.extend(second_level)
-    
-    # Combine all outer neighbors for visualization
-    outer_neighbors = direct_outer_neighbors + second_level_neighbors
-    
-    print(f"Migrating VP {migrating_vp_idx} Neighbor Analysis:")
-    print(f"  All immediate neighbors: {all_neighbors}")
-    print(f"  Triple triangle VPs (excluded): {list(triple_vp_set)}")
-    print(f"  Direct outer neighbor (Level 1): {direct_outer_neighbors}")
-    print(f"  Second-level neighbors (Level 2): {second_level_neighbors}")
-    print(f"  Total outer neighbors to display: {outer_neighbors}")
-    print()
-    
-    if outer_neighbors:
-        print("Outer Neighbor Details:")
-        for i, vp_idx in enumerate(outer_neighbors):
-            vp = partition.variable_points[vp_idx]
-            level = "Level 1 (direct)" if vp_idx in direct_outer_neighbors else "Level 2 (indirect)"
-            print(f"  Outer Neighbor {i+1} [{level}]: VP {vp_idx}")
-            print(f"    Edge: {vp.edge}")
-            print(f"    Lambda: {vp.lambda_param:.6f}")
+
+        print("VP Classification:")
+        print(f"  Anchor VP: {migration_result['anchor_vp_idx']} (on shared edge)")
+        print(f"  Migrating VP: {migration_result['migrating_vp_idx']} (will move to target edge)")
+        print(f"    Edge: {migration_result['migrating_vp_edge']}")
+        if migration_result['shared_vertex'] is not None:
+            print(f"    Shared vertex with target edge: {migration_result['shared_vertex']}")
+        print(f"  Non-migrating VP: {migration_result['non_migrating_vp_idx']} (stays in place)")
+        print(f"    Edge: {migration_result['non_migrating_vp_edge']}")
         print()
-    
-    # Identify key triangles for Type 2 migration
-    print("="*80)
-    print("KEY TRIANGLES FOR TYPE 2 MIGRATION")
-    print("="*80)
-    print()
-    
-    triangle_result = switcher._identify_type2_migration_triangles(migration_result)
-    
-    if not triangle_result['success']:
-        print(f"❌ ERROR: Triangle identification failed: {triangle_result.get('error', 'Unknown error')}")
-        return
-    
-    print("Triangle Identification Results:")
-    print(f"  T_second_VP: {triangle_result['T_second_VP']}")
-    print(f"    Contains segment: VP{triangle_result['vp_context']['direct_outer_neighbor']} -- VP{triangle_result['vp_context']['second_level_neighbor']}")
-    print(f"    Free edge: {triangle_result['T_second_VP_free_edge']}")
-    print()
-    print(f"  T_adjacent_to_T_second: {triangle_result['T_adjacent_to_T_second']}")
-    print(f"    Shares free edge {triangle_result['T_second_VP_free_edge']} with T_second_VP")
-    print()
-    print(f"  T_shared_edge_with_target: {triangle_result['T_shared_edge_with_target']}")
-    print(f"    Shares target edge {migration_result['target_edge']} with target triangle")
-    print()
+
+        print("Connectivity Analysis:")
+        for vp_idx, info in migration_result['connectivity_analysis'].items():
+            print(f"  VP {vp_idx}:")
+            print(f"    Edge: {info['edge']}")
+            print(f"    Shared vertices with target edge: {info['shared_vertices']} (count={info['num_shared']})")
+        print()
+
+        migrating_vp_idx = migration_result['migrating_vp_idx']
+        triple_vp_set = set(selected_tp.var_point_indices)
+
+        def get_neighbors(vp_idx):
+            """Get all neighbors of a VP via boundary_segments."""
+            neighbors = []
+            for seg in partition.boundary_segments:
+                if vp_idx == seg.vp_idx_1:
+                    neighbors.append(seg.vp_idx_2)
+                elif vp_idx == seg.vp_idx_2:
+                    neighbors.append(seg.vp_idx_1)
+            return neighbors
+
+        all_neighbors = get_neighbors(migrating_vp_idx)
+        direct_outer_neighbors = [vp for vp in all_neighbors if vp not in triple_vp_set]
+
+        second_level_neighbors = []
+        for direct_neighbor in direct_outer_neighbors:
+            neighbor_neighbors = get_neighbors(direct_neighbor)
+            second_level = [vp for vp in neighbor_neighbors if vp != migrating_vp_idx]
+            second_level_neighbors.extend(second_level)
+
+        outer_neighbors = direct_outer_neighbors + second_level_neighbors
+
+        print(f"Migrating VP {migrating_vp_idx} Neighbor Analysis:")
+        print(f"  All immediate neighbors: {all_neighbors}")
+        print(f"  Triple triangle VPs (excluded): {list(triple_vp_set)}")
+        print(f"  Direct outer neighbor (Level 1): {direct_outer_neighbors}")
+        print(f"  Second-level neighbors (Level 2): {second_level_neighbors}")
+        print(f"  Total outer neighbors to display: {outer_neighbors}")
+        print()
+
+        if outer_neighbors:
+            print("Outer Neighbor Details:")
+            for i, vp_idx in enumerate(outer_neighbors):
+                vp = partition.variable_points[vp_idx]
+                level = "Level 1 (direct)" if vp_idx in direct_outer_neighbors else "Level 2 (indirect)"
+                print(f"  Outer Neighbor {i+1} [{level}]: VP {vp_idx}")
+                print(f"    Edge: {vp.edge}")
+                print(f"    Lambda: {vp.lambda_param:.6f}")
+            print()
+
+        print("="*80)
+        print("KEY TRIANGLES FOR TYPE 2 MIGRATION")
+        print("="*80)
+        print()
+
+        triangle_result = switcher._identify_type2_migration_triangles(migration_result)
+
+        if not triangle_result['success']:
+            print(f"❌ ERROR: Triangle identification failed: {triangle_result.get('error', 'Unknown error')}")
+            return
+
+        print("Triangle Identification Results:")
+        print(f"  T_second_VP: {triangle_result['T_second_VP']}")
+        print(f"    Contains segment: VP{triangle_result['vp_context']['direct_outer_neighbor']} -- VP{triangle_result['vp_context']['second_level_neighbor']}")
+        print(f"    Free edge: {triangle_result['T_second_VP_free_edge']}")
+        print()
+        print(f"  T_adjacent_to_T_second: {triangle_result['T_adjacent_to_T_second']}")
+        print(f"    Shares free edge {triangle_result['T_second_VP_free_edge']} with T_second_VP")
+        print()
+        print(f"  T_shared_edge_with_target: {triangle_result['T_shared_edge_with_target']}")
+        print(f"    Shares target edge {migration_result['target_edge']} with target triangle")
+        print()
+
+    else:
+        # ------- New path: MigrationOrchestrator -------
+        print("Using MigrationOrchestrator trigger-based detection")
+        print()
+
+        detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
+        print(f"  Detected {len(detection.type2_triggers)} Type 2 triggers")
+        for i, trig in enumerate(detection.type2_triggers):
+            print(f"    [{i}] {trig}")
+        print()
+
+        migration_result = None
+        triangle_result = {'success': False}
+        outer_neighbors = []
+        migrating_vp_idx = None
+        direct_outer_neighbors = []
     
     # ========================================================================
     # BEFORE STATE
@@ -831,7 +861,8 @@ def run_visualization(args):
     print()
     
     # Get Steiner position for camera focus
-    steiner_pos = selected_tp.compute_steiner_point()
+    vp_positions_for_steiner = [partition.evaluate_variable_point(vi) for vi in selected_tp.var_point_indices]
+    steiner_pos = selected_tp.compute_steiner_point(vp_positions=vp_positions_for_steiner)
     
     # ========================================================================
     # DETERMINE WHICH STATES TO SHOW
@@ -1126,20 +1157,27 @@ def run_visualization(args):
         print("RENDERING AFTER STATE (Applying Type 2 Migration)")
         print("="*80)
         
-        # Deep copy the partition for AFTER state
         import copy
         partition_after = copy.deepcopy(partition)
         mesh_topology_after = MeshTopology(mesh)
-        switcher_after = TopologySwitcher(mesh, partition_after, mesh_topology_after)
         steiner_handler_after = SteinerHandler(mesh, partition_after)
         
-        # Apply Type 2 migration v4
-        print("Applying apply_type2_switch_v4()...")
-        migration_v4_result = switcher_after.apply_type2_switch_v4(
-            steiner_handler_after,
-            args.triple_point_index,
-            distance_preservation='preserve'
-        )
+        if _preargs.use_legacy:
+            switcher_after = TopologySwitcher(mesh, partition_after, mesh_topology_after)
+            print("Applying apply_type2_switch_v4()...")
+            migration_v4_result = switcher_after.apply_type2_switch_v4(
+                steiner_handler_after,
+                args.triple_point_index,
+                distance_preservation='preserve'
+            )
+        else:
+            orchestrator_after = MigrationOrchestrator(
+                partition_after, mesh, mesh_topology_after,
+                MigrationConfig(delta=args.boundary_tol)
+            )
+            orchestrator_after.detect_all_triggers(delta=args.boundary_tol)
+            print("Applying MigrationOrchestrator.execute_migrations()...")
+            migration_v4_result = orchestrator_after.execute_migrations(mode='batch')
         
         if not migration_v4_result['success']:
             print()
@@ -1315,8 +1353,7 @@ def run_visualization(args):
         
         print(f"Triangles with VPs: {len(triangles_with_vps)}")
         
-        # Check indicator_functions for ambiguous vertices
-        vertex_labels = np.argmax(partition_after.indicator_functions, axis=1)
+        vertex_labels = partition_after.vertex_labels
         indicator_max_values = np.max(partition_after.indicator_functions, axis=1)
         ambiguous_vertices = np.where(indicator_max_values < 0.9)[0]  # Vertices with weak cell assignment
         
@@ -1386,7 +1423,7 @@ def run_visualization(args):
                 print(f"Triangle {tri_idx}:")
                 print(f"  VP indices: {ts.var_point_indices}")
                 print(f"  Boundary edges: {ts.boundary_edges}")
-                print(f"  Vertex labels: {ts.vertex_labels}")
+                print(f"  Vertex labels: {[partition_after.vertex_labels[vi] for vi in ts.vertex_indices]}")
                 
                 # Check each VP
                 for vp_idx in ts.var_point_indices:
@@ -1625,6 +1662,8 @@ def main():
                        help='Size of Steiner point spheres (default: 0.000005)')
     parser.add_argument('--opacity', type=float, default=1.0,
                        help='Opacity of non-highlighted regions (0.0-1.0, default: 1.0)')
+    parser.add_argument('--use-legacy', action='store_true',
+                       help='Use legacy TopologySwitcher instead of MigrationOrchestrator')
     
     args = parser.parse_args()
     

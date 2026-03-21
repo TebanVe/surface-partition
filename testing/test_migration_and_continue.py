@@ -57,6 +57,22 @@ import h5py
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'examples'))
 
+# Pre-parse --use-legacy before conditional imports
+_pre_parser = argparse.ArgumentParser(add_help=False)
+_pre_parser.add_argument('--use-legacy', action='store_true',
+                         help='Use legacy migration path (TopologySwitcher, Type1ComponentAnalyzer, etc.)')
+_pre_args, _ = _pre_parser.parse_known_args()
+_use_legacy = _pre_args.use_legacy
+
+if _use_legacy:
+    from src.core.topology_switcher_legacy import TopologySwitcher
+    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
+    from src.core.type2_migration_history import Type2MigrationHistory
+    from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
+else:
+    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+    from src.core.migration_types import TriplePointHistory
+
 from examples.data_loader import load_partition_from_refined_file
 from src.core.tri_mesh import TriMesh
 from src.core.contour_partition import PartitionContour
@@ -65,10 +81,6 @@ from src.core.perimeter_calculator import PerimeterCalculator
 from src.core.steiner_handler import SteinerHandler
 from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.mesh_topology import MeshTopology
-from src.core.topology_switcher import TopologySwitcher
-from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-from src.core.type2_migration_history import Type2MigrationHistory
-from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
 from src.logging_config import get_logger, setup_logging
 
 
@@ -533,8 +545,9 @@ def _check_indicator_vp_consistency(partition, mesh, logger):
         if l0 != l2:
             reconstructed_edges.add(tuple(sorted((v0, v2))))
 
-    # Collect edges from live VPs
-    live_edges = {vp.edge for vp in partition.variable_points}
+    # Collect edges from live (active) VPs only — inactive VPs are not
+    # represented in indicator_functions after migrations.
+    live_edges = {vp.edge for vp in partition.variable_points if getattr(vp, 'active', True)}
 
     only_in_reconstructed = reconstructed_edges - live_edges
     only_in_live = live_edges - reconstructed_edges
@@ -568,19 +581,27 @@ def export_results(partition, opt_info, output_path, logger, migration_history=N
     else:
         logger.warning("  Skipping consistency check: mesh not provided to export_results")
 
-    # Get optimized lambda parameters
-    lambda_opt = partition.get_variable_vector()
-    
+    # Get optimized lambda parameters and edges for ACTIVE VPs only.
+    # indicator_functions reflects active topology, so lambda/edge arrays must match.
+    active_lambdas = []
+    active_edges = []
+    for vp in partition.variable_points:
+        if getattr(vp, 'active', True):
+            active_lambdas.append(vp.lambda_param)
+            active_edges.append(vp.edge)
+
+    lambda_opt = np.array(active_lambdas)
+    vp_edges = np.array(active_edges, dtype=np.int64)
+
     # Get indicator functions (updated after migrations)
     indicator_functions = partition.indicator_functions
-    
+
     # Create HDF5 file
     with h5py.File(output_path, 'w') as f:
-        # Save lambda parameters (same format as input)
+        # Save lambda parameters (active VPs only)
         f.create_dataset('lambda_parameters', data=lambda_opt)
-        
-        # Save VP edge associations (critical for correct lambda-edge matching on reload)
-        vp_edges = np.array([vp.edge for vp in partition.variable_points], dtype=np.int64)
+
+        # Save VP edge associations (active VPs only)
         f.create_dataset('vp_edges', data=vp_edges)
         
         # Save indicator functions (critical for visualization after migrations)
@@ -594,8 +615,8 @@ def export_results(partition, opt_info, output_path, logger, migration_history=N
         f.attrs['optimization_iterations'] = opt_info['n_iterations']
         f.attrs['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
         
-        # Save Type 2 migration history (NEW!)
-        if migration_history is not None and len(migration_history.records) > 0:
+        # Save migration history (legacy path only)
+        if _use_legacy and migration_history is not None and len(migration_history.records) > 0:
             save_type2_migration_history(f, migration_history)
             logger.info(f"✓ Saved migration history: {len(migration_history.records)} triple points tracked")
         
@@ -688,6 +709,8 @@ def main():
     parser.add_argument('--max-iterations', type=int, default=1,
                        help='Maximum refinement iterations (default: 1 for single cycle, '
                             'set higher for iterative refinement until convergence)')
+    parser.add_argument('--use-legacy', action='store_true',
+                       help='Use legacy migration path (TopologySwitcher, Type1ComponentAnalyzer, etc.)')
     
     args = parser.parse_args()
     
@@ -807,26 +830,28 @@ def main():
     logger.info("="*80)
     
     # -------------------------------------------------------------------------
-    # Initialize Type 2 Migration History (BEFORE loop)
+    # Initialize Migration History (BEFORE loop)
     # -------------------------------------------------------------------------
     
-    # Try to load migration history from input file
-    migration_history = Type2MigrationHistory()
-    if starting_iteration > 1:
-        # Starting from later iteration - try to load history
-        try:
-            with h5py.File(args.solution, 'r') as f:
-                migration_history = load_type2_migration_history(f)
-            logger.info(f"Loaded migration history from {args.solution}")
-            logger.info(f"  Tracked triple points: {len(migration_history.records)}")
-            for orig_tri, record in migration_history.records.items():
-                logger.info(f"    Triangle {orig_tri}: {record.triangle_sequence}")
-        except Exception as e:
-            logger.warning(f"Could not load migration history: {e}")
-            logger.warning("Starting with empty history")
-            migration_history = Type2MigrationHistory()
+    if _use_legacy:
+        migration_history = Type2MigrationHistory()
+        if starting_iteration > 1:
+            try:
+                with h5py.File(args.solution, 'r') as f:
+                    migration_history = load_type2_migration_history(f)
+                logger.info(f"Loaded migration history from {args.solution}")
+                logger.info(f"  Tracked triple points: {len(migration_history.records)}")
+                for orig_tri, record in migration_history.records.items():
+                    logger.info(f"    Triangle {orig_tri}: {record.triangle_sequence}")
+            except Exception as e:
+                logger.warning(f"Could not load migration history: {e}")
+                logger.warning("Starting with empty history")
+                migration_history = Type2MigrationHistory()
+        else:
+            logger.info("Starting with empty migration history (iteration 1)")
     else:
-        logger.info("Starting with empty migration history (iteration 1)")
+        migration_history = None
+        logger.info("Migration history managed by MigrationOrchestrator")
     
     # -------------------------------------------------------------------------
     # Stage 3: ITERATIVE REFINEMENT LOOP
@@ -854,25 +879,19 @@ def main():
         iteration_start_time = time.time()
         
         # ---------------------------------------------------------------------
-        # Phase 1: Create/reinitialize optimizer
+        # Phase 1: Create fresh optimizer
         # ---------------------------------------------------------------------
-        if iteration_idx == 0:
-            # First iteration - create optimizer
-            logger.info("Initializing optimizer...")
-            optimizer = PerimeterOptimizer(partition, mesh, target_area)
-        else:
-            # Subsequent iterations - reinitialize after migrations
-            logger.info("Reinitializing optimizer after migrations...")
-            optimizer.reinitialize_after_switches()
+        logger.info("Creating optimizer...")
+        optimizer = PerimeterOptimizer(partition, mesh, target_area)
         
-        # Compute current state diagnostics
         lambda_vec = partition.get_variable_vector()
         total_perimeter = optimizer.perim_calc.compute_total_perimeter(lambda_vec)
         steiner_perimeter = optimizer.steiner_handler.get_total_perimeter_contribution()
         current_perimeter = total_perimeter + steiner_perimeter
         
+        active_vps = sum(1 for vp in partition.variable_points if vp.active)
         logger.info(f"Current state:")
-        logger.info(f"  VPs: {len(partition.variable_points)}")
+        logger.info(f"  VPs: {len(partition.variable_points)} ({active_vps} active)")
         logger.info(f"  Triple points: {len(optimizer.steiner_handler.triple_points)}")
         logger.info(f"  Perimeter: {current_perimeter:.10f}")
         
@@ -882,80 +901,107 @@ def main():
         logger.info("")
         logger.info("Detecting topology switches...")
         
-        switches_needed, switch_info = optimizer.check_topology_switches_needed(
-            tol=args.boundary_tol
-        )
+        if _use_legacy:
+            switches_needed, switch_info = optimizer.check_topology_switches_needed(
+                tol=args.boundary_tol
+            )
+            no_switches = not switches_needed
+        else:
+            mesh_topology = MeshTopology(mesh)
+            orchestrator = MigrationOrchestrator(
+                partition, mesh, mesh_topology,
+                MigrationConfig(delta=args.boundary_tol)
+            )
+            detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
+            no_switches = not detection.type1_triggers and not detection.type2_triggers
         
-        if not switches_needed:
+        if no_switches:
             logger.info("✓ No topology switches detected - CONVERGED")
             converged = True
-            # Export final state
             output_path = f"{base_path}_btol{args.boundary_tol}_iteration{current_iteration}_refined_contours.h5"
             opt_info = {
                 'success': True,
                 'n_iterations': 0,
+                'n_function_evals': 0,
                 'initial_perimeter': current_perimeter,
                 'final_perimeter': current_perimeter,
                 'perimeter_reduction': 0.0,
                 'percent_reduction': 0.0,
-                'final_constraint_violations': optimizer.area_calc.compute_all_cell_areas(lambda_vec) - target_area,
+                'final_constraint_violations': (optimizer.area_calc.compute_all_cell_areas(lambda_vec) - target_area).tolist(),
                 'message': 'Converged - no switches needed'
             }
             export_results(partition, opt_info, output_path, logger, migration_history, mesh=mesh)
             break
         
-        # Collect candidates
-        type1_candidates = []
-        for vp_idx, vp in enumerate(partition.variable_points):
-            if vp.on_boundary(tol=args.boundary_tol):
-                type1_candidates.append(vp_idx)
-        
-        type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(tol=args.boundary_tol)
-        
-        logger.info(f"✓ Switches detected:")
-        logger.info(f"  Type 1 candidates: {len(type1_candidates)}")
-        logger.info(f"  Type 2 candidates: {len(type2_candidates)}")
+        if _use_legacy:
+            type1_candidates = []
+            for vp_idx, vp in enumerate(partition.variable_points):
+                if vp.on_boundary(tol=args.boundary_tol):
+                    type1_candidates.append(vp_idx)
+            type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(tol=args.boundary_tol)
+            logger.info(f"✓ Switches detected:")
+            logger.info(f"  Type 1 candidates: {len(type1_candidates)}")
+            logger.info(f"  Type 2 candidates: {len(type2_candidates)}")
+        else:
+            logger.info(f"✓ Switches detected: {len(detection.type1_triggers)} Type 1, "
+                       f"{len(detection.type2_triggers)} Type 2")
         
         # ---------------------------------------------------------------------
         # Phase 3: Apply migrations (Type 2 first, then Type 1)
         # ---------------------------------------------------------------------
         iteration_migrations = 0
         
-        # Type 2 migrations
-        if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0:
-            migrations = apply_type2_migrations(
-                partition, mesh, type2_candidates, logger,
-                steiner_handler=optimizer.steiner_handler,
-                distance_preservation=args.distance_preservation,
-                migration_history=migration_history,
-                iteration_number=current_iteration
-            )
-            iteration_migrations += migrations
-            total_type2_migrations += migrations
-        
-        # After Type 2 migrations, rebuild boundary_segments from scratch.
-        # Type 2 directly manipulates boundary_segments (delete 2, add 3 per migration),
-        # which can leave stale VP-VP connections. Rebuilding ensures the Type 1
-        # component analysis sees canonical connectivity.
-        if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0 and iteration_migrations > 0:
-            logger.info("")
-            logger.info("Rebuilding boundary_segments after Type 2 migrations...")
-            partition.rebuild_triangle_segments_from_current_vps()
-            logger.info(f"  boundary_segments rebuilt: {len(partition.boundary_segments)} segments")
-        
-        # Type 1 migrations
-        if args.migration_type in ['type1', 'both'] and len(type1_candidates) > 0:
-            migrations = apply_type1_migrations(
-                partition, mesh, type1_candidates, logger,
-                boundary_tol=args.boundary_tol,
-                distance_preservation=args.distance_preservation,
-                steiner_handler=optimizer.steiner_handler
-            )
-            iteration_migrations += migrations
-            total_type1_migrations += migrations
+        if _use_legacy:
+            if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0:
+                migrations = apply_type2_migrations(
+                    partition, mesh, type2_candidates, logger,
+                    steiner_handler=optimizer.steiner_handler,
+                    distance_preservation=args.distance_preservation,
+                    migration_history=migration_history,
+                    iteration_number=current_iteration
+                )
+                iteration_migrations += migrations
+                total_type2_migrations += migrations
+            
+            if args.migration_type in ['type2', 'both'] and len(type2_candidates) > 0 and iteration_migrations > 0:
+                logger.info("")
+                logger.info("Rebuilding boundary_segments after Type 2 migrations...")
+                partition.rebuild_triangle_segments_from_current_vps()
+                logger.info(f"  boundary_segments rebuilt: {len(partition.boundary_segments)} segments")
+            
+            if args.migration_type in ['type1', 'both'] and len(type1_candidates) > 0:
+                migrations = apply_type1_migrations(
+                    partition, mesh, type1_candidates, logger,
+                    boundary_tol=args.boundary_tol,
+                    distance_preservation=args.distance_preservation,
+                    steiner_handler=optimizer.steiner_handler
+                )
+                iteration_migrations += migrations
+                total_type1_migrations += migrations
+        else:
+            mig_result = orchestrator.execute_migrations(mode='batch')
+            
+            if mig_result.failed:
+                logger.error("")
+                logger.error("="*80)
+                logger.error("MIGRATION FAILURE")
+                logger.error("="*80)
+                logger.error(f"Error: {mig_result.error_message}")
+                logger.error("="*80)
+                return 1
+            
+            iteration_migrations = (mig_result.type1_applied +
+                                    mig_result.type2_forward_applied +
+                                    mig_result.type2_rollbacks_applied)
+            total_type1_migrations += mig_result.type1_applied
+            total_type2_migrations += mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
+            
+            logger.info(f"  Type 1 applied: {mig_result.type1_applied}")
+            logger.info(f"  Type 2 forward: {mig_result.type2_forward_applied}")
+            logger.info(f"  Type 2 rollbacks: {mig_result.type2_rollbacks_applied}")
         
         if iteration_migrations == 0:
-            logger.warning("⚠️  No migrations were applied despite switches detected")
+            logger.warning("No migrations were applied despite switches detected")
             logger.warning("This may indicate tolerance issues or all migrations failed")
             converged = True
             break
@@ -968,8 +1014,7 @@ def main():
         logger.info("")
         logger.info("Starting optimization after migrations...")
         
-        # Reinitialize optimizer for new partition state
-        optimizer.reinitialize_after_switches()
+        optimizer = PerimeterOptimizer(partition, mesh, target_area)
         
         try:
             result, opt_info = run_optimization_with_optimizer(
@@ -981,10 +1026,9 @@ def main():
             logger.error("ABORTING - Please debug the optimization failure")
             return 1
         
-        # Check optimization convergence status
         if not opt_info['success']:
             logger.warning("="*80)
-            logger.warning("⚠️  OPTIMIZATION DID NOT FULLY CONVERGE")
+            logger.warning("OPTIMIZATION DID NOT FULLY CONVERGE")
             logger.warning("="*80)
             logger.warning(f"Reason: {opt_info['message']}")
             logger.warning(f"Iterations: {opt_info['n_iterations']}")
