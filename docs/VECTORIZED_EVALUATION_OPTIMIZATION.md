@@ -153,6 +153,141 @@ The object-based `SteinerHandler` remains for **mutation mode only** (triple-poi
 Type 2 migration logic, topology switches). It is not called during the SLSQP optimization
 loop.
 
+## Implementation Context: Key Source Files and Data Structures
+
+This section provides the codebase navigation context needed to implement the steps below.
+Read the listed source files (in the order given) before starting implementation.
+
+### Priority reading list
+
+| File | What to look at | Why |
+|---|---|---|
+| `src/core/contour_partition.py` | `VariablePoint` dataclass (line ~48), `TriangleSegment` dataclass (line ~93), `BoundarySegment` dataclass (line ~148), `PartitionContour.__init__` (line ~202) | Core data structures that `compile_arrays()` reads from |
+| `src/core/perimeter_optimizer.py` | `PerimeterOptimizer.__init__` (line ~61), `_to_full` / `_to_active` / `_to_active_2d` (line ~111), `objective` through `constraint_area_jacobian` (line ~131) | The methods being replaced — study their exact signatures and conventions |
+| `src/core/steiner_handler.py` | `TriplePoint` class (line ~29) especially `cell_to_varpoint_pair` and `cell_to_mesh_vertex` dicts, `SteinerHandler._detect_triple_points` (line ~397) | The triple-point structures that `compile_arrays()` step 7 reads from |
+| `src/core/area_calculator.py` | `_categorize_triangles` (line ~88), `_partial_area_two_inside` (line ~260), `_partial_area_one_inside` (line ~355) | The triangle classification and area computation logic being replicated |
+| `src/core/perimeter_calculator.py` | `compute_segment_length`, `compute_segment_gradient` | The perimeter computation being replicated |
+| `src/core/tri_mesh.py` | `TriMesh.__init__` (line ~18) | `vertices` is `(N, 2 or 3)` float64, `faces` is `(T, 3)` int, `triangle_areas` is a cached `(T,)` property |
+
+### Key data structures on PartitionContour
+
+These are the fields that `compile_arrays()` must traverse:
+
+```python
+class PartitionContour:
+    mesh: TriMesh
+    variable_points: List[VariablePoint]      # ALL VPs (active + inactive)
+    _triangle_segments: Dict[int, TriangleSegment]  # tri_idx -> TriangleSegment
+    edge_to_varpoint: Dict[Tuple[int, int], int]    # normalized_edge -> vp_idx
+    boundary_segments: List[BoundarySegment]         # explicit segment list
+    _vertex_labels: np.ndarray                       # (N,) int — cell label per mesh vertex
+    _active_vp_indices: List[int]                    # absolute VP indices of active VPs
+    _vp_idx_to_opt_idx: Dict[int, int]               # absolute -> active position
+    n_cells: int
+
+    @property
+    def vertex_labels(self) -> np.ndarray            # read-only view of _vertex_labels
+```
+
+`VariablePoint` fields used by `compile_arrays()`:
+
+```python
+@dataclass
+class VariablePoint:
+    edge: Tuple[int, int]          # (v_small, v_large), normalized
+    lambda_param: float            # λ ∈ [0, 1]
+    global_idx: int                # absolute index in variable_points list
+    belongs_to_cells: Set[int]     # cells this VP separates
+    active: bool = True            # inactive VPs are skipped
+```
+
+`BoundarySegment` fields used by `compile_arrays()`:
+
+```python
+@dataclass
+class BoundarySegment:
+    vp_idx_1: int                  # first VP (absolute index)
+    vp_idx_2: int                  # second VP (absolute index)
+    cell_pair: Tuple[int, int]     # (cell_a, cell_b)
+```
+
+`TriplePoint` fields used by `compile_arrays()` (from `SteinerHandler.triple_points`):
+
+```python
+class TriplePoint:
+    var_point_indices: List[int]                      # 3 VP absolute indices
+    cell_indices: List[int]                           # 3 cell indices
+    cell_to_varpoint_pair: Dict[int, Tuple[int, int]] # cell -> (vp_a, vp_b) absolute
+    cell_to_mesh_vertex: Dict[int, int]               # cell -> mesh vertex index
+    triangle_idx: int
+```
+
+### The active/inactive VP mapping
+
+After migrations, some VPs are marked `active = False` but remain in `variable_points`
+(preserving index stability for snapshot rollback). The optimizer works with active-only
+vectors:
+
+- `PartitionContour._active_vp_indices`: list of absolute VP indices that are active
+- `PerimeterOptimizer._to_full(active_vec)`: expands active-only → full (inactive VPs
+  keep current λ)
+- `PerimeterOptimizer._to_active(full_vec)`: compresses full → active-only
+
+The vectorized code eliminates this mapping at the optimizer level. `PartitionArrays`
+stores only active VPs and works entirely in active-index space. The
+`active_to_absolute` array in `PartitionArrays` serves the same purpose as
+`_active_vp_indices` for syncing back after optimization.
+
+### The compile_arrays() / SteinerHandler dependency
+
+`compile_arrays()` is specified as a method on `PartitionContour` (Step 2), but it needs
+to read `SteinerHandler.triple_points` (Step 2, item 7). The `SteinerHandler` is created
+by `PerimeterOptimizer.__init__`, not by `PartitionContour`.
+
+Resolution: `compile_arrays()` should accept the `SteinerHandler` as an argument:
+
+```python
+def compile_arrays(self, steiner_handler: SteinerHandler) -> PartitionArrays:
+```
+
+This is called from `PerimeterOptimizer.compile()`, which has access to both:
+
+```python
+def compile(self):
+    self._arrays = self.partition.compile_arrays(self.steiner_handler)
+```
+
+### Area Jacobian: current implementation uses finite differences
+
+The comment in `perimeter_optimizer.py` line 222 says "Regular area Jacobian (from boundary
+triangles, analytical)" — this is a **misleading comment in the source code**. The actual
+gradient computation inside `AreaCalculator._partial_area_two_inside()` (line ~328) and
+`_partial_area_one_inside()` uses per-variable-point finite differences (eps=1e-7), not
+analytical chain-rule derivatives. The code comment in `_partial_area_two_inside` confirms:
+"Compute gradient (simplified - more accurate implementation would use chain rule) / For
+now, use finite differences."
+
+The vectorized area Jacobian in Step 4 correctly uses FD to match this behavior. The
+"(Future) Analytical area Jacobian" item in the implementation order refers to eventually
+replacing both the current and vectorized FD approaches with true analytical derivatives.
+
+### Test infrastructure
+
+Existing tests live in two locations:
+- `testing/` — integration tests (`test_migration_and_continue.py`,
+  `test_migrations_debug.py`, `test_self_healing_selection.py`)
+- `examples/` — example scripts that can serve as test harnesses
+  (`test_optimizer.py`, `test_mesh_matrices.py`)
+
+There is no formal test framework (no pytest fixtures or unittest base classes). Tests are
+standalone scripts that load partition state from `.h5` files and run checks.
+
+For validation tests of the vectorized code, the recommended approach is:
+1. Load an existing partition state (from an `.h5` checkpoint or by running initial setup)
+2. Create both the original calculators and the vectorized arrays
+3. Compare outputs at the same λ vector to floating-point tolerance
+4. Place new tests in `testing/test_vectorized_evaluation.py`
+
 ## What to Implement
 
 ### Step 1: PartitionArrays dataclass
@@ -224,6 +359,12 @@ Add a method to `PartitionContour` that walks the object structures once and fil
 arrays. This is called once before optimization starts.
 
 Location: `src/core/contour_partition.py`, add method to class `PartitionContour`.
+
+Signature (takes SteinerHandler for triple-point data — see "Implementation Context" above):
+
+```python
+def compile_arrays(self, steiner_handler: SteinerHandler) -> PartitionArrays:
+```
 
 The method must:
 
@@ -685,7 +826,7 @@ computation reads from the flat `PartitionArrays`.
 ```python
 def compile(self):
     """Compile flat arrays for fast evaluation. Call after migrations, before optimize()."""
-    self._arrays = self.partition.compile_arrays()
+    self._arrays = self.partition.compile_arrays(self.steiner_handler)
 ```
 
 #### Replace objective():
