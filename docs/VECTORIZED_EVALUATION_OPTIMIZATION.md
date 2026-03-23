@@ -58,7 +58,7 @@ evaluation, synchronize at the boundary between modes.
 │  Mode A: Mutation (objects + dicts) — NO CHANGES            │
 │  Used by: MigrationExecutor, OneRingRebuilder,              │
 │           MigrationDetector, MigrationOrchestrator,         │
-│           TopologySwitcher, SteinerHandler (mutation)        │
+│           TopologySwitcher, SteinerHandler (mutation only)   │
 │  Runtime: seconds                                           │
 └──────────────────────┬──────────────────────────────────────┘
                        │ partition.compile_arrays()
@@ -66,7 +66,8 @@ evaluation, synchronize at the boundary between modes.
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Mode B: Evaluation (flat NumPy arrays) — NEW               │
-│  Used by: vectorized_perimeter, vectorized_area             │
+│  Used by: vectorized_perimeter, vectorized_area,            │
+│           vectorized_steiner                                 │
 │  Runtime: milliseconds per evaluation                       │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -102,12 +103,12 @@ if len(set(labels)) == 3:
     continue  # Skip - handled by SteinerHandler
 ```
 
-The area of triple-point mesh triangles is computed **entirely** by `SteinerHandler`, which
-decomposes each triple-point triangle into:
+The area of triple-point mesh triangles is computed **entirely** by the Steiner component,
+which decomposes each triple-point triangle into:
 - **Corner area** per cell: triangle (mesh_vertex, VP_1, VP_2) for that cell's vertex
 - **Void area** per cell: triangle (VP_1, VP_2, steiner_point) for that cell's VP pair
 
-These are then added in `PerimeterOptimizer.constraint_area_equality()`:
+The current (pre-vectorization) code adds these in `PerimeterOptimizer`:
 
 ```python
 areas = self.area_calc.compute_all_cell_areas(full_vec)
@@ -116,13 +117,16 @@ for cell_idx, area_contrib in steiner_areas.items():
     areas[cell_idx] += area_contrib
 ```
 
+The vectorized version preserves this same separation: `vectorized_area.compute_cell_areas()`
+handles regular boundary triangles, `vectorized_steiner.compute_steiner_areas()` handles
+triple-point triangles, and the optimizer adds them together.
+
 The vectorized `compile_arrays()` must **exclude triple-point triangles** from the boundary
 triangle arrays, replicating the same `len(set(labels)) == 3` guard.
 
 ### 3. Steiner perimeter uses the same per-cell-sum convention
 
-`SteinerHandler.get_total_perimeter_contribution()` calls `sum(contrib.values())` where
-`contrib` maps each cell to its NET Steiner correction:
+Each cell at a triple point receives a NET Steiner correction:
 
 ```python
 contributions[cell_idx] = steiner_edge1 + steiner_edge2 - original_edge
@@ -130,6 +134,8 @@ contributions[cell_idx] = steiner_edge1 + steiner_edge2 - original_edge
 
 This sums over all 3 cells per triple point. Each Steiner edge appears in 2 cells'
 contributions. This is consistent with the double-counted regular perimeter convention.
+The vectorized version (`vectorized_steiner.compute_steiner_perimeter()`) replicates this
+per-cell summation as a batch array operation.
 
 ### 4. Lambda convention
 
@@ -137,12 +143,15 @@ contributions. This is consistent with the double-counted regular perimeter conv
 with `edge[0] < edge[1]` (normalized). The vectorized position computation must use the
 same formula.
 
-### 5. SteinerHandler reads from PartitionContour VP objects
+### 5. Steiner evaluation uses flat arrays (not VP objects)
 
-During optimization, `SteinerHandler` reads VP positions via
-`partition.evaluate_variable_point(vi)`, which reads `variable_points[vi].lambda_param`.
-The optimizer must call `partition.set_variable_vector()` before every SteinerHandler call
-to keep the VP objects in sync with the current optimization vector.
+The vectorized Steiner module reads VP positions directly from the flat `vp_lambda` array
+in `PartitionArrays`, the same way `vectorized_perimeter` and `vectorized_area` do. There
+is no need to call `partition.set_variable_vector()` during the evaluation loop.
+
+The object-based `SteinerHandler` remains for **mutation mode only** (triple-point detection,
+Type 2 migration logic, topology switches). It is not called during the SLSQP optimization
+loop.
 
 ## What to Implement
 
@@ -167,7 +176,7 @@ class PartitionArrays:
     seg_cell_b: np.ndarray       # int32 — second cell of the pair
 
     # Boundary triangle arrays (shape: n_boundary_triangles)
-    # EXCLUDES triple-point triangles (handled by SteinerHandler)
+    # EXCLUDES triple-point triangles (handled by vectorized_steiner)
     # One row per (triangle, cell) pair where cell has 1 or 2 vertices inside
     btri_idx: np.ndarray         # int32 — original triangle index in mesh
     btri_cell: np.ndarray        # int32 — cell this boundary triangle contributes to
@@ -190,6 +199,23 @@ class PartitionArrays:
 
     # Mesh vertex coordinates (reference, not copied)
     vertices: np.ndarray         # float64, shape (N, 2 or 3) — mesh vertices
+
+    # --- Triple-point arrays (from SteinerHandler triple-point detection) ---
+
+    # Per triple point (shape: n_triple_points)
+    tp_vp_indices: np.ndarray      # int32, shape (n_tp, 3) — active VP indices
+    n_triple_points: int
+
+    # Per (triple_point, cell) contribution rows (shape: 3 * n_triple_points)
+    # Each triple point generates exactly 3 rows (one per adjacent cell).
+    tp_contrib_tp_idx: np.ndarray    # int32 — which triple point this row belongs to
+    tp_contrib_cell: np.ndarray      # int32 — cell index for this contribution
+    tp_contrib_vp1: np.ndarray       # int32 — first VP of the cell's pair (active index)
+    tp_contrib_vp2: np.ndarray       # int32 — second VP of the cell's pair (active index)
+    tp_contrib_mesh_vertex: np.ndarray  # int32 — mesh vertex for corner triangle
+
+    # Set of VP indices involved in any triple point (for sparse FD loops)
+    tp_affected_vps: np.ndarray    # int32 — unique active VPs in tp_vp_indices
 ```
 
 ### Step 2: compile_arrays() method on PartitionContour
@@ -218,7 +244,14 @@ The method must:
    triangles (where all 3 vertices belong to the same cell).
 6. Compute `area_affected_vps` as the unique union of all VP indices in `btri_vp1`
    and `btri_vp2`.
-7. Return a `PartitionArrays` instance.
+7. Fill triple-point arrays from `SteinerHandler.triple_points`. For each `TriplePoint`:
+   - Store its 3 VP indices (remapped to active indices) in `tp_vp_indices[i]`.
+   - For each of its 3 cells (from `cell_to_varpoint_pair`): emit one contribution row
+     with the cell index, the cell's two VP active indices, and the mesh vertex index
+     (from `cell_to_mesh_vertex`).
+   - Set `tp_contrib_tp_idx[k] = i` for the 3 rows belonging to triple point `i`.
+8. Compute `tp_affected_vps` as the unique set of active VP indices in `tp_vp_indices`.
+9. Return a `PartitionArrays` instance.
 
 **Critical detail for boundary triangle arrays**: For each boundary triangle row, the two
 VP indices (`btri_vp1`, `btri_vp2`) must correspond to the two cut edges. The cut edges
@@ -302,7 +335,7 @@ def compute_perimeter_gradient(pa: PartitionArrays) -> np.ndarray:
 Create `src/core/vectorized_area.py` with functions that operate on `PartitionArrays`.
 
 **Reminder**: Triple-point triangles are NOT in the boundary triangle arrays. Their area
-contribution is added separately by the SteinerHandler (unchanged).
+contribution is computed separately by `vectorized_steiner` and added by the caller.
 
 #### Cell areas (constraint function)
 
@@ -311,7 +344,7 @@ The total area for cell `c` is:
 ```
 Area_c = cell_interior_area[c]
        + sum of partial areas for boundary triangles of cell c
-       + Steiner area contributions (added separately, not here)
+       + Steiner area contributions (added separately by vectorized_steiner)
 ```
 
 For boundary triangles with 2 vertices inside (quadrilateral portion):
@@ -332,7 +365,7 @@ def compute_cell_areas(pa: PartitionArrays) -> np.ndarray:
     """Compute all cell areas (excluding Steiner contributions).
 
     Matches AreaCalculator.compute_all_cell_areas(). Steiner contributions
-    must be added separately by the caller.
+    from vectorized_steiner must be added separately by the caller.
     """
     areas = pa.cell_interior_area.copy()
     pos = _compute_vp_positions(pa)
@@ -384,7 +417,7 @@ def compute_area_jacobian(pa: PartitionArrays, eps: float = 1e-7) -> np.ndarray:
     """Compute area constraint Jacobian via vectorized finite differences.
 
     Matches AreaCalculator.compute_area_jacobian(). Steiner Jacobian
-    contributions must be added separately by the caller.
+    contributions from vectorized_steiner must be added separately by the caller.
     """
     n_constraints = pa.n_cells - 1
     base_areas = compute_cell_areas(pa)
@@ -401,18 +434,15 @@ def compute_area_jacobian(pa: PartitionArrays, eps: float = 1e-7) -> np.ndarray:
     return jacobian
 ```
 
-### Step 5: Steiner handler integration
+### Step 5: Vectorized Steiner computation (analytical Fermat-Torricelli)
 
-The `SteinerHandler` computes perimeter, gradient, area, and area Jacobian contributions
-from triple-point triangles. These are added to the vectorized regular contributions in
-`PerimeterOptimizer`.
+The current `SteinerHandler` uses BFGS to solve the Fermat-Torricelli problem for each
+triple point. This step replaces BFGS with a closed-form analytical formula and expresses
+all Steiner contributions as vectorized array operations.
 
-#### Current cost (8 triple points — negligible)
+Create `src/core/vectorized_steiner.py` with functions that operate on `PartitionArrays`.
 
-For the current 5-cell test with 8 triple points, the Steiner handler runs in milliseconds.
-No changes needed for this case.
-
-#### Future cost (thousands of cells — will dominate)
+#### Why replace BFGS now (not later)
 
 For n cells on a closed surface, the number of triple points scales as ~2n. Each SLSQP
 function evaluation currently requires per triple point:
@@ -420,38 +450,235 @@ function evaluation currently requires per triple point:
 | Operation | BFGS solves |
 |---|---|
 | `get_total_perimeter_contribution` | 1 |
-| `compute_total_gradient_finite_difference` | 3 (one per VP perturbation) |
+| `compute_total_gradient_finite_difference` | ~5 (base + 3 perturbations + restore) |
 | `get_total_area_contribution` | 1 |
-| `compute_area_gradients_finite_difference` | 3 (one per VP perturbation) |
-| **Total per triple point per evaluation** | **~8** |
+| `compute_area_gradients_finite_difference` | ~5 (base + 3 perturbations + restore) |
+| **Total per triple point per evaluation** | **~12** |
 
-For 1,000 cells (~2,000 TPs): ~16,000 BFGS solves per evaluation.
-For 100,000 cells (~200,000 TPs): ~1,600,000 BFGS solves per evaluation.
+Additionally, the current code redundantly resets `steiner_point = None` in each of the 4
+aggregation methods (`get_total_perimeter_contribution`, `get_total_area_contribution`,
+`compute_total_gradient_finite_difference`, `compute_area_gradients_finite_difference`),
+forcing a fresh BFGS solve every time. There is no cross-call caching.
 
-Additionally, the current code redundantly resets `steiner_point = None` and recomputes
-the Steiner point in each of the 4 method calls per evaluation. This means each triple
-point's BFGS is solved ~4× per evaluation instead of 1×.
+For 1,000 cells (~2,000 TPs): ~24,000 BFGS solves per evaluation.
+For 100,000 cells (~200,000 TPs): ~2,400,000 BFGS solves per evaluation.
 
-#### Recommended improvements (future, not required for initial implementation)
+With the analytical formula, each "solve" becomes a few arithmetic operations. **Caching
+becomes unnecessary** — the formula is so cheap that recomputing is faster than maintaining
+a cache with invalidation logic.
 
-1. **Cache Steiner points per evaluation**: Compute each Steiner point once per λ-vector
-   and reuse across perimeter, gradient, area, and area Jacobian calls. This gives a 4×
-   reduction in BFGS solves immediately.
+#### The Fermat-Torricelli closed-form
 
-2. **Analytical Steiner point (Fermat-Torricelli)**: The BFGS solves
-   `min_S ||S - p1|| + ||S - p2|| + ||S - p3||`, which is the Fermat-Torricelli problem.
-   When all angles of triangle (p1, p2, p3) are < 120°, the solution has a known
-   closed-form. When any angle ≥ 120°, the solution is the obtuse vertex (which is the
-   Type 2 trigger). Replacing BFGS with the analytical formula would eliminate iterative
-   solves entirely and enable batch computation over all triple points.
+The BFGS objective `min_S ||S - p1|| + ||S - p2|| + ||S - p3||` is the classical
+Fermat-Torricelli problem. The solution is known analytically:
 
-3. **Batch vectorized Steiner**: With the analytical formula, all triple points' Steiner
-   computations (positions, perimeter contributions, area contributions, gradients) can be
-   expressed as array operations over flat arrays, just like the regular perimeter/area.
+**Case 1 — all angles of triangle (p1, p2, p3) < 120°:**
+
+The Fermat point (first isogonic center, X₁₃) has barycentric coordinates derived from
+trilinear coordinates `csc(A + π/3) : csc(B + π/3) : csc(C + π/3)`:
+
+```
+w_i = a_i / sin(A_i + π/3)
+S = (w₁ · p₁ + w₂ · p₂ + w₃ · p₃) / (w₁ + w₂ + w₃)
+```
+
+where `a_i` is the side length opposite vertex `p_i` and `A_i` is the angle at vertex
+`p_i`. This formula works directly in any dimension for coplanar points — it is a weighted
+average of positions, requiring only side lengths and angles (computed from dot products).
+No projection to/from 2D is needed.
+
+**Case 2 — any angle ≥ 120°:**
+
+The Fermat point degenerates to the vertex with the obtuse angle. This is exactly the
+Type 2 trigger condition detected by `MigrationDetector.detect_type2_triggers()`. In the
+formula, this arises naturally: as `A_i → 120°`, `sin(A_i + 60°) → 0`, so `w_i → ∞` and
+`S → p_i`. For numerical safety, the implementation explicitly checks for the ≥ 120° case
+and returns the obtuse vertex rather than relying on the diverging weights.
+
+#### Steiner point computation (batch vectorized)
+
+```python
+def compute_steiner_points(pa: PartitionArrays) -> np.ndarray:
+    """Compute all Steiner points using the analytical Fermat-Torricelli formula.
+
+    Returns shape (n_triple_points, dim). For triple points where any void
+    angle >= 120°, returns the obtuse vertex position (degenerate Steiner).
+    """
+    if pa.n_triple_points == 0:
+        return np.empty((0, pa.vertices.shape[1]))
+
+    pos = _compute_vp_positions(pa)
+
+    # Gather the 3 VP positions for each triple point: shape (n_tp, 3, dim)
+    p = pos[pa.tp_vp_indices]  # (n_tp, 3, dim)
+    p1, p2, p3 = p[:, 0], p[:, 1], p[:, 2]
+
+    # Side lengths opposite each vertex
+    a = np.linalg.norm(p2 - p3, axis=1)  # opposite p1
+    b = np.linalg.norm(p1 - p3, axis=1)  # opposite p2
+    c = np.linalg.norm(p1 - p2, axis=1)  # opposite p3
+
+    # Angles at each vertex (law of cosines)
+    cos_A = np.clip((b**2 + c**2 - a**2) / (2*b*c + 1e-30), -1.0, 1.0)
+    cos_B = np.clip((a**2 + c**2 - b**2) / (2*a*c + 1e-30), -1.0, 1.0)
+    cos_C = np.clip((a**2 + b**2 - c**2) / (2*a*b + 1e-30), -1.0, 1.0)
+
+    A_ang = np.arccos(cos_A)
+    B_ang = np.arccos(cos_B)
+    C_ang = np.arccos(cos_C)
+
+    # Barycentric weights: w_i = a_i / sin(A_i + π/3)
+    w1 = a / np.maximum(np.sin(A_ang + np.pi/3), 1e-15)
+    w2 = b / np.maximum(np.sin(B_ang + np.pi/3), 1e-15)
+    w3 = c / np.maximum(np.sin(C_ang + np.pi/3), 1e-15)
+
+    w_sum = w1 + w2 + w3
+    steiner = (w1[:, None]*p1 + w2[:, None]*p2 + w3[:, None]*p3) / w_sum[:, None]
+
+    # Handle degenerate case: any angle >= 120° -> Steiner = obtuse vertex
+    threshold = 2*np.pi/3  # 120° in radians
+    all_angles = np.stack([A_ang, B_ang, C_ang], axis=1)
+    degen_mask = all_angles.max(axis=1) >= threshold
+    if np.any(degen_mask):
+        max_idx = np.argmax(all_angles[degen_mask], axis=1)
+        steiner[degen_mask] = p[degen_mask, max_idx]
+
+    return steiner
+```
+
+#### Steiner perimeter contribution (batch vectorized)
+
+```python
+def compute_steiner_perimeter(pa: PartitionArrays,
+                              steiner_pts: np.ndarray) -> float:
+    """Compute total Steiner perimeter contribution.
+
+    Per cell per triple point: d(vp_a, S) + d(vp_b, S) - d(vp_a, vp_b).
+    Summed over all 3 cells per triple point (consistent with double-counting
+    convention — each Steiner edge appears in 2 cells' contributions).
+    """
+    if pa.n_triple_points == 0:
+        return 0.0
+
+    pos = _compute_vp_positions(pa)
+    vp1_pos = pos[pa.tp_contrib_vp1]
+    vp2_pos = pos[pa.tp_contrib_vp2]
+    s_pos = steiner_pts[pa.tp_contrib_tp_idx]
+
+    d_s_vp1 = np.linalg.norm(vp1_pos - s_pos, axis=1)
+    d_s_vp2 = np.linalg.norm(vp2_pos - s_pos, axis=1)
+    d_vp1_vp2 = np.linalg.norm(vp1_pos - vp2_pos, axis=1)
+
+    return float(np.sum(d_s_vp1 + d_s_vp2 - d_vp1_vp2))
+```
+
+#### Steiner area contribution (batch vectorized)
+
+```python
+def compute_steiner_areas(pa: PartitionArrays,
+                          steiner_pts: np.ndarray) -> np.ndarray:
+    """Compute Steiner area contributions per cell.
+
+    Each cell at a triple point gets:
+      void_area   = area(vp_a, vp_b, steiner_point)
+      corner_area = area(mesh_vertex, vp_a, vp_b)
+    Returns shape (n_cells,) with contributions scatter-added.
+    """
+    areas = np.zeros(pa.n_cells)
+    if pa.n_triple_points == 0:
+        return areas
+
+    pos = _compute_vp_positions(pa)
+    vp1_pos = pos[pa.tp_contrib_vp1]
+    vp2_pos = pos[pa.tp_contrib_vp2]
+    s_pos = steiner_pts[pa.tp_contrib_tp_idx]
+    mv_pos = pa.vertices[pa.tp_contrib_mesh_vertex]
+
+    void_areas = _triangle_areas_batch(vp1_pos, vp2_pos, s_pos)
+    corner_areas = _triangle_areas_batch(mv_pos, vp1_pos, vp2_pos)
+
+    np.add.at(areas, pa.tp_contrib_cell, void_areas + corner_areas)
+    return areas
+```
+
+Note: `_compute_vp_positions` and `_triangle_areas_batch` are shared helpers also used by
+`vectorized_perimeter.py` and `vectorized_area.py`. They should be defined in a shared
+utility module or imported from `vectorized_perimeter.py`.
+
+#### Steiner gradients via finite differences (using the analytical formula)
+
+The Steiner perimeter and area gradients w.r.t. λ are computed via finite differences,
+but now each perturbation evaluates the analytical formula (~microseconds) instead of
+running BFGS (~milliseconds). This keeps the implementation simple while being fast:
+
+```python
+def compute_steiner_perimeter_gradient(pa: PartitionArrays,
+                                       eps: float = 1e-6) -> np.ndarray:
+    """∂(steiner_perimeter)/∂λ via finite differences on the analytical formula."""
+    gradient = np.zeros(pa.n_active_vp)
+    if pa.n_triple_points == 0:
+        return gradient
+
+    base_steiner = compute_steiner_points(pa)
+    base_perim = compute_steiner_perimeter(pa, base_steiner)
+    original_lambda = pa.vp_lambda.copy()
+
+    for vp_idx in pa.tp_affected_vps:
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
+        pert_steiner = compute_steiner_points(pa)
+        pert_perim = compute_steiner_perimeter(pa, pert_steiner)
+        gradient[vp_idx] = (pert_perim - base_perim) / eps
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx]
+
+    return gradient
+
+
+def compute_steiner_area_jacobian(pa: PartitionArrays,
+                                  eps: float = 1e-7) -> np.ndarray:
+    """∂(steiner_areas)/∂λ via finite differences on the analytical formula."""
+    n_constraints = pa.n_cells - 1
+    jacobian = np.zeros((n_constraints, pa.n_active_vp))
+    if pa.n_triple_points == 0:
+        return jacobian
+
+    base_steiner = compute_steiner_points(pa)
+    base_areas = compute_steiner_areas(pa, base_steiner)
+    original_lambda = pa.vp_lambda.copy()
+
+    for vp_idx in pa.tp_affected_vps:
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
+        pert_steiner = compute_steiner_points(pa)
+        pert_areas = compute_steiner_areas(pa, pert_steiner)
+        jacobian[:, vp_idx] = (pert_areas[:n_constraints] - base_areas[:n_constraints]) / eps
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx]
+
+    return jacobian
+```
+
+The FD loop runs over `tp_affected_vps` — the unique set of VPs that participate in any
+triple point. For 8 triple points with up to 24 VPs, this is negligible. For large
+partitions, the inner evaluation (analytical formula + vectorized contributions) scales as
+O(n_triple_points) per perturbation, still far cheaper than O(n_tp × BFGS_iterations).
+
+#### Relationship to SteinerHandler (mutation mode)
+
+The object-based `SteinerHandler` is **not removed**. It remains the implementation used
+during mutation mode (Mode A) for:
+
+- Triple-point detection (`_detect_triple_points`)
+- Type 2 migration logic in `MigrationDetector`
+- Topology switch operations in `TopologySwitcher`
+- Migration snapshots and rollbacks
+
+The `compile_arrays()` method reads from `SteinerHandler.triple_points` to populate the
+flat triple-point arrays. During the SLSQP optimization loop (Mode B), only the vectorized
+module is called.
 
 ### Step 6: Wire into PerimeterOptimizer
 
-Modify `src/core/perimeter_optimizer.py` to use the vectorized path.
+Modify `src/core/perimeter_optimizer.py` to use the fully vectorized path (regular +
+Steiner). No `partition.set_variable_vector()` calls during the evaluation loop — all
+computation reads from the flat `PartitionArrays`.
 
 #### Compile before optimization:
 
@@ -469,33 +696,53 @@ def objective(self, lambda_vec: np.ndarray) -> float:
 
     regular_perimeter = vectorized_perimeter.compute_total_perimeter(self._arrays)
 
-    # SteinerHandler reads from VP objects — sync before calling
-    self.partition.set_variable_vector(self._to_full(lambda_vec))
-    steiner_perimeter = self.steiner_handler.get_total_perimeter_contribution()
+    steiner_pts = vectorized_steiner.compute_steiner_points(self._arrays)
+    steiner_perimeter = vectorized_steiner.compute_steiner_perimeter(
+        self._arrays, steiner_pts)
 
     total = regular_perimeter + steiner_perimeter
     self._last_objective = total
     return total
 ```
 
-**Note**: `partition.set_variable_vector()` is needed because SteinerHandler calls
-`partition.evaluate_variable_point()` which reads from the VP objects. This adds a
-Python loop over all VPs per evaluation — acceptable for now but should be eliminated
-when the Steiner handler is vectorized.
-
 #### Replace objective_gradient():
 
-Same pattern — vectorized regular gradient + object-based Steiner gradient.
-Both use the full (absolute-indexed) gradient vector; the active-only compression
-happens at the return.
+```python
+def objective_gradient(self, lambda_vec: np.ndarray) -> np.ndarray:
+    self._arrays.vp_lambda[:] = lambda_vec
+
+    regular_gradient = vectorized_perimeter.compute_perimeter_gradient(self._arrays)
+    steiner_gradient = vectorized_steiner.compute_steiner_perimeter_gradient(self._arrays)
+
+    return regular_gradient + steiner_gradient
+```
 
 #### Replace constraint_area_equality():
 
-Vectorized area + object-based Steiner area correction.
+```python
+def constraint_area_equality(self, lambda_vec: np.ndarray) -> np.ndarray:
+    self._arrays.vp_lambda[:] = lambda_vec
+
+    areas = vectorized_area.compute_cell_areas(self._arrays)
+
+    steiner_pts = vectorized_steiner.compute_steiner_points(self._arrays)
+    steiner_areas = vectorized_steiner.compute_steiner_areas(self._arrays, steiner_pts)
+    areas += steiner_areas
+
+    return areas[:self._arrays.n_cells - 1] - self.target_area
+```
 
 #### Replace constraint_area_jacobian():
 
-Vectorized area Jacobian + object-based Steiner area Jacobian.
+```python
+def constraint_area_jacobian(self, lambda_vec: np.ndarray) -> np.ndarray:
+    self._arrays.vp_lambda[:] = lambda_vec
+
+    regular_jacobian = vectorized_area.compute_area_jacobian(self._arrays)
+    steiner_jacobian = vectorized_steiner.compute_steiner_area_jacobian(self._arrays)
+
+    return regular_jacobian + steiner_jacobian
+```
 
 #### After optimization completes:
 
@@ -504,6 +751,9 @@ Sync the optimized lambdas back to the PartitionContour objects:
 ```python
 self.partition.set_variable_vector(self._to_full(result.x))
 ```
+
+This is the only `set_variable_vector()` call — it happens once at the end to bring the
+object representation back in sync for subsequent mutation operations.
 
 ### Step 7: Fix the callback overhead
 
@@ -530,13 +780,14 @@ def _callback(self, *args, **kwargs):
 | `src/core/partition_arrays.py` | `PartitionArrays` dataclass |
 | `src/core/vectorized_perimeter.py` | Vectorized perimeter + gradient functions |
 | `src/core/vectorized_area.py` | Vectorized area + Jacobian functions |
+| `src/core/vectorized_steiner.py` | Analytical Steiner points + vectorized contributions + FD gradients |
 
 ## Files to Modify
 
 | File | Change |
 |---|---|
 | `src/core/contour_partition.py` | Add `compile_arrays()` method to `PartitionContour` |
-| `src/core/perimeter_optimizer.py` | Wire vectorized path into `objective()`, `objective_gradient()`, `constraint_area_equality()`, `constraint_area_jacobian()`, fix callback |
+| `src/core/perimeter_optimizer.py` | Wire fully vectorized path (regular + Steiner) into `objective()`, `objective_gradient()`, `constraint_area_equality()`, `constraint_area_jacobian()`, fix callback |
 
 ## Files NOT Modified
 
@@ -549,52 +800,77 @@ def _callback(self, *args, **kwargs):
 | `src/core/migration_types.py` | Data containers — no computation |
 | `src/core/migration_utils.py` | Helper functions — correct as-is |
 | `src/core/topology_switcher.py` | Topology switch logic — correct as-is |
-| `src/core/steiner_handler.py` | Unchanged for initial implementation |
+| `src/core/steiner_handler.py` | Kept for mutation mode (triple-point detection, Type 2 logic); not called during SLSQP evaluation |
 | `src/core/perimeter_calculator.py` | Kept as reference / validation implementation |
 | `src/core/area_calculator.py` | Kept as reference / validation implementation |
 
 ## Testing Strategy
 
-1. **Numerical equivalence**: For a given partition state + lambda vector, the vectorized
-   functions must match the original implementations to floating-point tolerance (~1e-12
-   relative error):
+1. **Numerical equivalence (regular)**: For a given partition state + lambda vector, the
+   vectorized functions must match the original implementations to floating-point tolerance
+   (~1e-12 relative error):
    - `vectorized_perimeter.compute_total_perimeter()` vs `PerimeterCalculator.compute_total_perimeter()`
    - `vectorized_perimeter.compute_perimeter_gradient()` vs `PerimeterCalculator.compute_total_perimeter_gradient()`
    - `vectorized_area.compute_cell_areas()` vs `AreaCalculator.compute_all_cell_areas()`
    - `vectorized_area.compute_area_jacobian()` vs `AreaCalculator.compute_area_jacobian()`
 
-2. **Gradient verification**: Compare vectorized analytical perimeter gradient against
+2. **Analytical Steiner validation**: Compare `vectorized_steiner.compute_steiner_points()`
+   against the existing `TriplePoint.compute_steiner_point()` (BFGS) for all triple points
+   in the current partition state. Tolerance: ~1e-6 (limited by BFGS `gtol=1e-8`).
+   Test cases should include:
+   - Equilateral void triangles (all angles = 60°, Steiner = centroid)
+   - Acute void triangles (all angles < 120°, non-trivial Fermat point)
+   - Near-degenerate triangles (one angle near 120°, tests numerical stability)
+
+3. **Numerical equivalence (Steiner contributions)**: For a given partition state:
+   - `vectorized_steiner.compute_steiner_perimeter()` vs
+     `SteinerHandler.get_total_perimeter_contribution()`
+   - `vectorized_steiner.compute_steiner_areas()` vs
+     `SteinerHandler.get_total_area_contribution()`
+   - `vectorized_steiner.compute_steiner_perimeter_gradient()` vs
+     `SteinerHandler.compute_total_gradient_finite_difference()`
+   - `vectorized_steiner.compute_steiner_area_jacobian()` vs
+     `SteinerHandler.compute_area_gradients_finite_difference()`
+
+4. **Gradient verification**: Compare vectorized analytical perimeter gradient against
    finite differences (already implemented in
    `PerimeterCalculator.verify_gradient_finite_differences`).
 
-3. **Round-trip test**: Run one full optimize cycle with vectorized path, compare final
+5. **Round-trip test**: Run one full optimize cycle with vectorized path, compare final
    perimeter and constraint violation against the original path run on the same input.
 
-4. **Migration compatibility**: Run a detect → migrate → compile_arrays → optimize cycle.
+6. **Migration compatibility**: Run a detect → migrate → compile_arrays → optimize cycle.
    Verify that `compile_arrays()` correctly handles inactive VPs and post-migration state.
 
 ## Implementation Order
 
-1. `PartitionArrays` dataclass + `compile_arrays()` method (foundation)
+1. `PartitionArrays` dataclass + `compile_arrays()` method (foundation, including
+   triple-point arrays from `SteinerHandler.triple_points`)
 2. `compute_total_perimeter()` vectorized + test against `PerimeterCalculator`
 3. `compute_perimeter_gradient()` vectorized + test against `PerimeterCalculator`
 4. `compute_cell_areas()` vectorized + test against `AreaCalculator`
 5. `compute_area_jacobian()` vectorized (finite-difference) + test against `AreaCalculator`
-6. Wire into `PerimeterOptimizer` with fallback to original path via flag
-7. Fix callback overhead
-8. End-to-end test: full optimize cycle with identical results
-9. (Future) Cache Steiner points to eliminate redundant BFGS solves
-10. (Future) Analytical Steiner point formula + batch vectorized Steiner
-11. (Future) Analytical area Jacobian to eliminate FD loop
+6. `compute_steiner_points()` analytical Fermat-Torricelli + validate against BFGS
+7. `compute_steiner_perimeter()` + `compute_steiner_areas()` vectorized + test against
+   `SteinerHandler`
+8. `compute_steiner_perimeter_gradient()` + `compute_steiner_area_jacobian()` FD-based +
+   test against `SteinerHandler`
+9. Wire fully vectorized path into `PerimeterOptimizer` with fallback to original via flag
+10. Fix callback overhead
+11. End-to-end test: full optimize cycle with identical results
+12. (Future) Analytical area Jacobian to eliminate FD loop for regular boundary triangles
 
 ## Key Invariants to Preserve
 
 - `PartitionContour` VP objects remain the source of truth for mutations
-- After optimization, `partition.set_variable_vector(result.x)` syncs back
+- After optimization, `partition.set_variable_vector(result.x)` syncs back (once, at end)
+- During the SLSQP evaluation loop, only flat arrays are read — no VP object access
 - `compile_arrays()` is idempotent — can be called multiple times safely
 - Active/inactive VP distinction is respected (inactive VPs excluded from arrays)
 - Edge normalization convention: `edge[0] < edge[1]` (same as `VariablePoint`)
 - Lambda convention: `x = λ * vertices[edge[0]] + (1-λ) * vertices[edge[1]]`
 - Perimeter = sum of cell perimeters (each segment counted twice)
-- Triple-point triangles excluded from area arrays (SteinerHandler handles them)
+- Triple-point triangles excluded from boundary triangle arrays (vectorized_steiner handles them)
 - Steiner area = void triangle area + corner triangle area per cell
+- Steiner point = analytical Fermat-Torricelli (no BFGS); degenerates to obtuse vertex at ≥ 120°
+- `SteinerHandler` used only in mutation mode; `vectorized_steiner` used in evaluation mode
