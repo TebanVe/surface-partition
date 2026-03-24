@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the RingTest project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-01-26 (January 26, 2026)
+**Last Updated**: 2026-03-24 (March 24, 2026)
 
 ---
 
@@ -79,11 +79,45 @@ When adding a new test:
 
 ## Test Inventory
 
+### Test 0: Lambda-Edge Roundtrip Consistency
+
+**File**: ~~`test_lambda_edge_roundtrip.py`~~ _(deleted 2026-03-24)_
+
+**Status**: ✅ APPROVED → 🗑️ DELETED
+
+**Created**: 2026-03-05
+
+**Approved and deleted**: 2026-03-24
+
+**Objective**:
+Verified that lambda parameters saved to an `.h5` file are correctly reloaded and
+matched to the same edges they were associated with in memory — specifically after
+topology migrations where the in-memory VP list order diverges from the sorted-edge
+order used during reconstruction from `indicator_functions`.
+
+**What it validated**:
+1. Whether the set of edges in the saved file matched the reconstructed set
+2. Whether the lambda-to-edge mapping was preserved through save/load
+3. The perimeter impact of any lambda misassignment
+
+**Key finding**:
+Post-migration VP list order diverges from sorted-edge reconstruction order. Without
+edge-keyed loading, lambdas get applied to the wrong VPs. Fix: save `vp_edges`
+alongside `lambda_parameters` in the HDF5 file; load by edge key in
+`examples/data_loader.py::load_partition_from_refined_file`. **Confirmed working.**
+
+**Why deleted**:
+Diagnostic script requiring an external `--solution` file; not runnable as an
+automated regression test. Historical findings are preserved in this entry and in
+`examples/debug_archive/`. The underlying fix lives in `data_loader.py`.
+
+---
+
 ### Test 1: Self-Healing Component Selection
 
 **File**: `test_self_healing_selection.py`
 
-**Status**: ✅ APPROVED
+**Status**: ✅ APPROVED ⚠️ BROKEN IMPORT (needs update)
 
 **Created**: 2026-01-26
 
@@ -140,12 +174,14 @@ results/run_20251027_233612_surftorus_npart5_v1nt60-240_incr20_v2np48-192_incr16
 - `src/core/tri_mesh.py`
 - `src/core/contour_partition.py`
 - `src/core/mesh_topology.py`
-- `examples/visualize_precise_region.py` (for load_partition_from_refined_file)
+- ~~`examples/visualize_precise_region.py`~~ → replaced by `examples/data_loader.py::load_partition_from_refined_file`
 
 **Notes**:
 - Test uses deep copy of partition to compare states across iterations
 - Tracks VP movements to explain why auxiliaries break
 - Provides detailed logging for debugging
+
+⚠️ **Known issue (2026-03-24)**: Script imports `from examples.visualize_precise_region import load_partition_from_refined_file` which no longer exists. The function now lives in `examples/data_loader.py`. The import line must be updated before this test can be run.
 
 ---
 
@@ -295,13 +331,13 @@ python examples/visualize_type1_vertex_collapse.py \
 
 **File**: `refine_perimeter_iterative.py`
 
-**Status**: 🚧 IN PROGRESS (Implementation complete, awaiting runtime testing)
+**Status**: ✅ APPROVED (Production-validated 2026-03-23)
 
 **Created**: 2026-02-08
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-03-23 (Promoted to APPROVED after successful production run)
 
-**Approved**: _Pending testing and validation_
+**Approved**: 2026-03-23
 
 **Objective**: 
 Implement a complete production-ready iterative refinement workflow that automatically applies topology migrations and continues optimization until convergence (no switches needed) or maximum iterations reached. This script serves as the main workflow orchestrator for perimeter refinement in production use.
@@ -565,6 +601,76 @@ python testing/test_migrations_debug.py \
 
 ---
 
+---
+
+### Test 5: Vectorized Evaluation Numerical Equivalence
+
+**File**: `test_vectorized_evaluation.py`
+
+**Status**: ✅ APPROVED (2026-03-23)
+
+**Created**: 2026-03-05
+
+**Approved**: 2026-03-23
+
+**Objective**:
+Verify that every function in the vectorized evaluation modules (`vectorized_perimeter`,
+`vectorized_area`, `vectorized_steiner`) matches its original object-oriented counterpart
+to floating-point tolerance. Also validates the analytical and sparse-FD area Jacobians
+against the reference `AreaCalculator` implementation.
+
+**What it validates**:
+
+| # | Test | Tolerance |
+|---|------|-----------|
+| 1 | `compile_arrays()` round-trip (lambda values) | 1e-15 |
+| 2 | Vectorized perimeter vs `PerimeterCalculator` | 1e-12 |
+| 3 | Vectorized perimeter gradient | 1e-10 |
+| 4 | Vectorized cell areas | 1e-12 |
+| 5 | Area Jacobian (analytical default) | 1e-6 |
+| 5a | Sparse FD Jacobian vs `AreaCalculator` | 1e-12 (machine precision) |
+| 5b | Analytical Jacobian vs sparse FD | 1e-6 (FD truncation limit) |
+| 6 | Analytical Steiner points vs BFGS | 1e-6 |
+| 7 | Steiner perimeter + area contributions | 1e-6 |
+| 8 | Steiner perimeter gradient | 1e-4 |
+| 9 | Steiner area Jacobian | 1e-4 |
+| 10 | End-to-end optimizer: vectorized vs original (objective, gradient, constraints, Jacobian) | 1e-4 |
+| 11 | Pre-compile fallback (objective only) | 1e-12 |
+| 12 | 10-iteration SLSQP: vectorized vs original final objective | 5e-2 |
+
+**Usage**:
+```bash
+python testing/test_vectorized_evaluation.py
+```
+No arguments needed — constructs a synthetic 3-cell 9-vertex planar mesh internally.
+
+**Expected output**:
+```
+Results: 20/20 passed, 0/20 failed
+ALL TESTS PASSED
+```
+
+**Dependencies**:
+- `src/core/tri_mesh.py`
+- `src/core/contour_partition.py`
+- `src/core/area_calculator.py`
+- `src/core/perimeter_calculator.py`
+- `src/core/steiner_handler.py`
+- `src/core/perimeter_optimizer.py`
+- `src/core/vectorized_perimeter.py`
+- `src/core/vectorized_area.py`
+- `src/core/vectorized_steiner.py`
+
+**Notes**:
+- Fully self-contained — no external data files required
+- Should be run after any change to vectorized evaluation modules, area Jacobian,
+  or `compile_arrays()`
+- Tests 5a and 5b were added when the analytical area Jacobian was implemented
+  (2026-03-23) to validate it against both the reference FD implementation and the
+  sparse FD intermediate
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -584,6 +690,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-03-24 | Deleted test_lambda_edge_roundtrip.py (resolved diagnostic); noted broken import in test_self_healing_selection.py; promoted refine_perimeter_iterative.py to APPROVED; added Test 5 (vectorized evaluation) | System |
 | 2026-03-03 | Added Test 4 (migration debug, no opt/export) | System |
 | 2026-02-08 | Added Test 3 (iterative perimeter refinement) | System |
 | 2026-02-06 | Updated Test 2 (efficiency refactoring) | System |

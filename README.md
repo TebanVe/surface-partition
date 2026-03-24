@@ -115,11 +115,8 @@ RingTest/
 ├── examples/                      # Example scripts and analysis tools
 │   ├── find_surface_partition.py # Main optimization orchestrator
 │   ├── optimization_analyzer.py  # Surface-agnostic result analysis
-│   ├── surface_visualization.py  # Unified 2D/3D visualization entrypoint
+│   ├── visualize_partition.py    # Partition viewer (3D/PyVista, base or refined)
 │   ├── island_analyzer.py        # Island detection and analysis
-│   ├── test_mesh_matrices.py     # Mesh and matrix testing
-│   ├── test_optimizer.py         # Optimizer testing
-│   ├── test_projection.py        # Projection algorithm testing
 │   └── ring_visualization.py     # Ring-only visualization
 ├── parameters/                    # Configuration files
 │   └── input.yaml                # Default input parameters
@@ -163,9 +160,9 @@ python examples/refine_perimeter.py \
     --tolerance 1e-7
 
 # Step 3: Visualize refined contours
-python examples/surface_visualization.py \
+python examples/visualize_partition.py \
     --solution results/run_xyz/solution_level0.h5 \
-    --refined
+    --show-steiner
 ```
 
 For complete documentation, see [docs/PERIMETER_REFINEMENT.md](docs/PERIMETER_REFINEMENT.md)
@@ -199,14 +196,11 @@ python examples/optimization_analyzer.py --results-dir results --pattern "npart2
 ### Testing Components
 
 ```bash
-# Test mesh generation and matrix computation
-python examples/test_mesh_matrices.py
+# Numerical equivalence tests for the vectorized evaluation pipeline (no arguments needed)
+python testing/test_vectorized_evaluation.py
 
-# Test optimizer functionality
-python examples/test_optimizer.py
-
-# Test projection algorithms
-python examples/test_projection.py
+# Debug migrations step-by-step without optimization
+python testing/test_migrations_debug.py --solution results/run_xyz/*_iterationN_refined_contours.h5
 ```
 
 ### Torus Surface Support
@@ -232,25 +226,24 @@ n_theta_increment: 0
 n_phi_increment: 0
 ```
 
-### Surface Visualization (2D/3D)
+### Surface Visualization (3D)
 
-Use a single script to visualize partitions on any supported surface:
+Use `visualize_partition.py` to visualize partitions on any supported surface:
 
 ```bash
-# 2D (Matplotlib) or 3D (PyVista) depending on solution
-python examples/surface_visualization.py --solution <path/to/solution.h5> --level 0.5
+# View base solution or refined contours (auto-detected)
+python examples/visualize_partition.py --solution <path/to/solution.h5>
 
 # Optional flags
---use-initial          # visualize x0 instead of x_opt
---save out.png         # save image instead of showing a window
---no-fill --no-mesh    # 2D-only styling options
---show-normals         # 3D-only; overlay triangle normals
---normal-scale 0.1     # 3D-only; scale of normals
---color-partition      # 3D-only; light per-face region colors + strong contours
+--region 2             # highlight a specific cell
+--show-steiner         # show Steiner points and void triangles
+--show-vps             # show all variable points
+--use-initial          # visualize x0 instead of x_opt (base solution only)
+--opacity 0.8          # cell color opacity
 ```
 
 Notes:
-- 3D rendering (e.g., torus) requires `pyvista` (optional dependency). 2D ring plots do not require it.
+- Requires `pyvista` for 3D rendering.
 - The script automatically infers 2D vs 3D from the solution's vertex dimension.
 
 Flag descriptions (brief):

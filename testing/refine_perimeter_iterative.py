@@ -584,6 +584,14 @@ Example usage:
                        help='Logging level (default: INFO, or DEBUG if --debug flag is used). '
                             'Note: --debug flag overrides this setting.')
     
+    vectorized_group = parser.add_mutually_exclusive_group()
+    vectorized_group.add_argument(
+        '--use-vectorized', action='store_true', default=True, dest='use_vectorized',
+        help='Use vectorized evaluation path (default: enabled)')
+    vectorized_group.add_argument(
+        '--no-vectorized', action='store_false', dest='use_vectorized',
+        help='Disable vectorized evaluation; use original per-element calculators')
+    
     args = parser.parse_args()
     
     # Validate distance_preservation
@@ -733,7 +741,8 @@ Example usage:
         logger.info("-"*80)
         
         # Create fresh optimizer each iteration (VP count may change after migrations)
-        optimizer = PerimeterOptimizer(partition, mesh, target_area)
+        optimizer = PerimeterOptimizer(partition, mesh, target_area,
+                                       use_vectorized=args.use_vectorized)
         
         # Calculate initial perimeter
         x0 = partition.get_variable_vector()

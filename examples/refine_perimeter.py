@@ -249,7 +249,7 @@ def main():
     logger.info(f"Output saved to: {args.output}")
     logger.info("")
     logger.info("To visualize refined contours, run:")
-    logger.info(f"  python examples/surface_visualization.py --solution {args.solution} --refined")
+    logger.info(f"  python examples/visualize_partition.py --solution {args.solution} --show-steiner")
     logger.info("")
     
     return 0

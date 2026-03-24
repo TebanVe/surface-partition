@@ -29,6 +29,10 @@ try:
     from .area_calculator import AreaCalculator
     from .perimeter_calculator import PerimeterCalculator
     from .steiner_handler import SteinerHandler
+    from .partition_arrays import PartitionArrays
+    from . import vectorized_perimeter
+    from . import vectorized_area
+    from . import vectorized_steiner
 except ImportError:
     import sys
     import os
@@ -39,6 +43,10 @@ except ImportError:
     from core.area_calculator import AreaCalculator
     from core.perimeter_calculator import PerimeterCalculator
     from core.steiner_handler import SteinerHandler
+    from core.partition_arrays import PartitionArrays
+    from core import vectorized_perimeter
+    from core import vectorized_area
+    from core import vectorized_steiner
 
 
 class PerimeterOptimizer:
@@ -59,7 +67,8 @@ class PerimeterOptimizer:
     """
     
     def __init__(self, partition: PartitionContour, mesh: TriMesh, target_area: float,
-                 area_calc=None, perim_calc=None, steiner_handler=None):
+                 area_calc=None, perim_calc=None, steiner_handler=None,
+                 use_vectorized: bool = True):
         """
         Initialize perimeter optimizer.
         
@@ -70,6 +79,9 @@ class PerimeterOptimizer:
             area_calc: Optional pre-created AreaCalculator (for efficiency)
             perim_calc: Optional pre-created PerimeterCalculator (for efficiency)
             steiner_handler: Optional pre-created SteinerHandler (for efficiency)
+            use_vectorized: If True (default), compile flat arrays and use the
+                vectorized evaluation path.  When False, use the original
+                per-element calculators.
         """
         self.mesh = mesh
         self.partition = partition
@@ -93,6 +105,13 @@ class PerimeterOptimizer:
         self._n_active = len(self._active_indices)
         self._use_active_mapping = (self._n_active < self._n_total)
         
+        # Vectorized evaluation state
+        self._use_vectorized = use_vectorized
+        self._arrays: Optional[PartitionArrays] = None
+
+        # Cached last objective for callback (avoids redundant recomputation)
+        self._last_objective: Optional[float] = None
+        
         # Optimization state
         self.iteration = 0
         self.objective_history = []
@@ -107,6 +126,7 @@ class PerimeterOptimizer:
             self.logger.info(f"  {self._n_total} variable points (all active)")
         self.logger.info(f"  {len(self.steiner_handler.triple_points)} triple points")
         self.logger.info(f"  Target area per partition cell: {target_area:.6f}")
+        self.logger.info(f"  Vectorized evaluation: {use_vectorized}")
     
     def _to_full(self, active_vec: np.ndarray) -> np.ndarray:
         """Expand an active-only vector to a full-sized vector (inactive VPs keep current λ)."""
@@ -128,6 +148,17 @@ class PerimeterOptimizer:
             return full_matrix
         return full_matrix[:, self._active_indices]
     
+    def compile(self):
+        """Compile flat arrays for fast vectorized evaluation.
+
+        Call after migrations, before optimize().  When ``_use_vectorized`` is
+        False this is a no-op.
+        """
+        if not self._use_vectorized:
+            return
+        self._arrays = self.partition.compile_arrays(self.steiner_handler)
+        self.logger.info("Compiled PartitionArrays for vectorized evaluation")
+    
     def objective(self, lambda_vec: np.ndarray) -> float:
         """
         Compute total perimeter (objective function to minimize).
@@ -141,17 +172,25 @@ class PerimeterOptimizer:
         Returns:
             Total perimeter length
         """
+        # --- Vectorized path ---
+        if self._arrays is not None:
+            self._arrays.vp_lambda[:] = lambda_vec
+            regular_perimeter = vectorized_perimeter.compute_total_perimeter(self._arrays)
+            steiner_pts = vectorized_steiner.compute_steiner_points(self._arrays)
+            steiner_perim = vectorized_steiner.compute_steiner_perimeter(self._arrays, steiner_pts)
+            total = regular_perimeter + steiner_perim
+            self._last_objective = total
+            return total
+
+        # --- Original path (fallback) ---
         full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
         self.partition.set_variable_vector(full_vec)
         
-        # Regular perimeter from contours
         regular_perimeter = self.perim_calc.compute_total_perimeter(full_vec)
-        
-        # Steiner tree contributions from triple points
         steiner_perimeter = self.steiner_handler.get_total_perimeter_contribution()
         
         total = regular_perimeter + steiner_perimeter
-        
+        self._last_objective = total
         return total
     
     def objective_gradient(self, lambda_vec: np.ndarray) -> np.ndarray:
@@ -164,13 +203,18 @@ class PerimeterOptimizer:
         Returns:
             Gradient array (active-only during optimization)
         """
+        # --- Vectorized path ---
+        if self._arrays is not None:
+            self._arrays.vp_lambda[:] = lambda_vec
+            regular_grad = vectorized_perimeter.compute_perimeter_gradient(self._arrays)
+            steiner_grad = vectorized_steiner.compute_steiner_perimeter_gradient(self._arrays)
+            return regular_grad + steiner_grad
+
+        # --- Original path (fallback) ---
         full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
         self.partition.set_variable_vector(full_vec)
         
-        # Regular perimeter gradient (analytical)
         regular_gradient = self.perim_calc.compute_total_perimeter_gradient(full_vec)
-        
-        # Steiner tree gradient (finite differences, as suggested in paper)
         steiner_gradient = self.steiner_handler.compute_total_gradient_finite_difference()
         
         total_gradient = regular_gradient + steiner_gradient
@@ -189,19 +233,25 @@ class PerimeterOptimizer:
         Returns:
             Constraint violations array of shape (n_cells - 1,)
         """
+        # --- Vectorized path ---
+        if self._arrays is not None:
+            self._arrays.vp_lambda[:] = lambda_vec
+            areas = vectorized_area.compute_cell_areas(self._arrays)
+            steiner_pts = vectorized_steiner.compute_steiner_points(self._arrays)
+            steiner_a = vectorized_steiner.compute_steiner_areas(self._arrays, steiner_pts)
+            areas += steiner_a
+            return areas[:self._arrays.n_cells - 1] - self.target_area
+
+        # --- Original path (fallback) ---
         full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
         self.partition.set_variable_vector(full_vec)
         
-        # Compute regular areas
         areas = self.area_calc.compute_all_cell_areas(full_vec)
-        
-        # Add Steiner tree area contributions
         steiner_areas = self.steiner_handler.get_total_area_contribution()
         for cell_idx, area_contrib in steiner_areas.items():
             if cell_idx < len(areas):
                 areas[cell_idx] += area_contrib
         
-        # Return constraint violations for first n-1 cells
         return areas[:-1] - self.target_area
     
     def constraint_area_jacobian(self, lambda_vec: np.ndarray) -> np.ndarray:
@@ -216,18 +266,22 @@ class PerimeterOptimizer:
         Returns:
             Jacobian array (columns correspond to active VPs during optimization)
         """
+        # --- Vectorized path ---
+        if self._arrays is not None:
+            self._arrays.vp_lambda[:] = lambda_vec
+            regular_jac = vectorized_area.compute_area_jacobian(self._arrays)
+            steiner_jac = vectorized_steiner.compute_steiner_area_jacobian(self._arrays)
+            return regular_jac + steiner_jac
+
+        # --- Original path (fallback) ---
         full_vec = self._to_full(lambda_vec) if len(lambda_vec) == self._n_active else lambda_vec
         self.partition.set_variable_vector(full_vec)
         
-        # Regular area Jacobian (from boundary triangles, analytical)
         jacobian = self.area_calc.compute_area_jacobian(full_vec)
-        
-        # Add Steiner tree area gradients (finite differences, per paper line 366)
         steiner_gradients = self.steiner_handler.compute_area_gradients_finite_difference(
             self.mesh, eps=1e-7
         )
         
-        # Add Steiner contributions to jacobian (only first n_cells-1 rows)
         for cell_idx in range(self.partition.n_cells - 1):
             jacobian[cell_idx, :] += steiner_gradients[cell_idx]
         
@@ -237,54 +291,17 @@ class PerimeterOptimizer:
         """
         Callback function called at each optimization iteration.
         
-        Handles different signatures from different optimization methods:
-        - SLSQP: callback(xk) - xk is the parameter vector
-        - trust-constr: callback(state) or callback(xk, res) - need to extract xk
-        
-        Args:
-            *args: Variable arguments - first arg is typically xk or state object
-            **kwargs: Keyword arguments (not used)
+        Uses cached ``_last_objective`` from the most recent ``objective()``
+        call to avoid redundant recomputation.
         """
-        # Extract xk from different callback signatures
-        if len(args) == 0:
-            return  # No arguments, skip
-        
-        # For SLSQP: args[0] is xk (numpy array)
-        # For trust-constr: scipy wraps and calls with (xk, res) where xk is np.ndarray
-        # For trust-constr direct: args[0] might be state object with .x attribute
-        if len(args) >= 2:
-            # Multiple arguments: trust-constr wrapped signature (xk, res)
-            # First arg should be xk (numpy array)
-            if isinstance(args[0], np.ndarray):
-                xk = args[0]
-            else:
-                # Try second argument
-                xk = args[1].x if hasattr(args[1], 'x') else args[0]
-        elif isinstance(args[0], np.ndarray):
-            # Single numpy array: SLSQP signature
-            xk = args[0]
-        elif hasattr(args[0], 'x'):
-            # trust-constr state object with .x attribute
-            xk = args[0].x
-        else:
-            # Fallback: try to get x attribute
-            xk = getattr(args[0], 'x', None)
-            if xk is None:
-                return  # Can't extract xk, skip
-        
         self.iteration += 1
         
-        # Compute and log progress
-        obj = self.objective(xk)
-        constraints = self.constraint_area_equality(xk)
-        max_violation = float(np.max(np.abs(constraints)))
-        
-        self.objective_history.append(obj)
-        self.constraint_violation_history.append(max_violation)
-        
+        if self._last_objective is not None:
+            self.objective_history.append(self._last_objective)
+
         if self.iteration % 10 == 0:
-            self.logger.info(f"Iteration {self.iteration}: "
-                           f"Perimeter={obj:.6f}, MaxViolation={max_violation:.2e}")
+            obj_str = f"{self._last_objective:.6f}" if self._last_objective is not None else "N/A"
+            self.logger.info(f"Iteration {self.iteration}: Perimeter={obj_str}")
     
     def optimize(self, max_iter: int = 1000, tol: float = 1e-7,
                 method: str = 'SLSQP') -> OptimizeResult:
@@ -310,6 +327,9 @@ class PerimeterOptimizer:
         if self._use_active_mapping:
             self.logger.info(f"  Optimizing {self._n_active} active VPs "
                            f"(skipping {self._n_total - self._n_active} inactive)")
+        
+        # Compile vectorized arrays (no-op when _use_vectorized is False)
+        self.compile()
         
         # Initial guess: current λ values for active VPs only
         lambda0 = self.partition.get_active_variable_vector() if self._use_active_mapping \
@@ -361,8 +381,13 @@ class PerimeterOptimizer:
         
         elapsed_time = time.time() - start_time
         
-        # Update partition with optimized parameters
-        self.partition.set_variable_vector(result.x)
+        # Sync optimized lambdas back to the object representation
+        if self._arrays is not None:
+            # Vectorized path: result.x lives in active-index space; expand to full
+            full_result = self._to_full(result.x)
+            self.partition.set_variable_vector(full_result)
+        else:
+            self.partition.set_variable_vector(result.x)
         
         # Final statistics
         final_obj = self.objective(result.x)

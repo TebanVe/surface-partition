@@ -999,6 +999,221 @@ class PartitionContour:
         
         return contours
     
+    # =========================================================================
+    # Vectorized evaluation support
+    # =========================================================================
+
+    def compile_arrays(self, steiner_handler):
+        """Compile flat arrays for vectorized evaluation during SLSQP.
+
+        Walks the object-oriented structures once and builds a
+        :class:`~partition_arrays.PartitionArrays` snapshot that the vectorized
+        perimeter / area / steiner modules consume without any per-element
+        Python overhead.
+
+        Args:
+            steiner_handler: :class:`~steiner_handler.SteinerHandler` that owns
+                the detected ``triple_points`` list.  Required because
+                ``PartitionContour`` does not own the Steiner data.
+
+        Returns:
+            :class:`~partition_arrays.PartitionArrays`
+        """
+        from .partition_arrays import PartitionArrays
+
+        vertex_labels = self._vertex_labels
+
+        # 1. Build absolute → active index map
+        abs_to_active: Dict[int, int] = {}
+        active_to_absolute_list: List[int] = []
+        for opt_idx, abs_idx in enumerate(self._active_vp_indices):
+            abs_to_active[abs_idx] = opt_idx
+            active_to_absolute_list.append(abs_idx)
+
+        n_active = len(active_to_absolute_list)
+        active_to_absolute = np.array(active_to_absolute_list, dtype=np.int32)
+
+        # 2. VP edge / lambda arrays (active only)
+        vp_edge_v1 = np.empty(n_active, dtype=np.int32)
+        vp_edge_v2 = np.empty(n_active, dtype=np.int32)
+        vp_lambda = np.empty(n_active, dtype=np.float64)
+        for opt_idx, abs_idx in enumerate(self._active_vp_indices):
+            vp = self.variable_points[abs_idx]
+            vp_edge_v1[opt_idx] = vp.edge[0]
+            vp_edge_v2[opt_idx] = vp.edge[1]
+            vp_lambda[opt_idx] = vp.lambda_param
+
+        # 3. Boundary segment arrays
+        seg_vp1_list, seg_vp2_list = [], []
+        seg_ca_list, seg_cb_list = [], []
+        for seg in self.boundary_segments:
+            a_idx = abs_to_active.get(seg.vp_idx_1)
+            b_idx = abs_to_active.get(seg.vp_idx_2)
+            if a_idx is None or b_idx is None:
+                continue
+            seg_vp1_list.append(a_idx)
+            seg_vp2_list.append(b_idx)
+            seg_ca_list.append(seg.cell_pair[0])
+            seg_cb_list.append(seg.cell_pair[1])
+
+        seg_vp1 = np.array(seg_vp1_list, dtype=np.int32)
+        seg_vp2 = np.array(seg_vp2_list, dtype=np.int32)
+        seg_cell_a = np.array(seg_ca_list, dtype=np.int32)
+        seg_cell_b = np.array(seg_cb_list, dtype=np.int32)
+
+        # 4–5. Boundary triangle arrays + cell_interior_area
+        btri_idx_l, btri_cell_l, btri_nin_l = [], [], []
+        btri_vin_l, btri_vout_l = [], []
+        btri_vp1_l, btri_vp2_l = [], []
+        cell_interior_area = np.zeros(self.n_cells, dtype=np.float64)
+
+        tri_areas = self.mesh.triangle_areas
+
+        for tri_idx, face in enumerate(self.mesh.faces):
+            v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
+            lab1, lab2, lab3 = int(vertex_labels[v1]), int(vertex_labels[v2]), int(vertex_labels[v3])
+            labels_set = {lab1, lab2, lab3}
+
+            if len(labels_set) == 3:
+                continue  # triple-point triangle — handled by vectorized_steiner
+
+            verts = [v1, v2, v3]
+            labs = [lab1, lab2, lab3]
+
+            if len(labels_set) == 1:
+                cell_interior_area[lab1] += tri_areas[tri_idx]
+                continue
+
+            # Boundary triangle: contributes to one or two cells
+            for cell_idx in labels_set:
+                inside_mask = [l == cell_idx for l in labs]
+                n_inside = sum(inside_mask)
+                if n_inside == 0 or n_inside == 3:
+                    continue
+
+                inside_verts = [verts[i] for i in range(3) if inside_mask[i]]
+                outside_verts = [verts[i] for i in range(3) if not inside_mask[i]]
+
+                if n_inside == 2:
+                    v_in1, v_in2 = inside_verts
+                    v_out = outside_verts[0]
+                    edge_a = tuple(sorted([v_out, v_in1]))
+                    edge_b = tuple(sorted([v_out, v_in2]))
+                    vin_row = [v_in1, v_in2]
+                    vout_row = [v_out, -1]
+                elif n_inside == 1:
+                    v_in = inside_verts[0]
+                    v_out1, v_out2 = outside_verts
+                    edge_a = tuple(sorted([v_in, v_out1]))
+                    edge_b = tuple(sorted([v_in, v_out2]))
+                    vin_row = [v_in, -1]
+                    vout_row = [v_out1, v_out2]
+                else:
+                    continue
+
+                vp_a_abs = self.edge_to_varpoint.get(edge_a)
+                vp_b_abs = self.edge_to_varpoint.get(edge_b)
+                if vp_a_abs is None or vp_b_abs is None:
+                    continue
+                vp_a = abs_to_active.get(vp_a_abs)
+                vp_b = abs_to_active.get(vp_b_abs)
+                if vp_a is None or vp_b is None:
+                    continue
+
+                btri_idx_l.append(tri_idx)
+                btri_cell_l.append(cell_idx)
+                btri_nin_l.append(n_inside)
+                btri_vin_l.append(vin_row)
+                btri_vout_l.append(vout_row)
+                btri_vp1_l.append(vp_a)
+                btri_vp2_l.append(vp_b)
+
+        n_btri = len(btri_idx_l)
+        btri_idx = np.array(btri_idx_l, dtype=np.int32) if n_btri else np.empty(0, dtype=np.int32)
+        btri_cell = np.array(btri_cell_l, dtype=np.int32) if n_btri else np.empty(0, dtype=np.int32)
+        btri_n_inside = np.array(btri_nin_l, dtype=np.int32) if n_btri else np.empty(0, dtype=np.int32)
+        btri_v_in = np.array(btri_vin_l, dtype=np.int32).reshape(-1, 2) if n_btri else np.empty((0, 2), dtype=np.int32)
+        btri_v_out = np.array(btri_vout_l, dtype=np.int32).reshape(-1, 2) if n_btri else np.empty((0, 2), dtype=np.int32)
+        btri_vp1 = np.array(btri_vp1_l, dtype=np.int32) if n_btri else np.empty(0, dtype=np.int32)
+        btri_vp2 = np.array(btri_vp2_l, dtype=np.int32) if n_btri else np.empty(0, dtype=np.int32)
+
+        # 6. area_affected_vps
+        if n_btri:
+            area_affected_vps = np.unique(np.concatenate([btri_vp1, btri_vp2]))
+        else:
+            area_affected_vps = np.empty(0, dtype=np.int32)
+
+        # 7. Triple-point arrays
+        triple_points = steiner_handler.triple_points
+        n_tp = len(triple_points)
+
+        if n_tp > 0:
+            tp_vp_indices_l = []
+            tp_ctp_l, tp_ccell_l, tp_cvp1_l, tp_cvp2_l, tp_cmv_l = [], [], [], [], []
+
+            for tp_i, tp in enumerate(triple_points):
+                active_vps = [abs_to_active[vi] for vi in tp.var_point_indices]
+                tp_vp_indices_l.append(active_vps)
+
+                for cell_idx, (vp_abs_a, vp_abs_b) in tp.cell_to_varpoint_pair.items():
+                    tp_ctp_l.append(tp_i)
+                    tp_ccell_l.append(cell_idx)
+                    tp_cvp1_l.append(abs_to_active[vp_abs_a])
+                    tp_cvp2_l.append(abs_to_active[vp_abs_b])
+                    tp_cmv_l.append(tp.cell_to_mesh_vertex[cell_idx])
+
+            tp_vp_indices = np.array(tp_vp_indices_l, dtype=np.int32)
+            tp_contrib_tp_idx = np.array(tp_ctp_l, dtype=np.int32)
+            tp_contrib_cell = np.array(tp_ccell_l, dtype=np.int32)
+            tp_contrib_vp1 = np.array(tp_cvp1_l, dtype=np.int32)
+            tp_contrib_vp2 = np.array(tp_cvp2_l, dtype=np.int32)
+            tp_contrib_mesh_vertex = np.array(tp_cmv_l, dtype=np.int32)
+            tp_affected_vps = np.unique(tp_vp_indices.ravel())
+        else:
+            dim = self.mesh.vertices.shape[1]
+            tp_vp_indices = np.empty((0, 3), dtype=np.int32)
+            tp_contrib_tp_idx = np.empty(0, dtype=np.int32)
+            tp_contrib_cell = np.empty(0, dtype=np.int32)
+            tp_contrib_vp1 = np.empty(0, dtype=np.int32)
+            tp_contrib_vp2 = np.empty(0, dtype=np.int32)
+            tp_contrib_mesh_vertex = np.empty(0, dtype=np.int32)
+            tp_affected_vps = np.empty(0, dtype=np.int32)
+
+        self.logger.info(f"compile_arrays: {n_active} active VPs, "
+                        f"{len(seg_vp1)} segments, {n_btri} boundary-triangle rows, "
+                        f"{n_tp} triple points")
+
+        return PartitionArrays(
+            vp_edge_v1=vp_edge_v1,
+            vp_edge_v2=vp_edge_v2,
+            vp_lambda=vp_lambda,
+            seg_vp1=seg_vp1,
+            seg_vp2=seg_vp2,
+            seg_cell_a=seg_cell_a,
+            seg_cell_b=seg_cell_b,
+            btri_idx=btri_idx,
+            btri_cell=btri_cell,
+            btri_n_inside=btri_n_inside,
+            btri_v_in=btri_v_in,
+            btri_v_out=btri_v_out,
+            btri_vp1=btri_vp1,
+            btri_vp2=btri_vp2,
+            cell_interior_area=cell_interior_area,
+            n_cells=self.n_cells,
+            n_active_vp=n_active,
+            active_to_absolute=active_to_absolute,
+            area_affected_vps=area_affected_vps,
+            vertices=self.mesh.vertices,
+            tp_vp_indices=tp_vp_indices,
+            n_triple_points=n_tp,
+            tp_contrib_tp_idx=tp_contrib_tp_idx,
+            tp_contrib_cell=tp_contrib_cell,
+            tp_contrib_vp1=tp_contrib_vp1,
+            tp_contrib_vp2=tp_contrib_vp2,
+            tp_contrib_mesh_vertex=tp_contrib_mesh_vertex,
+            tp_affected_vps=tp_affected_vps,
+        )
+
     def identify_triple_points(self) -> List[Tuple[int, List[int]]]:
         """
         Identify mesh triangles where three different partition cells meet.
