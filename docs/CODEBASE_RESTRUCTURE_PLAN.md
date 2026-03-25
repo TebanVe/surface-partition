@@ -193,7 +193,7 @@ The modular migration system that replaces the legacy monolithic `topology_switc
 - Includes the Type 1 component analyzer and Type 2 history tracking/persistence, which are tightly coupled to migration logic.
 
 ### `surfaces/` — Surface Providers
-Mesh-generation providers for specific geometries (ring, torus). Just needs an `__init__.py`.
+The extension point for closed surfaces (surfaces without boundary). The torus is the primary surface for the project. The ring (`ring.py`) was used during early planar tests but will be **removed** — the mathematical setting requires surfaces without boundary, and the ring (an annulus) does not satisfy this. After removal, `surfaces/` will contain only `torus.py`, but the subpackage is designed to accommodate future closed surfaces (e.g. sphere, genus-2 surface) as the research expands.
 
 ### `visualization/` — Plotting
 All matplotlib and PyVista plotting utilities. Used only by example/testing scripts, never by the computational core.
@@ -214,14 +214,31 @@ Two new files that serve different roles:
 
 ## Legacy Files
 
-The monolithic topology switcher files should be handled as follows:
+The following files should be removed as part of the restructure.
+
+### Monolithic topology switcher
+
+The modular migration system (`migration_detector.py`, `migration_executor.py`, `migration_orchestrator.py`, etc.) is its replacement and is already in use.
 
 | File | Action |
 |------|--------|
-| `topology_switcher.py` (3824 lines) | **Remove.** The modular migration system (`migration_detector.py`, `migration_executor.py`, `migration_orchestrator.py`, etc.) is its replacement and is already in use. |
-| `topology_switcher_legacy.py` (3824 lines) | **Remove.** This is a duplicate of `topology_switcher.py`, kept as a safety copy. No longer needed once the modular system is validated. |
+| `topology_switcher.py` (3824 lines) | **Remove.** |
+| `topology_switcher_legacy.py` (3824 lines) | **Remove.** Duplicate of `topology_switcher.py`, kept as a safety copy. No longer needed once the modular system is validated. |
 
 If a fallback is desired during transition, move both files to a `_legacy/` directory outside `src/` (or a `legacy/` subdirectory within `migration/`) rather than keeping them as active code.
+
+### Ring surface
+
+The ring (planar annulus) was used for early testing but is mathematically out of scope — the project requires surfaces **without boundary**, and the ring does not satisfy this condition. The torus is the primary surface.
+
+| File / location | Action |
+|-----------------|--------|
+| `src/surfaces/ring.py` | **Remove.** |
+| `parameters/input.yaml` — `n_radial`, `n_angular`, `r_inner`, `r_outer`, `n_radial_increment`, `n_angular_increment` | **Remove** ring-specific keys; keep only torus parameters. |
+| `examples/find_surface_partition.py` — `--surface ring` branch + `RingMeshProvider` import | **Remove.** |
+| Metadata serialization block — `r_inner`, `r_outer` surface params | **Remove** ring branch; keep torus branch only. |
+| `src/surfaces/__init__.py` (new) | Export only `TorusMeshProvider`. |
+| `README.md`, documentation | Remove ring references; clarify that the codebase targets closed surfaces. |
 
 ## Import Path Changes
 
@@ -305,9 +322,11 @@ The topology switch system is implemented and under active testing. The restruct
 
 ### Cleanup pass (any phase)
 
-- Update `README.md` (still references deleted files: `island_analysis.py`, `ring_visualization.py`, etc.).
+- Remove ring surface files and references (see §Legacy Files — Ring surface).
+- Update `README.md` (still references deleted files: `island_analysis.py`, `ring_visualization.py`, ring surface, etc.).
 - Fix `pyproject.toml` version mismatch (`0.1.0` → `0.2.0`) and `testpaths` (points to nonexistent `tests/`; should be `testing/`).
 - Remove the broken link to `docs/PERIMETER_REFINEMENT.md` from `README.md`.
+- Fix the typo on line 23 of `parameters/input.yaml` (`# Optimization parametersJeez`).
 
 ## Dependency Flow Between Subpackages
 
