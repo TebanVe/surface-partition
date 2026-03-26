@@ -8,8 +8,7 @@ Consolidate two testing scripts into one unified script:
 - **Absorb and delete**: `testing/test_migration_and_continue.py`
 
 The result is a single script that handles both fresh runs (from base relaxation output)
-and resumed runs (from a saved iteration checkpoint), with a clean and consistent
-Optimize → Export → Detect → Migrate loop order.
+and resumed runs (from a saved iteration checkpoint), with a clean and consistent loop.
 
 ---
 
@@ -32,6 +31,7 @@ Optimize → Export → Detect → Migrate loop order.
 **What it lacks:**
 - Cannot load from an iteration checkpoint file (no resume)
 - Does not detect the starting iteration number from the filename
+- Does not store `pending_migration` flag in exported files
 - Does not run `_check_indicator_vp_consistency` after migration
 - Does not run a perimeter roundtrip check after export
 - Does not call `rebuild_triangle_segments_from_current_vps()` after Type 2 (legacy path)
@@ -63,48 +63,87 @@ Optimize → Export → Detect → Migrate loop order.
 
 ## Design Decisions (already agreed upon — do not change)
 
-### 1. Loop order is always Optimize → Export → Detect → Migrate
+### 1. Loop order is always Optimize → Detect → Export → Migrate
 
 This is the correct scientific order. The optimization result at a given topology is
-the scientific output. Migration is a topological event enabling the next iteration.
+the scientific output. Detection runs immediately after optimization (it is fast —
+just proximity checks). The result is exported with a `pending_migration` flag that
+records whether migration is needed. Migration is applied last, enabling the next
+iteration.
 
-### 2. The iteration file is always the post-optimization, pre-migration state
+**Note:** Detection is moved before export (compared to the old script). This is
+necessary so the export file can record its own status (`pending_migration`), which
+makes resume unambiguous.
+
+### 2. The iteration file always records its own pending state
 
 ```
-ITERATION N:
-  1. Optimize  (on current topology)
-  2. Export    ← _iteration{N}_refined_contours.h5 (post-opt, pre-migration)
-  3. Detect switches
-       → none: CONVERGED, exit (file from step 2 is the final result)
-       → some: Migrate
-[next iteration starts on migrated topology]
+LOOP BODY:
+  1. Optimize    (on current topology)
+  2. Detect switches
+  3. Export      ← _iteration{N}_refined_contours.h5
+                    pending_migration = False  (no switches found → converged)
+                    pending_migration = True   (switches found → migration will follow)
+  4. If pending_migration=False → CONVERGED, exit
+  5. Apply migrations (Type 2 first, then Type 1)
+  [loop back to step 1 on migrated topology]
 ```
 
-This means:
-- The last iteration's file always contains the clean optimized state (no pending migrations)
-- The converged final file IS an iteration file — no separate "final" export needed
+The `pending_migration` attribute stored in the HDF5 file makes every checkpoint
+self-describing. The resume logic reads this flag to determine the correct entry point.
 
-### 3. Auto-detect file type at load time (no --resume flag needed)
+### 3. Three file states — each with one unambiguous action
+
+| File type | `pending_migration` attr | First action on load |
+|-----------|--------------------------|----------------------|
+| Base solution (`x_opt` present) | n/a | **Optimize** (step 1) |
+| Iteration checkpoint | `True` | **Migrate** (step 5), then Optimize |
+| Iteration checkpoint | `False` | **Done** — converged result, nothing to do |
+
+When resuming from an iteration checkpoint with `pending_migration=True`, **migration
+always comes before optimization**. This is because the file represents a topology that
+has been optimized but not yet migrated — the next action is always the topology change.
+
+The only case where optimization comes first without prior migration is when starting
+from a base solution file.
+
+### 4. Auto-detect file type at load time (no `--resume` flag needed)
 
 Inspect HDF5 keys on startup:
 
-```
-if 'x_opt' in file:
-    # Base relaxation output
-    → load via ContourAnalyzer (existing path)
-    → enter loop at step 1 (Optimize)
-    → starting_iteration = 0
-else:
-    # Iteration checkpoint (lambda_parameters / vp_edges / indicator_functions)
-    → load via load_partition_from_refined_file
-    → enter loop at step 3 (Detect → Migrate) for first pass, then normal loop
-    → parse starting_iteration from filename
+```python
+def detect_file_type(path):
+    with h5py.File(path, 'r') as f:
+        if 'x_opt' in f:
+            return 'base'
+        pending = f.attrs.get('pending_migration', True)  # conservative default
+        return 'checkpoint_pending' if pending else 'checkpoint_converged'
 ```
 
-When loading from an iteration checkpoint, the first action is migration (step 3 of the
-previous iteration that was saved pre-migration). After that, the loop runs normally.
+The load block then selects the correct entry point:
 
-### 4. Auto-detect starting iteration number from filename
+```python
+file_type = detect_file_type(args.solution)
+
+if file_type == 'base':
+    # Fresh run — load via ContourAnalyzer
+    load_base_solution(args.solution)
+    starting_iteration = 0
+    enter_at = 'optimize'
+
+elif file_type == 'checkpoint_pending':
+    # Resume — migration was pending when this file was saved
+    load_iteration_checkpoint(args.solution)
+    starting_iteration = parse_iteration_from_filename(args.solution)
+    enter_at = 'migrate'   # migrate first, then optimize
+
+elif file_type == 'checkpoint_converged':
+    # Already converged — nothing to do
+    logger.info("Input file is a converged result. No further work needed.")
+    return 0
+```
+
+### 5. Auto-detect starting iteration number from filename
 
 Use the same regex already in `test_migration_and_continue.py`:
 
@@ -116,17 +155,27 @@ starting_iteration = int(match.group(1)) if match else 0
 
 Output files continue from `starting_iteration + 1`.
 
-### 5. `--save-iterations` flag controls intermediate file export
+### 6. `--save-iterations` flag controls intermediate file export
 
-- **Default (flag absent):** only the final converged file is saved. No intermediate files.
-- **`--save-iterations`:** saves `_iteration{N}_refined_contours.h5` after each optimization step.
+- **Default (flag absent):** only the final converged file is saved (the one with
+  `pending_migration=False`). No intermediate files are written.
+- **`--save-iterations`:** saves `_iteration{N}_refined_contours.h5` after every
+  detect+export step regardless of whether migration is pending.
 
-**Important note for the implementer:** When `--save-iterations` is not set, intermediate
-checkpoints are not written, which means the run cannot be resumed mid-way. For long
-production runs the user should consider enabling this flag as a safety net.
+**Important:** When `--save-iterations` is not set, intermediate checkpoints are not
+written, which means the run cannot be resumed if it is interrupted mid-way. For long
+production runs, enable this flag as a safety net.
 
-Optional enhancement (not required but clean): `--save-every N` saves only every N-th
-iteration instead of all of them.
+The export is always written unconditionally when:
+- `pending_migration=False` (convergence): this IS the final result.
+- The loop reaches `max_iterations`: force-export the last state.
+
+```python
+is_last_iteration = (topology_iteration + 1 == args.max_iterations)
+should_export = args.save_iterations or (not pending_migration) or is_last_iteration
+if should_export:
+    export_intermediate_state(..., pending_migration=pending_migration)
+```
 
 ---
 
@@ -143,7 +192,7 @@ iteration instead of all of them.
 | `n_partitions` attr | int | Number of partition cells |
 | `seed`, `lambda_penalty`, etc. | attrs | Run metadata |
 
-**Detection:** presence of `x_opt` key identifies this as a base solution file.
+**Detection:** presence of `x_opt` key → base solution file → enter at Optimize.
 
 ### Iteration checkpoint file (output of the unified script)
 
@@ -151,7 +200,8 @@ iteration instead of all of them.
 |-----------|------|-------------|
 | `lambda_parameters` | dataset | Optimized VP λ values (active VPs only) |
 | `vp_edges` | dataset | Edge indices per VP `(n_vps, 2)` int64 |
-| `indicator_functions` | dataset | Updated vertex-cell labels `(N, n_cells)` after migration |
+| `indicator_functions` | dataset | Vertex-cell labels `(N, n_cells)` for current topology |
+| `pending_migration` attr | bool | **True** = migration was detected, not yet applied; **False** = converged |
 | `n_variable_points` attr | int | Number of active VPs |
 | `n_cells` attr | int | Number of partition cells |
 | `final_perimeter` attr | float | Perimeter at export time |
@@ -162,27 +212,12 @@ iteration instead of all of them.
 | `optimization_info/` group | group | `initial_perimeter`, `final_perimeter`, `perimeter_reduction`, `percent_reduction`, `constraint_violations` |
 | (legacy) migration history | group | Saved by `save_type2_migration_history()` if `--use-legacy` |
 
-**Detection:** presence of `lambda_parameters` key (and absence of `x_opt`) identifies
-this as an iteration checkpoint.
+**Detection:** presence of `lambda_parameters` key (and absence of `x_opt`) → iteration
+checkpoint. Read `pending_migration` to determine entry point.
 
-**Critical:** the `indicator_functions` in iteration files reflect the topology **after
-migration** (from the previous iteration). This is what allows correct resume: when you
-load an iteration file, the indicators describe the migrated topology that needs to be
-optimized next.
-
-**Wait — contradiction with design decision #2?**
-
-This is a subtle but important point. The iteration file is saved pre-migration (step 2 of
-the current iteration). But to correctly resume from it, the file needs to represent the
-*pre-migration* state of the current topology. When this file is loaded:
-- `indicator_functions` = the topology that was just optimized (pre-migration)
-- `lambda_parameters` = the optimized VP positions on that topology
-- First action on resume = run migration on this topology, then optimize the result
-
-So the `indicator_functions` in the file describe the **pre-migration** topology of the
-iteration that was saved. This is consistent. The data_loader.py `load_partition_from_refined_file`
-handles this correctly — it reads `indicator_functions` from the file and uses them to
-reconstruct the partition.
+**What `indicator_functions` contains:** the topology of the iteration that was just
+optimized — i.e., the state **before** the pending migration. When the checkpoint is
+loaded for resume, this topology is reconstructed and migration is applied to it first.
 
 ---
 
@@ -190,19 +225,22 @@ reconstruct the partition.
 
 ### Feature 1: Load from iteration checkpoint
 
-Replace the load block in `main()` with conditional logic:
+Replace the load block in `main()` with the three-way conditional:
 
 ```python
 import h5py, re
 
 def detect_file_type(path):
     with h5py.File(path, 'r') as f:
-        return 'base' if 'x_opt' in f else 'checkpoint'
+        if 'x_opt' in f:
+            return 'base'
+        pending = bool(f.attrs.get('pending_migration', True))
+        return 'checkpoint_pending' if pending else 'checkpoint_converged'
 
 file_type = detect_file_type(args.solution)
 
 if file_type == 'base':
-    # existing ContourAnalyzer path (already in refine_perimeter_iterative.py)
+    # Existing ContourAnalyzer path (already in refine_perimeter_iterative.py)
     analyzer = ContourAnalyzer(args.solution)
     analyzer.load_results(use_initial_condition=False)
     mesh = TriMesh(analyzer.vertices, analyzer.faces)
@@ -210,107 +248,128 @@ if file_type == 'base':
     _, boundary_topology = analyzer.extract_contours_with_topology()
     partition = PartitionContour(mesh, indicators, boundary_topology=boundary_topology)
     starting_iteration = 0
-    resume_mode = False
-else:
-    # carry over from test_migration_and_continue.py
+    enter_at = 'optimize'
+
+elif file_type == 'checkpoint_pending':
+    # Carry over from test_migration_and_continue.py
     from examples.data_loader import load_partition_from_refined_file
     mesh, partition = load_partition_from_refined_file(args.solution, verbose=True)
     match = re.search(r'_iteration(\d+)_refined_contours\.h5$', args.solution)
     starting_iteration = int(match.group(1)) if match else 1
-    resume_mode = True
+    enter_at = 'migrate'
+
+elif file_type == 'checkpoint_converged':
+    logger.info("Input file is a converged result (pending_migration=False). Nothing to do.")
+    return 0
 ```
 
-### Feature 2: Resume entry point
+### Feature 2: Unified loop with `enter_at` control
 
-The main loop needs a one-time flag for the resume case. On the first pass of a resumed
-run, skip optimization (it was already done before the file was saved) and go straight to
-detection and migration:
+The main loop handles both entry points cleanly with a one-time flag:
 
 ```python
-skip_optimize_this_iteration = resume_mode  # True only on first pass of a resume
+first_pass = True
 
 while not converged and topology_iteration < args.max_iterations:
     iteration_number = starting_iteration + topology_iteration + 1
 
-    if not skip_optimize_this_iteration:
-        # Phase 1: Optimize
-        ...
-        # Phase 2: Export (conditional on --save-iterations or last iteration)
-        ...
-    else:
-        # Resuming: load opt_info from the checkpoint file for logging continuity
-        skip_optimize_this_iteration = False
+    # ---- ENTRY POINT: MIGRATE (resume from checkpoint) ----
+    if first_pass and enter_at == 'migrate':
+        apply_migrations(...)   # migrate the loaded topology
+        first_pass = False
+        topology_iteration += 1
+        continue                # loop back to optimize
 
-    # Phase 3: Detect + migrate (always runs)
-    ...
+    first_pass = False
+
+    # ---- PHASE 1: Optimize ----
+    optimize(...)
+
+    # ---- PHASE 2: Detect ----
+    pending_migration = detect_switches(...)
+
+    # ---- PHASE 3: Export ----
+    is_last = (topology_iteration + 1 == args.max_iterations)
+    if args.save_iterations or not pending_migration or is_last:
+        export(..., pending_migration=pending_migration)
+
+    # ---- PHASE 4: Check convergence ----
+    if not pending_migration:
+        converged = True
+        break
+
+    # ---- PHASE 5: Migrate ----
+    apply_migrations(...)
+    topology_iteration += 1
 ```
 
-### Feature 3: Starting iteration number and output naming
+### Feature 3: `pending_migration` attribute in export
+
+In `export_intermediate_state`, add the flag to the HDF5 file:
+
+```python
+with h5py.File(output_path, 'w') as f:
+    # ... existing datasets ...
+    f.attrs['pending_migration'] = bool(pending_migration)
+```
+
+This attribute is the key that makes every checkpoint self-describing.
+
+### Feature 4: Starting iteration number and output naming
 
 ```python
 iteration_number = starting_iteration + topology_iteration + 1
 output_file = f"{base_output}_btol{args.boundary_tol}_iteration{iteration_number}_refined_contours.h5"
 ```
 
-### Feature 4: `--save-iterations` flag
+### Feature 5: `--save-iterations` argument
 
-Add to argument parser:
 ```python
 parser.add_argument('--save-iterations', action='store_true',
     help='Save an HDF5 checkpoint after each optimization step. '
-         'Required for mid-run resume. Default: off (only final result saved).')
+         'Enables mid-run resume. Default: off (only final converged result saved).')
 ```
 
-In the loop, gate the export:
-```python
-should_export = args.save_iterations or no_switches_detected or topology_iteration + 1 == args.max_iterations
-if should_export:
-    export_intermediate_state(...)
-```
-
-Always export on convergence and on the last iteration regardless of the flag.
-
-### Feature 5: `_check_indicator_vp_consistency` after migration
+### Feature 6: `_check_indicator_vp_consistency` after migration
 
 Copy this function verbatim from `test_migration_and_continue.py` (lines 519–567).
-Call it after the migration phase (Phase 4), before the next optimization:
+Call it after Phase 5 (migration), before the next iteration's optimization:
 
 ```python
 _check_indicator_vp_consistency(partition, mesh, logger)
 ```
 
-### Feature 6: Perimeter roundtrip check in `export_intermediate_state`
+### Feature 7: Perimeter roundtrip check in `export_intermediate_state`
 
-The current `export_intermediate_state` in `refine_perimeter_iterative.py` does not
-do a roundtrip check. After writing the HDF5 file, add the roundtrip block from
+After the HDF5 file is written and closed, add the roundtrip block from
 `test_migration_and_continue.py`'s `export_results` function (lines 637–673):
 
 ```python
-# After h5py.File write closes:
 try:
     from examples.data_loader import load_partition_from_refined_file
     mesh_r, partition_r = load_partition_from_refined_file(output_path, verbose=False)
-    # ... recompute perimeter and compare to opt_info['final_perimeter']
+    # recompute perimeter from reloaded state and compare to opt_info['final_perimeter']
 except Exception as e:
     logger.warning(f"Roundtrip check skipped: {e}")
 ```
 
-### Feature 7: `rebuild_triangle_segments_from_current_vps()` after Type 2 (legacy path)
+### Feature 8: `rebuild_triangle_segments_from_current_vps()` after Type 2 (legacy path)
 
-In `apply_type2_migrations` (legacy path), after each successful Type 2 migration, call:
+In `apply_type2_migrations` (legacy path), after each successful Type 2 migration:
+
 ```python
 partition.rebuild_triangle_segments_from_current_vps()
 ```
-This is present in `test_migration_and_continue.py` but missing from
-`refine_perimeter_iterative.py`.
 
-### Feature 8: `boundary_segments` drift check after Type 2 (legacy path)
+Present in `test_migration_and_continue.py`, missing from `refine_perimeter_iterative.py`.
+
+### Feature 9: `boundary_segments` drift check after Type 2 (legacy path)
 
 Copy the consistency check block from `test_migration_and_continue.py`'s
 `apply_type2_migrations` function (lines 376–408) into the equivalent function in
 `refine_perimeter_iterative.py`.
 
-### Feature 9: Pre-execution VP revalidation before Type 1 (legacy path)
+### Feature 10: Pre-execution VP revalidation before Type 1 (legacy path)
 
 In the Type 1 migration loop, before calling `switcher.apply_type1_switch_v2`, add the
 revalidation check from `test_migration_and_continue.py` (lines 221–239):
@@ -319,17 +378,16 @@ revalidation check from `test_migration_and_continue.py` (lines 221–239):
 for vp_idx in aux_vps:
     vp = partition.variable_points[vp_idx]
     if target_vertex not in vp.edge:
-        # skip this migration — earlier migration invalidated this plan entry
-        skip_migration = True
+        skip_migration = True  # earlier migration invalidated this plan entry
         break
 ```
 
-### Feature 10: Load migration history from file on resume (legacy path)
+### Feature 11: Load migration history from file on resume (legacy path)
 
-When `resume_mode=True` and `--use-legacy`, load the saved history:
+When `enter_at == 'migrate'` and `--use-legacy`:
 
 ```python
-if resume_mode and args.use_legacy and starting_iteration > 1:
+if enter_at == 'migrate' and args.use_legacy:
     try:
         with h5py.File(args.solution, 'r') as f:
             migration_history = load_type2_migration_history(f)
@@ -346,15 +404,18 @@ if resume_mode and args.use_legacy and starting_iteration > 1:
 | # | Change | Source |
 |---|--------|--------|
 | 1 | Dual loading: base solution OR iteration checkpoint | `test_migration_and_continue.py` |
-| 2 | Resume entry point (skip optimize on first pass) | new logic |
-| 3 | Auto-detect starting iteration from filename via regex | `test_migration_and_continue.py` |
-| 4 | `--save-iterations` flag; always export on convergence/last iter | new argument |
-| 5 | `_check_indicator_vp_consistency` after migration | `test_migration_and_continue.py` |
-| 6 | Perimeter roundtrip check in export function | `test_migration_and_continue.py` |
-| 7 | `rebuild_triangle_segments_from_current_vps()` after Type 2 (legacy) | `test_migration_and_continue.py` |
-| 8 | `boundary_segments` drift check after Type 2 (legacy) | `test_migration_and_continue.py` |
-| 9 | Pre-execution VP revalidation before Type 1 (legacy) | `test_migration_and_continue.py` |
-| 10 | Load migration history from file on resume (legacy) | `test_migration_and_continue.py` |
+| 2 | `checkpoint_converged` early-exit (pending_migration=False) | new logic |
+| 3 | Unified loop with `enter_at` control for resume | new logic |
+| 4 | `pending_migration` attr written to every exported file | new — core design |
+| 5 | Detection moved before export (so file knows its own state) | design change |
+| 6 | Auto-detect starting iteration from filename via regex | `test_migration_and_continue.py` |
+| 7 | `--save-iterations` flag; always export on convergence/last iter | new argument |
+| 8 | `_check_indicator_vp_consistency` after migration | `test_migration_and_continue.py` |
+| 9 | Perimeter roundtrip check in export function | `test_migration_and_continue.py` |
+| 10 | `rebuild_triangle_segments_from_current_vps()` after Type 2 (legacy) | `test_migration_and_continue.py` |
+| 11 | `boundary_segments` drift check after Type 2 (legacy) | `test_migration_and_continue.py` |
+| 12 | Pre-execution VP revalidation before Type 1 (legacy) | `test_migration_and_continue.py` |
+| 13 | Load migration history from file on resume (legacy) | `test_migration_and_continue.py` |
 
 ---
 
