@@ -49,6 +49,63 @@ except ImportError:
     from core import vectorized_steiner
 
 
+class IPOPTProblemAdapter:
+    """Wraps PerimeterOptimizer callbacks into the cyipopt problem interface.
+
+    cyipopt requires a class with specific method names (objective, gradient,
+    constraints, jacobian, jacobianstructure). This adapter delegates to the
+    existing PerimeterOptimizer methods, which handle the active/inactive VP
+    mapping internally.
+    """
+
+    def __init__(self, optimizer: 'PerimeterOptimizer'):
+        self._opt = optimizer
+        self._pa = optimizer._arrays   # PartitionArrays snapshot
+
+    def objective(self, x: np.ndarray) -> float:
+        return self._opt.objective(x)
+
+    def gradient(self, x: np.ndarray) -> np.ndarray:
+        return self._opt.objective_gradient(x)
+
+    def constraints(self, x: np.ndarray) -> np.ndarray:
+        return self._opt.constraint_area_equality(x)
+
+    def jacobianstructure(self) -> tuple:
+        """Pre-computed sparsity pattern — called once at setup."""
+        return (self._pa.jac_row, self._pa.jac_col)
+
+    def jacobian(self, x: np.ndarray) -> np.ndarray:
+        """Return non-zero Jacobian values in jacobianstructure() order.
+
+        Phase 1: compute the dense Jacobian and extract non-zeros by indexing.
+        This is correct and fast enough at current scale. Phase 2 will replace
+        this with a direct sparse computation.
+        """
+        J_dense = self._opt.constraint_area_jacobian(x)   # (n_cells-1, n_vp)
+        dense_mb = J_dense.nbytes / 1e6
+        if dense_mb > 50:
+            import warnings
+            warnings.warn(
+                f"IPOPT Jacobian: dense matrix is {dense_mb:.0f} MB. "
+                f"Implement Phase 2 (sparse Jacobian) for better scaling. "
+                f"See docs/IPOPT_INTEGRATION_PLAN.md, Section 4, Phase 2.",
+                stacklevel=2,
+            )
+        return J_dense[self._pa.jac_row, self._pa.jac_col]
+
+    def intermediate(self, alg_mod, iter_count, obj_value,
+                     inf_pr, inf_du, mu, d_norm,
+                     regularization_size, alpha_du, alpha_pr, ls_trials):
+        """Called by IPOPT after each iteration. Log progress."""
+        import logging
+        logger = logging.getLogger(__name__)
+        if iter_count % 10 == 0:
+            logger.info(f"IPOPT iter {iter_count}: obj={obj_value:.6f}, "
+                        f"constr_viol={inf_pr:.2e}")
+        return True
+
+
 class PerimeterOptimizer:
     """
     Constrained perimeter minimization optimizer for partition refinement.
@@ -308,8 +365,9 @@ class PerimeterOptimizer:
         """
         Run constrained perimeter optimization.
         
-        Uses scipy.optimize.minimize with:
-        - Method: SLSQP (Sequential Least Squares Programming) by default
+        Uses scipy.optimize.minimize (SLSQP / trust-constr) or cyipopt.Problem
+        (ipopt) to minimize total perimeter subject to equal-area constraints.
+        
         - Objective: Total perimeter
         - Constraints: Equal area for each cell (n-1 constraints)
         - Bounds: λ ∈ [0, 1] for all variable points
@@ -317,7 +375,8 @@ class PerimeterOptimizer:
         Args:
             max_iter: Maximum number of iterations
             tol: Convergence tolerance
-            method: Optimization method ('SLSQP' or 'trust-constr')
+            method: Optimization method — 'SLSQP', 'trust-constr', or 'ipopt'.
+                'ipopt' requires the cyipopt package and vectorized evaluation.
             
         Returns:
             scipy OptimizeResult object
@@ -356,29 +415,93 @@ class PerimeterOptimizer:
         
         # Run optimization
         start_time = time.time()
-        
-        # Set method-specific options
-        if method == 'SLSQP':
-            options = {'maxiter': max_iter, 'ftol': tol, 'disp': True}
-        elif method == 'trust-constr':
-            # trust-constr uses 'gtol' for gradient tolerance and 'xtol' for x tolerance
-            # 'maxiter' is also supported
-            options = {'maxiter': max_iter, 'gtol': tol, 'xtol': tol, 'disp': True}
+
+        if method == 'ipopt':
+            # ---- IPOPT path (does NOT call scipy minimize) ----
+            try:
+                import cyipopt
+            except ImportError:
+                raise ImportError(
+                    "IPOPT requested but cyipopt is not installed.\n"
+                    "Install with: pip install cyipopt"
+                )
+
+            if self._arrays is None:
+                raise RuntimeError(
+                    "IPOPT requires vectorized evaluation. "
+                    "Do not pass --no-vectorized when using --method ipopt."
+                )
+
+            n = len(lambda0)
+            m = self.partition.n_cells - 1
+
+            adapter = IPOPTProblemAdapter(self)
+
+            problem = cyipopt.Problem(
+                n=n,
+                m=m,
+                problem_obj=adapter,
+                lb=np.zeros(n),
+                ub=np.ones(n),
+                cl=np.zeros(m),
+                cu=np.zeros(m),
+            )
+
+            problem.add_option('hessian_approximation', 'limited-memory')
+            problem.add_option('mu_strategy', 'adaptive')
+            problem.add_option('tol', tol)
+            problem.add_option('acceptable_tol', tol * 100)
+            problem.add_option('max_iter', max_iter)
+            problem.add_option('print_level', 3)
+
+            # cyipopt logs every callback invocation at INFO; raise threshold to
+            # WARNING so the per-iteration callback noise is suppressed in normal
+            # use and only appears with --log-level DEBUG.
+            import logging as _logging
+            _cyipopt_logger = _logging.getLogger('cyipopt')
+            _cyipopt_prev_level = _cyipopt_logger.level
+            _cyipopt_logger.setLevel(_logging.WARNING)
+
+            x_opt, info = problem.solve(lambda0)
+
+            _cyipopt_logger.setLevel(_cyipopt_prev_level)
+
+            ipopt_status = info['status']
+            success = ipopt_status in (0, 1)
+            msg = info.get('status_msg', '')
+            if isinstance(msg, bytes):
+                msg = msg.decode()
+
+            result = OptimizeResult(
+                x=x_opt,
+                success=success,
+                message=msg,
+                fun=info['obj_val'],
+                nit=-1,
+                nfev=-1,
+                status=ipopt_status,
+            )
+
         else:
-            # Default options for other methods
-            options = {'maxiter': max_iter, 'disp': True}
-        
-        result = minimize(
-            fun=self.objective,
-            x0=lambda0,
-            method=method,
-            jac=self.objective_gradient,
-            bounds=bounds,
-            constraints=constraints,
-            callback=self._callback,
-            options=options
-        )
-        
+            # ---- scipy path (SLSQP / trust-constr) ----
+            if method == 'SLSQP':
+                options = {'maxiter': max_iter, 'ftol': tol, 'disp': True}
+            elif method == 'trust-constr':
+                options = {'maxiter': max_iter, 'gtol': tol, 'xtol': tol, 'disp': True}
+            else:
+                options = {'maxiter': max_iter, 'disp': True}
+
+            result = minimize(
+                fun=self.objective,
+                x0=lambda0,
+                method=method,
+                jac=self.objective_gradient,
+                bounds=bounds,
+                constraints=constraints,
+                callback=self._callback,
+                options=options,
+            )
+
         elapsed_time = time.time() - start_time
         
         # Sync optimized lambdas back to the object representation
@@ -427,6 +550,7 @@ class PerimeterOptimizer:
         
         return {
             'success': bool(result.success),
+            'status': int(result.status) if hasattr(result, 'status') and result.status is not None else None,
             'n_iterations': int(result.nit),
             'n_function_evals': int(result.nfev),
             'final_perimeter': float(final_perimeter),

@@ -1183,6 +1183,49 @@ class PartitionContour:
                         f"{len(seg_vp1)} segments, {n_btri} boundary-triangle rows, "
                         f"{n_tp} triple points")
 
+        # 8. Jacobian sparsity pattern for IPOPT
+        n_constrained = self.n_cells - 1
+
+        if n_btri > 0:
+            btri_mask = btri_cell < n_constrained
+            rows_reg = np.concatenate([btri_cell[btri_mask], btri_cell[btri_mask]])
+            cols_reg = np.concatenate([btri_vp1[btri_mask], btri_vp2[btri_mask]])
+        else:
+            rows_reg = np.empty(0, dtype=np.int32)
+            cols_reg = np.empty(0, dtype=np.int32)
+
+        if n_tp > 0:
+            tp_rows_l, tp_cols_l = [], []
+            for tp_i in range(n_tp):
+                vps_i = tp_vp_indices[tp_i]
+                cells_i = tp_contrib_cell[tp_contrib_tp_idx == tp_i]
+                for c in cells_i:
+                    if c < n_constrained:
+                        for v in vps_i:
+                            tp_rows_l.append(c)
+                            tp_cols_l.append(v)
+            rows_tp = np.array(tp_rows_l, dtype=np.int32) if tp_rows_l else np.empty(0, dtype=np.int32)
+            cols_tp = np.array(tp_cols_l, dtype=np.int32) if tp_cols_l else np.empty(0, dtype=np.int32)
+        else:
+            rows_tp = np.empty(0, dtype=np.int32)
+            cols_tp = np.empty(0, dtype=np.int32)
+
+        all_rows = np.concatenate([rows_reg, rows_tp])
+        all_cols = np.concatenate([cols_reg, cols_tp])
+
+        if len(all_rows) > 0:
+            pairs = np.unique(
+                np.stack([all_rows, all_cols], axis=1), axis=0
+            )
+            jac_row = pairs[:, 0].astype(np.int32)
+            jac_col = pairs[:, 1].astype(np.int32)
+        else:
+            jac_row = np.empty(0, dtype=np.int32)
+            jac_col = np.empty(0, dtype=np.int32)
+
+        self.logger.info(f"  Jacobian sparsity: {len(jac_row)} non-zeros "
+                        f"(density {100 * len(jac_row) / max(1, n_constrained * n_active):.1f}%)")
+
         return PartitionArrays(
             vp_edge_v1=vp_edge_v1,
             vp_edge_v2=vp_edge_v2,
@@ -1212,6 +1255,8 @@ class PartitionContour:
             tp_contrib_vp2=tp_contrib_vp2,
             tp_contrib_mesh_vertex=tp_contrib_mesh_vertex,
             tp_affected_vps=tp_affected_vps,
+            jac_row=jac_row,
+            jac_col=jac_col,
         )
 
     def identify_triple_points(self) -> List[Tuple[int, List[int]]]:

@@ -71,3 +71,7 @@ class PartitionArrays:
     tp_contrib_mesh_vertex: np.ndarray  # int32 — mesh vertex for corner triangle
 
     tp_affected_vps: np.ndarray    # int32 — unique active VPs in any triple point
+
+    # --- Sparse Jacobian structure for IPOPT ---
+    jac_row: np.ndarray   # int32 (nnz,) — row (cell) index of each non-zero
+    jac_col: np.ndarray   # int32 (nnz,) — col (VP) index of each non-zero
