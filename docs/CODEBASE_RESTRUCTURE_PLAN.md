@@ -37,15 +37,15 @@ src/
 │   ├── tri_mesh.py                 (311 lines — mesh container + FEM)
 │   ├── mesh_topology.py            (204 lines — mesh connectivity)
 │   ├── interpolation.py            (23 lines — nearest-neighbor interp)
-│   ├── contour_partition.py        (1305 lines — VP, segments, partition)
+│   ├── contour_partition.py        (1398 lines — VP, segments, partition)
 │   ├── area_calculator.py          (511 lines — area computation)
 │   ├── perimeter_calculator.py     (274 lines — perimeter computation)
 │   ├── steiner_handler.py          (457 lines — triple point Steiner trees)
-│   ├── partition_arrays.py         (73 lines — flat NumPy snapshot for vectorized eval)
-│   ├── vectorized_area.py          (279 lines — vectorized area + Jacobian)
-│   ├── vectorized_perimeter.py     (94 lines — vectorized perimeter + gradient)
-│   ├── vectorized_steiner.py       (181 lines — analytical Steiner vectorized)
-│   ├── perimeter_optimizer.py      (846 lines — SLSQP perimeter optimization)
+│   ├── partition_arrays.py         (86 lines — flat NumPy snapshot for vectorized eval)
+│   ├── vectorized_area.py          (560 lines — vectorized area + Jacobian + Hessian)
+│   ├── vectorized_perimeter.py     (146 lines — vectorized perimeter + gradient + Hessian)
+│   ├── vectorized_steiner.py       (297 lines — analytical Steiner vectorized + FD Hessian)
+│   ├── perimeter_optimizer.py      (1064 lines — SLSQP/IPOPT perimeter optimization)
 │   ├── pgd_optimizer.py            (394 lines — projected gradient descent)
 │   ├── pyslsqp_optimizer.py        (306 lines — PySLSQP wrapper)
 │   ├── migration_types.py          (108 lines — migration dataclasses)
@@ -75,6 +75,7 @@ examples/
 ├── visualize_partition.py          (PyVista visualization of solutions)
 ├── visualize_type1_vertex_collapse.py (Type 1 migration visualization)
 ├── visualize_type2_triple_point.py (Type 2 migration visualization)
+├── visualize_partition_fast.py    (fast matplotlib partition visualization — added during IPOPT work)
 └── debug_archive/                  (7 archived debug scripts — low priority)
     ├── README.md
     ├── test_initial_partitions.py
@@ -121,7 +122,9 @@ src/
 │
 ├── optimization/            (all optimizers)
 │   ├── __init__.py
-│   ├── perimeter_optimizer.py (constrained perimeter minimization via SLSQP)
+│   ├── perimeter_optimizer.py (constrained perimeter minimization via SLSQP/IPOPT
+│   │                           + IPOPTProblemAdapter with sparse Jacobian,
+│   │                           exact Hessian, and best-iterate tracking)
 │   ├── pgd_optimizer.py     (projected gradient descent — Γ-convergence)
 │   ├── pyslsqp_optimizer.py (PySLSQP wrapper — Γ-convergence)
 │   └── projection.py        (orthogonal projection onto constraints)
@@ -169,6 +172,7 @@ examples/
 ├── visualize_partition.py          (PyVista visualization)
 ├── visualize_type1_vertex_collapse.py
 ├── visualize_type2_triple_point.py
+├── visualize_partition_fast.py          (fast matplotlib partition visualization)
 └── debug_archive/                  (unchanged — archived debug scripts)
 ```
 
@@ -182,10 +186,14 @@ Everything that defines and measures a partition on a mesh. This includes:
 - **Contour extraction** (`find_contours.py`): the bridge between Phase 1 relaxation output and the `PartitionContour` structure. Placed here because its `BoundaryTriangleInfo` is imported by `contour_partition.py` and its output feeds directly into `PartitionContour` construction.
 - **Core representation** (`contour_partition.py`): `VariablePoint`, `TriangleSegment`, `PartitionContour`.
 - **OO calculators** (`area_calculator.py`, `perimeter_calculator.py`, `steiner_handler.py`): measure partition properties.
-- **Vectorized evaluation** (`partition_arrays.py`, `vectorized_area.py`, `vectorized_perimeter.py`, `vectorized_steiner.py`): flat NumPy fast-path for the same area/perimeter/Steiner computations, used by the SLSQP optimizer for performance.
+- **Vectorized evaluation** (`partition_arrays.py`, `vectorized_area.py`, `vectorized_perimeter.py`, `vectorized_steiner.py`): flat NumPy fast-path for the same area/perimeter/Steiner computations, used by the optimizer for performance. `partition_arrays.py` also stores Jacobian sparsity (`jac_row`, `jac_col`, `nnz_lookup`) and Hessian sparsity (`hess_row`, `hess_col`, `hess_offset_map`) structures for IPOPT. The vectorized modules provide both dense-returning functions (for SLSQP) and sparse-returning functions (for IPOPT's `jacobian()` / `hessian()` callbacks).
 
 ### `optimization/` — Optimizers
 All optimization algorithms: the two Γ-convergence optimizers (`pgd_optimizer`, `pyslsqp_optimizer`), the perimeter optimizer (Section 5 of the paper), and the projection onto constraints. These share a common pattern (minimize a functional subject to constraints) but operate at different stages of the pipeline. `projection_iterative.py` is renamed to `projection.py` for clarity.
+
+`perimeter_optimizer.py` now contains both the `PerimeterOptimizer` class and the `IPOPTProblemAdapter` class. The adapter wraps optimizer callbacks into the cyipopt problem interface, providing sparse Jacobian evaluation (via `compute_area_jacobian_sparse()` and `compute_steiner_area_jacobian_sparse()`), exact Hessian of the Lagrangian (via `compute_perimeter_hessian_sparse()`, `compute_area_hessian_sparse()`, plus finite-difference Steiner Hessian contributions), and best-iterate tracking. The `optimize()` method accepts `method='ipopt'` with options `exact_hessian`, `best_iterate`, and `lbfgs_memory`.
+
+**Future split (not blocking):** Consider extracting `IPOPTProblemAdapter` into a dedicated `optimization/ipopt_adapter.py`. This would isolate the `cyipopt` dependency from the SLSQP path and keep `perimeter_optimizer.py` focused on the solver-agnostic `PerimeterOptimizer` class.
 
 ### `migration/` — Topology Switches
 The modular migration system that replaces the legacy monolithic `topology_switcher.py`. Fully self-contained with clear internal layering:
@@ -317,8 +325,9 @@ The topology switch system is implemented and under active testing. The restruct
 
 1. Design the `PipelineOrchestrator` API: inputs (config, surface, mesh resolutions, seeds), outputs (HDF5 paths, final partition state, per-stage logs).
 2. Implement `src/pipeline/pipeline_orchestrator.py` to chain all four stages.
-3. Refactor `examples/find_surface_partition.py` and `examples/refine_perimeter.py` into thin CLI wrappers that call `PipelineOrchestrator`.
-4. Optionally add `examples/run_full_pipeline.py` as a single end-to-end entry point.
+3. The orchestrator API must expose IPOPT-specific options that are currently CLI flags in `testing/refine_perimeter_iterative.py` and parameters on `PerimeterOptimizer.optimize()`: `method` (`'SLSQP'` vs `'ipopt'`), `exact_hessian`, `best_iterate`, `lbfgs_memory`, and `allow_partial_convergence`.
+4. Refactor `examples/find_surface_partition.py` and `examples/refine_perimeter.py` into thin CLI wrappers that call `PipelineOrchestrator`.
+5. Optionally add `examples/run_full_pipeline.py` as a single end-to-end entry point.
 
 ### Cleanup pass (any phase)
 
@@ -327,6 +336,10 @@ The topology switch system is implemented and under active testing. The restruct
 - Fix `pyproject.toml` version mismatch (`0.1.0` → `0.2.0`) and `testpaths` (points to nonexistent `tests/`; should be `testing/`).
 - Remove the broken link to `docs/PERIMETER_REFINEMENT.md` from `README.md`.
 - Fix the typo on line 23 of `parameters/input.yaml` (`# Optimization parametersJeez`).
+
+### Dependencies
+
+`cyipopt` is an optional dependency required for `--method ipopt`. The restructure is a good time to formalize this in `pyproject.toml` as an optional extra (e.g. `pip install .[ipopt]`). Core functionality (SLSQP path, Γ-convergence, migration) must remain usable without `cyipopt` installed. The `IPOPTProblemAdapter` import is already guarded by a `try/except ImportError` in `perimeter_optimizer.py`.
 
 ## Dependency Flow Between Subpackages
 
@@ -344,3 +357,5 @@ visualization/ (standalone, no src/ deps)
 ```
 
 No circular dependencies. Each arrow means "imports from." `pipeline/` sits at the top of the dependency tree and is the only layer that `examples/` scripts need to import directly.
+
+**Note on `optimization/ → partition/` coupling:** `IPOPTProblemAdapter.jacobian()` and `_hessian_impl()` call directly into `partition/vectorized_area`, `partition/vectorized_perimeter`, and `partition/vectorized_steiner` (not just indirectly through `PerimeterOptimizer`'s existing methods). This is intentional — the adapter needs the sparse-output variants (`compute_area_jacobian_sparse`, `compute_steiner_area_jacobian_sparse`, `compute_perimeter_hessian_sparse`, etc.) that write directly into flat `(nnz,)` / `(hess_nnz,)` value arrays using the `nnz_lookup` and `hess_offset_map` tables. These sparse functions are distinct from the dense-returning public APIs used by the SLSQP path. The dependency is `optimization/ → partition/` (same direction as before), so no new circular risk.
