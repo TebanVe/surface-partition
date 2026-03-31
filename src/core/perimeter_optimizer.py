@@ -56,13 +56,29 @@ class IPOPTProblemAdapter:
     constraints, jacobian, jacobianstructure). This adapter delegates to the
     existing PerimeterOptimizer methods, which handle the active/inactive VP
     mapping internally.
+
+    Best-iterate tracking
+    ---------------------
+    When ``track_best=True``, the adapter records the best (objective, x) pair
+    seen during the solve, considering only iterates with constraint violation
+    below ``best_feas_tol``.  After ``problem.solve()`` returns, the caller can
+    check ``best_x`` / ``best_obj`` and substitute them into the result if the
+    returned iterate is worse.
     """
 
-    def __init__(self, optimizer: 'PerimeterOptimizer'):
+    def __init__(self, optimizer: 'PerimeterOptimizer',
+                 track_best: bool = False, best_feas_tol: float = 1e-6):
         self._opt = optimizer
         self._pa = optimizer._arrays   # PartitionArrays snapshot
+        self._track_best = track_best
+        self._best_feas_tol = best_feas_tol
+        self.best_obj: float = np.inf
+        self.best_x: Optional[np.ndarray] = None
+        self._last_x: Optional[np.ndarray] = None
 
     def objective(self, x: np.ndarray) -> float:
+        if self._track_best:
+            self._last_x = x.copy()
         return self._opt.objective(x)
 
     def gradient(self, x: np.ndarray) -> np.ndarray:
@@ -97,12 +113,20 @@ class IPOPTProblemAdapter:
     def intermediate(self, alg_mod, iter_count, obj_value,
                      inf_pr, inf_du, mu, d_norm,
                      regularization_size, alpha_du, alpha_pr, ls_trials):
-        """Called by IPOPT after each iteration. Log progress."""
+        """Called by IPOPT after each iteration. Log progress and track best."""
         import logging
         logger = logging.getLogger(__name__)
         if iter_count % 10 == 0:
             logger.info(f"IPOPT iter {iter_count}: obj={obj_value:.6f}, "
                         f"constr_viol={inf_pr:.2e}")
+
+        if (self._track_best
+                and inf_pr < self._best_feas_tol
+                and obj_value < self.best_obj
+                and self._last_x is not None):
+            self.best_obj = obj_value
+            self.best_x = self._last_x.copy()
+
         return True
 
 
@@ -361,7 +385,9 @@ class PerimeterOptimizer:
             self.logger.info(f"Iteration {self.iteration}: Perimeter={obj_str}")
     
     def optimize(self, max_iter: int = 1000, tol: float = 1e-7,
-                method: str = 'SLSQP') -> OptimizeResult:
+                method: str = 'SLSQP',
+                lbfgs_memory: int = 6,
+                best_iterate: bool = False) -> OptimizeResult:
         """
         Run constrained perimeter optimization.
         
@@ -377,12 +403,22 @@ class PerimeterOptimizer:
             tol: Convergence tolerance
             method: Optimization method — 'SLSQP', 'trust-constr', or 'ipopt'.
                 'ipopt' requires the cyipopt package and vectorized evaluation.
+            lbfgs_memory: L-BFGS history size for IPOPT (default 6).
+                Higher values capture more curvature at the cost of memory.
+                Ignored for SLSQP / trust-constr.
+            best_iterate: If True, track the best feasible iterate during the
+                IPOPT solve and return it instead of the last iterate when the
+                last iterate is worse.  Prevents restoration-phase losses from
+                compounding across outer iterations.  Ignored for SLSQP /
+                trust-constr.
             
         Returns:
             scipy OptimizeResult object
         """
         self.logger.info(f"Starting perimeter optimization with method={method}")
         self.logger.info(f"  max_iter={max_iter}, tol={tol}")
+        if method == 'ipopt':
+            self.logger.info(f"  L-BFGS memory={lbfgs_memory}, best_iterate={best_iterate}")
         if self._use_active_mapping:
             self.logger.info(f"  Optimizing {self._n_active} active VPs "
                            f"(skipping {self._n_total - self._n_active} inactive)")
@@ -435,7 +471,8 @@ class PerimeterOptimizer:
             n = len(lambda0)
             m = self.partition.n_cells - 1
 
-            adapter = IPOPTProblemAdapter(self)
+            adapter = IPOPTProblemAdapter(
+                self, track_best=best_iterate, best_feas_tol=tol * 100)
 
             problem = cyipopt.Problem(
                 n=n,
@@ -448,6 +485,7 @@ class PerimeterOptimizer:
             )
 
             problem.add_option('hessian_approximation', 'limited-memory')
+            problem.add_option('limited_memory_max_history', lbfgs_memory)
             problem.add_option('mu_strategy', 'adaptive')
             problem.add_option('tol', tol)
             problem.add_option('acceptable_tol', tol * 100)
@@ -472,11 +510,25 @@ class PerimeterOptimizer:
             if isinstance(msg, bytes):
                 msg = msg.decode()
 
+            final_obj = info['obj_val']
+            final_x = x_opt
+
+            if (best_iterate
+                    and adapter.best_x is not None
+                    and adapter.best_obj < final_obj):
+                delta = final_obj - adapter.best_obj
+                self.logger.info(
+                    f"Best-iterate recovery: returning iter with "
+                    f"obj={adapter.best_obj:.6f} instead of final "
+                    f"obj={final_obj:.6f} (recovered {delta:.6f})")
+                final_x = adapter.best_x
+                final_obj = adapter.best_obj
+
             result = OptimizeResult(
-                x=x_opt,
+                x=final_x,
                 success=success,
                 message=msg,
-                fun=info['obj_val'],
+                fun=final_obj,
                 nit=-1,
                 nfev=-1,
                 status=ipopt_status,

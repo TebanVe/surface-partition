@@ -35,7 +35,7 @@ pgd_projection_max_iter: 200
 pgd_projection_tol: 1.0e-10
 
 # Refinement parameters
-refinement_levels: 10
+refinement_levels: 7
 n_radial_increment: 0
 n_angular_increment: 0
 use_analytic: true
@@ -62,9 +62,9 @@ allow_random_fallback: true
 projection_max_iter: 100
 
 # Matrix testing parameters
-test_barycentric: true
-test_stable: true
-test_stable_fem: true
+test_barycentric: false
+test_stable: false
+test_stable_fem: false
 matrix_test_output_dir: "matrix_test_results"
 
 # Logging parameters
@@ -89,5 +89,5 @@ n_theta: 60
 n_phi: 48
 R: 1.0
 r: 0.6
-n_theta_increment: 20
-n_phi_increment: 16
+n_theta_increment: 60
+n_phi_increment: 48

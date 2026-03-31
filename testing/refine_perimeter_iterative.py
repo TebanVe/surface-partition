@@ -757,12 +757,25 @@ Example usage:
                        choices=['SLSQP', 'trust-constr', 'ipopt'],
                        help='Optimization method (default: SLSQP)')
 
+    parser.add_argument('--lbfgs-memory', type=int, default=6,
+                       help='L-BFGS history size for IPOPT hessian approximation. '
+                            'Higher values capture more curvature but use more memory. '
+                            'IPOPT default is 6; try 20-50 for better refinement quality. '
+                            'Ignored for SLSQP / trust-constr.')
+
     parser.add_argument('--allow-partial-convergence', action='store_true',
                        help='When the optimizer hits max_iter (or another non-fatal stopping '
                             'condition) without fully converging, treat the result as '
                             'acceptable and continue to the migration phase rather than '
                             'stopping. Fatal IPOPT statuses (infeasible, diverged, NaN, etc.) '
                             'still halt the run. Ignored for SLSQP / trust-constr.')
+
+    parser.add_argument('--best-iterate', action='store_true',
+                       help='Track the best feasible iterate during IPOPT optimization and '
+                            'return it instead of the last iterate when the final point is '
+                            'worse (e.g. due to restoration phase). Prevents perimeter '
+                            'regressions between outer iterations. Ignored for SLSQP / '
+                            'trust-constr.')
 
     parser.add_argument('--use-legacy', action='store_true',
                        help='Use legacy TopologySwitcher')
@@ -1095,7 +1108,9 @@ Example usage:
         result = optimizer.optimize(
             max_iter=args.max_opt_iter,
             tol=args.tolerance,
-            method=args.method
+            method=args.method,
+            lbfgs_memory=args.lbfgs_memory,
+            best_iterate=args.best_iterate,
         )
         opt_elapsed = time.time() - opt_start_time
 
