@@ -264,6 +264,287 @@ def compute_area_jacobian_analytical(pa: PartitionArrays,
 # Area constraint Jacobian — public API (delegates to analytical)
 # =========================================================================
 
+def compute_area_jacobian_sparse(pa: PartitionArrays) -> np.ndarray:
+    """Compute area Jacobian non-zero values in jac_row/jac_col order.
+
+    Direct sparse computation — no dense matrix allocation.
+
+    Returns:
+        (nnz,) float64 — values at positions (pa.jac_row, pa.jac_col).
+    """
+    nnz = len(pa.jac_row)
+    values = np.zeros(nnz, dtype=np.float64)
+    pos = _compute_vp_positions(pa)
+    dim = pa.vertices.shape[1]
+
+    # --- 1-inside triangles ---
+    m1 = pa.btri_n_inside == 1
+    if np.any(m1):
+        p_in = pa.vertices[pa.btri_v_in[m1, 0]]
+        pc1 = pos[pa.btri_vp1[m1]]
+        pc2 = pos[pa.btri_vp2[m1]]
+
+        u = pc1 - p_in
+        v = pc2 - p_in
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m1]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m1]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m1]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m1]]])
+
+        if dim == 3:
+            cross_uv = np.cross(u, v)
+            norm_uv = np.maximum(np.linalg.norm(cross_uv, axis=1, keepdims=True), 1e-30)
+            n_hat = cross_uv / norm_uv
+            dA_dl1 = 0.5 * np.sum(n_hat * np.cross(d1, v), axis=1)
+            dA_dl2 = 0.5 * np.sum(n_hat * np.cross(u, d2), axis=1)
+        else:
+            signed_area = 0.5 * (u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0])
+            sign = np.sign(signed_area)
+            sign[sign == 0] = 1.0
+            dA_dl1 = sign * 0.5 * (d1[:, 0] * v[:, 1] - d1[:, 1] * v[:, 0])
+            dA_dl2 = sign * 0.5 * (u[:, 0] * d2[:, 1] - u[:, 1] * d2[:, 0])
+
+        cells = pa.btri_cell[m1]
+        vp1 = pa.btri_vp1[m1]
+        vp2 = pa.btri_vp2[m1]
+        mask = cells < (pa.n_cells - 1)
+
+        offsets1 = pa.nnz_lookup[cells[mask], vp1[mask]]
+        offsets2 = pa.nnz_lookup[cells[mask], vp2[mask]]
+        np.add.at(values, offsets1, dA_dl1[mask])
+        np.add.at(values, offsets2, dA_dl2[mask])
+
+    # --- 2-inside triangles ---
+    m2 = pa.btri_n_inside == 2
+    if np.any(m2):
+        p_in1 = pa.vertices[pa.btri_v_in[m2, 0]]
+        p_in2 = pa.vertices[pa.btri_v_in[m2, 1]]
+        pc1 = pos[pa.btri_vp1[m2]]
+        pc2 = pos[pa.btri_vp2[m2]]
+
+        u1 = pc1 - p_in1
+        v1 = pc2 - p_in1
+        u2 = pc2 - p_in1
+        v2 = p_in2 - p_in1
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m2]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m2]]])
+
+        if dim == 3:
+            cross1 = np.cross(u1, v1)
+            norm1 = np.maximum(np.linalg.norm(cross1, axis=1, keepdims=True), 1e-30)
+            n1 = cross1 / norm1
+
+            cross2 = np.cross(u2, v2)
+            norm2 = np.maximum(np.linalg.norm(cross2, axis=1, keepdims=True), 1e-30)
+            n2 = cross2 / norm2
+
+            dA_dl1 = 0.5 * np.sum(n1 * np.cross(d1, v1), axis=1)
+            dA_dl2 = (0.5 * np.sum(n1 * np.cross(u1, d2), axis=1)
+                      + 0.5 * np.sum(n2 * np.cross(d2, v2), axis=1))
+        else:
+            sa1 = 0.5 * (u1[:, 0] * v1[:, 1] - u1[:, 1] * v1[:, 0])
+            s1 = np.sign(sa1); s1[s1 == 0] = 1.0
+            sa2 = 0.5 * (u2[:, 0] * v2[:, 1] - u2[:, 1] * v2[:, 0])
+            s2 = np.sign(sa2); s2[s2 == 0] = 1.0
+            dA_dl1 = s1 * 0.5 * (d1[:, 0] * v1[:, 1] - d1[:, 1] * v1[:, 0])
+            dA_dl2 = (s1 * 0.5 * (u1[:, 0] * d2[:, 1] - u1[:, 1] * d2[:, 0])
+                      + s2 * 0.5 * (d2[:, 0] * v2[:, 1] - d2[:, 1] * v2[:, 0]))
+
+        cells = pa.btri_cell[m2]
+        vp1 = pa.btri_vp1[m2]
+        vp2 = pa.btri_vp2[m2]
+        mask = cells < (pa.n_cells - 1)
+
+        offsets1 = pa.nnz_lookup[cells[mask], vp1[mask]]
+        offsets2 = pa.nnz_lookup[cells[mask], vp2[mask]]
+        np.add.at(values, offsets1, dA_dl1[mask])
+        np.add.at(values, offsets2, dA_dl2[mask])
+
+    return values
+
+
+def compute_area_hessian_sparse(pa: PartitionArrays,
+                                multipliers: np.ndarray) -> np.ndarray:
+    """Compute multiplier-weighted area constraint Hessian: sum_k mu_k * d2A_k/dlam_i dlam_j.
+
+    Args:
+        pa: PartitionArrays snapshot
+        multipliers: (n_cells-1,) float64 — Lagrange multipliers from IPOPT
+
+    Returns:
+        (hess_nnz,) float64 — values at positions (pa.hess_row, pa.hess_col).
+    """
+    hess_nnz = len(pa.hess_row)
+    values = np.zeros(hess_nnz, dtype=np.float64)
+    pos = _compute_vp_positions(pa)
+    dim = pa.vertices.shape[1]
+    n_c = pa.n_cells - 1
+
+    # --- 1-inside triangles ---
+    m1 = pa.btri_n_inside == 1
+    if np.any(m1):
+        p_in = pa.vertices[pa.btri_v_in[m1, 0]]
+        pc1 = pos[pa.btri_vp1[m1]]
+        pc2 = pos[pa.btri_vp2[m1]]
+
+        u = pc1 - p_in
+        v = pc2 - p_in
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m1]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m1]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m1]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m1]]])
+
+        if dim == 3:
+            C = np.cross(u, v)
+            normC = np.maximum(np.linalg.norm(C, axis=1), 1e-30)
+            n_hat = C / normC[:, None]
+
+            g1 = np.cross(d1, v)
+            g2 = np.cross(u, d2)
+            d1xd2 = np.cross(d1, d2)
+
+            n_dot_g1 = np.sum(n_hat * g1, axis=1)
+            n_dot_g2 = np.sum(n_hat * g2, axis=1)
+            g1_dot_g1 = np.sum(g1 * g1, axis=1)
+            g2_dot_g2 = np.sum(g2 * g2, axis=1)
+            g1_dot_g2 = np.sum(g1 * g2, axis=1)
+            n_dot_d1xd2 = np.sum(n_hat * d1xd2, axis=1)
+
+            H_11 = (g1_dot_g1 - n_dot_g1**2) / (2.0 * normC)
+            H_22 = (g2_dot_g2 - n_dot_g2**2) / (2.0 * normC)
+            H_12 = ((g1_dot_g2 - n_dot_g1 * n_dot_g2) / normC + n_dot_d1xd2) / 2.0
+        else:
+            C_scalar = u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
+            normC = np.maximum(np.abs(C_scalar), 1e-30)
+            sign = np.sign(C_scalar)
+            sign[sign == 0] = 1.0
+
+            g1_scalar = d1[:, 0] * v[:, 1] - d1[:, 1] * v[:, 0]
+            g2_scalar = u[:, 0] * d2[:, 1] - u[:, 1] * d2[:, 0]
+            d1xd2_scalar = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
+
+            H_11 = (g1_scalar**2 - (sign * g1_scalar)**2) / (2.0 * normC)
+            H_22 = (g2_scalar**2 - (sign * g2_scalar)**2) / (2.0 * normC)
+            H_12 = ((g1_scalar * g2_scalar - (sign * g1_scalar) * (sign * g2_scalar)) / normC
+                     + sign * d1xd2_scalar) / 2.0
+
+        cells = pa.btri_cell[m1]
+        vp1_arr = pa.btri_vp1[m1]
+        vp2_arr = pa.btri_vp2[m1]
+
+        for k in range(len(cells)):
+            c = int(cells[k])
+            if c >= n_c:
+                continue
+            mu = multipliers[c]
+            a = int(vp1_arr[k])
+            b = int(vp2_arr[k])
+
+            values[pa.hess_offset_map[(a, a)]] += mu * H_11[k]
+            values[pa.hess_offset_map[(b, b)]] += mu * H_22[k]
+            hi, lo = max(a, b), min(a, b)
+            values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
+
+    # --- 2-inside triangles ---
+    m2 = pa.btri_n_inside == 2
+    if np.any(m2):
+        p_in1 = pa.vertices[pa.btri_v_in[m2, 0]]
+        p_in2 = pa.vertices[pa.btri_v_in[m2, 1]]
+        pc1 = pos[pa.btri_vp1[m2]]
+        pc2 = pos[pa.btri_vp2[m2]]
+
+        u1 = pc1 - p_in1;  v1 = pc2 - p_in1
+        u2 = pc2 - p_in1;  v2 = p_in2 - p_in1
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m2]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m2]]])
+
+        if dim == 3:
+            # Sub-triangle 1: (p_in1, pc1, pc2)
+            C1 = np.cross(u1, v1)
+            normC1 = np.maximum(np.linalg.norm(C1, axis=1), 1e-30)
+            n1 = C1 / normC1[:, None]
+
+            g1_1 = np.cross(d1, v1)
+            g2_1 = np.cross(u1, d2)
+            d1xd2 = np.cross(d1, d2)
+
+            n1_dot_g1_1 = np.sum(n1 * g1_1, axis=1)
+            n1_dot_g2_1 = np.sum(n1 * g2_1, axis=1)
+
+            H_11_sub1 = (np.sum(g1_1 * g1_1, axis=1) - n1_dot_g1_1**2) / (2.0 * normC1)
+            H_22_sub1 = (np.sum(g2_1 * g2_1, axis=1) - n1_dot_g2_1**2) / (2.0 * normC1)
+            H_12_sub1 = ((np.sum(g1_1 * g2_1, axis=1) - n1_dot_g1_1 * n1_dot_g2_1)
+                         / normC1 + np.sum(n1 * d1xd2, axis=1)) / 2.0
+
+            # Sub-triangle 2: (p_in1, pc2, p_in2) — only lambda_2 appears
+            C2 = np.cross(u2, v2)
+            normC2 = np.maximum(np.linalg.norm(C2, axis=1), 1e-30)
+            n2 = C2 / normC2[:, None]
+
+            g2_2 = np.cross(d2, v2)
+            n2_dot_g2_2 = np.sum(n2 * g2_2, axis=1)
+
+            H_22_sub2 = (np.sum(g2_2 * g2_2, axis=1) - n2_dot_g2_2**2) / (2.0 * normC2)
+
+            H_11 = H_11_sub1
+            H_22 = H_22_sub1 + H_22_sub2
+            H_12 = H_12_sub1
+        else:
+            # Sub-triangle 1
+            C1s = u1[:, 0] * v1[:, 1] - u1[:, 1] * v1[:, 0]
+            normC1 = np.maximum(np.abs(C1s), 1e-30)
+            s1 = np.sign(C1s); s1[s1 == 0] = 1.0
+
+            g1_1s = d1[:, 0] * v1[:, 1] - d1[:, 1] * v1[:, 0]
+            g2_1s = u1[:, 0] * d2[:, 1] - u1[:, 1] * d2[:, 0]
+            d1xd2s = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
+
+            H_11_sub1 = (g1_1s**2 - (s1 * g1_1s)**2) / (2.0 * normC1)
+            H_22_sub1 = (g2_1s**2 - (s1 * g2_1s)**2) / (2.0 * normC1)
+            H_12_sub1 = ((g1_1s * g2_1s - (s1 * g1_1s) * (s1 * g2_1s)) / normC1
+                         + s1 * d1xd2s) / 2.0
+
+            # Sub-triangle 2
+            C2s = u2[:, 0] * v2[:, 1] - u2[:, 1] * v2[:, 0]
+            normC2 = np.maximum(np.abs(C2s), 1e-30)
+            s2 = np.sign(C2s); s2[s2 == 0] = 1.0
+
+            g2_2s = d2[:, 0] * v2[:, 1] - d2[:, 1] * v2[:, 0]
+
+            H_22_sub2 = (g2_2s**2 - (s2 * g2_2s)**2) / (2.0 * normC2)
+
+            H_11 = H_11_sub1
+            H_22 = H_22_sub1 + H_22_sub2
+            H_12 = H_12_sub1
+
+        cells = pa.btri_cell[m2]
+        vp1_arr = pa.btri_vp1[m2]
+        vp2_arr = pa.btri_vp2[m2]
+
+        for k in range(len(cells)):
+            c = int(cells[k])
+            if c >= n_c:
+                continue
+            mu = multipliers[c]
+            a = int(vp1_arr[k])
+            b = int(vp2_arr[k])
+
+            values[pa.hess_offset_map[(a, a)]] += mu * H_11[k]
+            values[pa.hess_offset_map[(b, b)]] += mu * H_22[k]
+            hi, lo = max(a, b), min(a, b)
+            values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
+
+    return values
+
+
 def compute_area_jacobian(pa: PartitionArrays,
                           eps: float = 1e-7) -> np.ndarray:
     """Compute area constraint Jacobian via analytical derivatives.

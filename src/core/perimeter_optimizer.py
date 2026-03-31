@@ -67,14 +67,20 @@ class IPOPTProblemAdapter:
     """
 
     def __init__(self, optimizer: 'PerimeterOptimizer',
-                 track_best: bool = False, best_feas_tol: float = 1e-6):
+                 track_best: bool = False, best_feas_tol: float = 1e-6,
+                 exact_hessian: bool = False):
         self._opt = optimizer
         self._pa = optimizer._arrays   # PartitionArrays snapshot
         self._track_best = track_best
         self._best_feas_tol = best_feas_tol
+        self._exact_hessian = exact_hessian
         self.best_obj: float = np.inf
         self.best_x: Optional[np.ndarray] = None
         self._last_x: Optional[np.ndarray] = None
+
+        if exact_hessian:
+            self.hessianstructure = self._hessianstructure_impl
+            self.hessian = self._hessian_impl
 
     def objective(self, x: np.ndarray) -> float:
         if self._track_best:
@@ -94,21 +100,49 @@ class IPOPTProblemAdapter:
     def jacobian(self, x: np.ndarray) -> np.ndarray:
         """Return non-zero Jacobian values in jacobianstructure() order.
 
-        Phase 1: compute the dense Jacobian and extract non-zeros by indexing.
-        This is correct and fast enough at current scale. Phase 2 will replace
-        this with a direct sparse computation.
+        Direct sparse computation — no dense matrix allocated.
         """
-        J_dense = self._opt.constraint_area_jacobian(x)   # (n_cells-1, n_vp)
-        dense_mb = J_dense.nbytes / 1e6
-        if dense_mb > 50:
-            import warnings
-            warnings.warn(
-                f"IPOPT Jacobian: dense matrix is {dense_mb:.0f} MB. "
-                f"Implement Phase 2 (sparse Jacobian) for better scaling. "
-                f"See docs/IPOPT_INTEGRATION_PLAN.md, Section 4, Phase 2.",
-                stacklevel=2,
-            )
+        self._opt._arrays.vp_lambda[:] = x
+        pa = self._opt._arrays
+
+        if pa.nnz_lookup is not None:
+            area_vals = vectorized_area.compute_area_jacobian_sparse(pa)
+            steiner_vals = vectorized_steiner.compute_steiner_area_jacobian_sparse(pa)
+            return area_vals + steiner_vals
+
+        J_dense = self._opt.constraint_area_jacobian(x)
         return J_dense[self._pa.jac_row, self._pa.jac_col]
+
+    def _hessianstructure_impl(self) -> tuple:
+        """Return Hessian sparsity pattern (lower triangle)."""
+        return (self._pa.hess_row, self._pa.hess_col)
+
+    def _hessian_impl(self, x: np.ndarray, lagrange: np.ndarray,
+                      obj_factor: float) -> np.ndarray:
+        """Compute the Hessian of the Lagrangian.
+
+        H = obj_factor * d2f/dlam^2 + sum_k lagrange[k] * d2c_k/dlam^2
+
+        Args:
+            x: current VP parameters
+            lagrange: constraint multipliers (n_cells-1,)
+            obj_factor: scaling for the objective (sigma)
+
+        Returns:
+            (hess_nnz,) float64 — lower triangle values.
+        """
+        self._opt._arrays.vp_lambda[:] = x
+        pa = self._opt._arrays
+
+        perim_hess = vectorized_perimeter.compute_perimeter_hessian_sparse(pa)
+        steiner_perim_hess = vectorized_steiner.compute_steiner_perimeter_hessian_fd(pa)
+
+        area_hess = vectorized_area.compute_area_hessian_sparse(pa, lagrange)
+        steiner_area_hess = vectorized_steiner.compute_steiner_area_hessian_fd(
+            pa, lagrange)
+
+        return (obj_factor * (perim_hess + steiner_perim_hess)
+                + area_hess + steiner_area_hess)
 
     def intermediate(self, alg_mod, iter_count, obj_value,
                      inf_pr, inf_du, mu, d_norm,
@@ -387,7 +421,8 @@ class PerimeterOptimizer:
     def optimize(self, max_iter: int = 1000, tol: float = 1e-7,
                 method: str = 'SLSQP',
                 lbfgs_memory: int = 6,
-                best_iterate: bool = False) -> OptimizeResult:
+                best_iterate: bool = False,
+                exact_hessian: bool = False) -> OptimizeResult:
         """
         Run constrained perimeter optimization.
         
@@ -411,6 +446,10 @@ class PerimeterOptimizer:
                 last iterate is worse.  Prevents restoration-phase losses from
                 compounding across outer iterations.  Ignored for SLSQP /
                 trust-constr.
+            exact_hessian: If True, provide IPOPT with an analytical Hessian
+                of the Lagrangian instead of L-BFGS approximation.  Gives
+                exact curvature for smoother boundaries.  Ignored for SLSQP /
+                trust-constr.
             
         Returns:
             scipy OptimizeResult object
@@ -418,7 +457,8 @@ class PerimeterOptimizer:
         self.logger.info(f"Starting perimeter optimization with method={method}")
         self.logger.info(f"  max_iter={max_iter}, tol={tol}")
         if method == 'ipopt':
-            self.logger.info(f"  L-BFGS memory={lbfgs_memory}, best_iterate={best_iterate}")
+            self.logger.info(f"  L-BFGS memory={lbfgs_memory}, best_iterate={best_iterate}, "
+                           f"exact_hessian={exact_hessian}")
         if self._use_active_mapping:
             self.logger.info(f"  Optimizing {self._n_active} active VPs "
                            f"(skipping {self._n_total - self._n_active} inactive)")
@@ -472,7 +512,8 @@ class PerimeterOptimizer:
             m = self.partition.n_cells - 1
 
             adapter = IPOPTProblemAdapter(
-                self, track_best=best_iterate, best_feas_tol=tol * 100)
+                self, track_best=best_iterate, best_feas_tol=tol * 100,
+                exact_hessian=exact_hessian)
 
             problem = cyipopt.Problem(
                 n=n,
@@ -484,8 +525,9 @@ class PerimeterOptimizer:
                 cu=np.zeros(m),
             )
 
-            problem.add_option('hessian_approximation', 'limited-memory')
-            problem.add_option('limited_memory_max_history', lbfgs_memory)
+            if not exact_hessian:
+                problem.add_option('hessian_approximation', 'limited-memory')
+                problem.add_option('limited_memory_max_history', lbfgs_memory)
             problem.add_option('mu_strategy', 'adaptive')
             problem.add_option('tol', tol)
             problem.add_option('acceptable_tol', tol * 100)

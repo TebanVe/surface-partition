@@ -343,6 +343,96 @@ def main():
     check("fallback_objective", obj_fallback, obj_orig, atol=1e-12)
 
     # ------------------------------------------------------------------
+    # Test 12a: Phase 2 — Sparse Jacobian vs Dense Jacobian
+    # ------------------------------------------------------------------
+    print("\n--- Test 12a: Sparse Jacobian vs Dense Jacobian ---")
+    pa.vp_lambda[:] = partition.get_active_variable_vector()
+    jac_dense = vectorized_area.compute_area_jacobian(pa)
+    jac_sparse_vals = vectorized_area.compute_area_jacobian_sparse(pa)
+    steiner_dense = vectorized_steiner.compute_steiner_area_jacobian(pa)
+    steiner_sparse_vals = vectorized_steiner.compute_steiner_area_jacobian_sparse(pa)
+
+    total_sparse = jac_sparse_vals + steiner_sparse_vals
+    total_dense = jac_dense + steiner_dense
+
+    jac_reconstructed = np.zeros_like(total_dense)
+    jac_reconstructed[pa.jac_row, pa.jac_col] = total_sparse
+
+    check("sparse_jac_vs_dense (at nnz positions)",
+          jac_reconstructed[pa.jac_row, pa.jac_col],
+          total_dense[pa.jac_row, pa.jac_col],
+          atol=1e-10)
+
+    # ------------------------------------------------------------------
+    # Test 12b: Phase 4 — Analytical Hessian vs FD Hessian
+    # ------------------------------------------------------------------
+    print("\n--- Test 12b: Analytical Hessian vs FD Hessian ---")
+    pa.vp_lambda[:] = partition.get_active_variable_vector()
+    x_test = pa.vp_lambda.copy()
+    n = len(x_test)
+
+    # Create fake multipliers and obj_factor for the test
+    n_c = pa.n_cells - 1
+    rng_h = np.random.RandomState(123)
+    test_multipliers = rng_h.randn(n_c)
+    test_obj_factor = 1.0
+
+    # Analytical Hessian
+    pa.vp_lambda[:] = x_test
+    perim_h = vectorized_perimeter.compute_perimeter_hessian_sparse(pa)
+    steiner_perim_h = vectorized_steiner.compute_steiner_perimeter_hessian_fd(pa)
+    area_h = vectorized_area.compute_area_hessian_sparse(pa, test_multipliers)
+    steiner_area_h = vectorized_steiner.compute_steiner_area_hessian_fd(pa, test_multipliers)
+    analytical_hess_vals = (test_obj_factor * (perim_h + steiner_perim_h)
+                            + area_h + steiner_area_h)
+
+    # FD Hessian of the Lagrangian
+    eps_fd = 1e-5
+    H_fd = np.zeros((n, n))
+    for i in range(n):
+        x_plus = x_test.copy(); x_plus[i] += eps_fd
+        x_minus = x_test.copy(); x_minus[i] -= eps_fd
+
+        # Lagrangian gradient = obj_factor * nabla f + sum mu_k * nabla c_k
+        pa.vp_lambda[:] = x_plus
+        grad_obj_p = vectorized_perimeter.compute_perimeter_gradient(pa)
+        grad_obj_p += vectorized_steiner.compute_steiner_perimeter_gradient(pa)
+        jac_p = vectorized_area.compute_area_jacobian(pa)
+        jac_p += vectorized_steiner.compute_steiner_area_jacobian(pa)
+        grad_lag_p = test_obj_factor * grad_obj_p + test_multipliers @ jac_p
+
+        pa.vp_lambda[:] = x_minus
+        grad_obj_m = vectorized_perimeter.compute_perimeter_gradient(pa)
+        grad_obj_m += vectorized_steiner.compute_steiner_perimeter_gradient(pa)
+        jac_m = vectorized_area.compute_area_jacobian(pa)
+        jac_m += vectorized_steiner.compute_steiner_area_jacobian(pa)
+        grad_lag_m = test_obj_factor * grad_obj_m + test_multipliers @ jac_m
+
+        H_fd[i, :] = (grad_lag_p - grad_lag_m) / (2 * eps_fd)
+
+    H_fd = 0.5 * (H_fd + H_fd.T)
+
+    # Reconstruct analytical Hessian into dense form for comparison
+    H_analytical = np.zeros((n, n))
+    for idx in range(len(pa.hess_row)):
+        r, c = int(pa.hess_row[idx]), int(pa.hess_col[idx])
+        H_analytical[r, c] = analytical_hess_vals[idx]
+        if r != c:
+            H_analytical[c, r] = analytical_hess_vals[idx]
+
+    # Compare only at Hessian sparsity pattern positions
+    hess_positions = list(zip(pa.hess_row, pa.hess_col))
+    ana_at_pattern = np.array([H_analytical[r, c] for r, c in hess_positions])
+    fd_at_pattern = np.array([H_fd[r, c] for r, c in hess_positions])
+
+    check("hessian_analytical_vs_fd",
+          ana_at_pattern, fd_at_pattern,
+          atol=1e-3, rtol=1e-3)
+
+    # Restore lambda
+    pa.vp_lambda[:] = x_test
+
+    # ------------------------------------------------------------------
     # Test 12: End-to-end short optimization (vectorized vs original)
     # ------------------------------------------------------------------
     print("\n--- Test 12: End-to-end optimization (10 SLSQP iterations) ---")

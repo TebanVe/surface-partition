@@ -1226,6 +1226,50 @@ class PartitionContour:
         self.logger.info(f"  Jacobian sparsity: {len(jac_row)} non-zeros "
                         f"(density {100 * len(jac_row) / max(1, n_constrained * n_active):.1f}%)")
 
+        # 8b. nnz_lookup: (row, col) → offset into flat Jacobian values array
+        nnz = len(jac_row)
+        nnz_lookup = -np.ones((n_constrained, n_active), dtype=np.int32)
+        for idx in range(nnz):
+            nnz_lookup[jac_row[idx], jac_col[idx]] = idx
+
+        # 9. Hessian sparsity pattern (lower triangle: row >= col)
+        hess_pairs = set()
+
+        for s in range(len(seg_vp1)):
+            a = int(seg_vp1[s])
+            b = int(seg_vp2[s])
+            hess_pairs.add((a, a))
+            hess_pairs.add((b, b))
+            hess_pairs.add((max(a, b), min(a, b)))
+
+        for k in range(n_btri):
+            a = int(btri_vp1[k])
+            b = int(btri_vp2[k])
+            hess_pairs.add((a, a))
+            hess_pairs.add((b, b))
+            hess_pairs.add((max(a, b), min(a, b)))
+
+        for tp_i in range(n_tp):
+            vps = tp_vp_indices[tp_i]
+            for i in range(3):
+                for j in range(i + 1):
+                    hess_pairs.add((max(int(vps[i]), int(vps[j])),
+                                    min(int(vps[i]), int(vps[j]))))
+
+        if hess_pairs:
+            hess_pairs_arr = np.array(sorted(hess_pairs), dtype=np.int32)
+            hess_row = hess_pairs_arr[:, 0]
+            hess_col = hess_pairs_arr[:, 1]
+        else:
+            hess_row = np.empty(0, dtype=np.int32)
+            hess_col = np.empty(0, dtype=np.int32)
+
+        hess_offset_map = {}
+        for idx in range(len(hess_row)):
+            hess_offset_map[(int(hess_row[idx]), int(hess_col[idx]))] = idx
+
+        self.logger.info(f"  Hessian sparsity: {len(hess_row)} non-zeros (lower triangle)")
+
         return PartitionArrays(
             vp_edge_v1=vp_edge_v1,
             vp_edge_v2=vp_edge_v2,
@@ -1257,6 +1301,10 @@ class PartitionContour:
             tp_affected_vps=tp_affected_vps,
             jac_row=jac_row,
             jac_col=jac_col,
+            nnz_lookup=nnz_lookup,
+            hess_row=hess_row,
+            hess_col=hess_col,
+            hess_offset_map=hess_offset_map,
         )
 
     def identify_triple_points(self) -> List[Tuple[int, List[int]]]:

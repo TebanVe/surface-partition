@@ -777,6 +777,13 @@ Example usage:
                             'regressions between outer iterations. Ignored for SLSQP / '
                             'trust-constr.')
 
+    parser.add_argument('--exact-hessian', action='store_true',
+                       help='Provide IPOPT with an analytical Hessian of the '
+                            'Lagrangian instead of the L-BFGS approximation. '
+                            'Gives exact curvature for smoother boundaries. '
+                            'Requires more computation per iteration. '
+                            'Ignored for SLSQP / trust-constr.')
+
     parser.add_argument('--use-legacy', action='store_true',
                        help='Use legacy TopologySwitcher')
 
@@ -1111,6 +1118,7 @@ Example usage:
             method=args.method,
             lbfgs_memory=args.lbfgs_memory,
             best_iterate=args.best_iterate,
+            exact_hessian=args.exact_hessian,
         )
         opt_elapsed = time.time() - opt_start_time
 

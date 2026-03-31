@@ -13,7 +13,8 @@ Lifecycle:
 """
 
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Tuple
 
 
 @dataclass
@@ -75,3 +76,11 @@ class PartitionArrays:
     # --- Sparse Jacobian structure for IPOPT ---
     jac_row: np.ndarray   # int32 (nnz,) — row (cell) index of each non-zero
     jac_col: np.ndarray   # int32 (nnz,) — col (VP) index of each non-zero
+
+    # --- Phase 2: Jacobian value-offset lookup ---
+    nnz_lookup: Optional[np.ndarray] = None   # int32 (n_cells-1, n_active_vp) — offset or -1
+
+    # --- Phase 4: Hessian sparsity (lower triangle only, for IPOPT) ---
+    hess_row: Optional[np.ndarray] = None     # int32 (hess_nnz,) — row indices (row >= col)
+    hess_col: Optional[np.ndarray] = None     # int32 (hess_nnz,) — col indices
+    hess_offset_map: Optional[Dict[Tuple[int, int], int]] = field(default=None, repr=False)

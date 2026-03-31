@@ -65,6 +65,58 @@ def compute_total_perimeter(pa: PartitionArrays) -> float:
 # Perimeter gradient
 # =========================================================================
 
+def compute_perimeter_hessian_sparse(pa: PartitionArrays) -> np.ndarray:
+    """Compute d2P/dlam_i dlam_j for the regular perimeter.
+
+    Returns:
+        (hess_nnz,) float64 — values at positions (pa.hess_row, pa.hess_col).
+    """
+    hess_nnz = len(pa.hess_row)
+    values = np.zeros(hess_nnz, dtype=np.float64)
+    pos = _compute_vp_positions(pa)
+
+    p1 = pos[pa.seg_vp1]
+    p2 = pos[pa.seg_vp2]
+    delta = p1 - p2
+    r = np.linalg.norm(delta, axis=1)
+    r = np.maximum(r, 1e-12)
+    delta_hat = delta / r[:, None]
+
+    d_a = (pa.vertices[pa.vp_edge_v1[pa.seg_vp1]]
+           - pa.vertices[pa.vp_edge_v2[pa.seg_vp1]])
+    d_b = (pa.vertices[pa.vp_edge_v1[pa.seg_vp2]]
+           - pa.vertices[pa.vp_edge_v2[pa.seg_vp2]])
+
+    weights = np.where(pa.seg_cell_a != pa.seg_cell_b, 2.0, 1.0)
+
+    da_dot_da = np.sum(d_a * d_a, axis=1)
+    db_dot_db = np.sum(d_b * d_b, axis=1)
+    da_dot_db = np.sum(d_a * d_b, axis=1)
+    da_dot_dh = np.sum(d_a * delta_hat, axis=1)
+    db_dot_dh = np.sum(d_b * delta_hat, axis=1)
+
+    H_aa = weights * (da_dot_da - da_dot_dh**2) / r
+    H_bb = weights * (db_dot_db - db_dot_dh**2) / r
+    H_ab = -weights * (da_dot_db - da_dot_dh * db_dot_dh) / r
+
+    vp1 = pa.seg_vp1
+    vp2 = pa.seg_vp2
+
+    for s in range(len(vp1)):
+        a, b = int(vp1[s]), int(vp2[s])
+
+        off_aa = pa.hess_offset_map[(a, a)]
+        values[off_aa] += H_aa[s]
+        off_bb = pa.hess_offset_map[(b, b)]
+        values[off_bb] += H_bb[s]
+
+        hi, lo = max(a, b), min(a, b)
+        off_ab = pa.hess_offset_map[(hi, lo)]
+        values[off_ab] += H_ab[s]
+
+    return values
+
+
 def compute_perimeter_gradient(pa: PartitionArrays) -> np.ndarray:
     """Compute d(total_perimeter)/d(lambda) for all active VPs.
 

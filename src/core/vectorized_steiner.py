@@ -155,6 +155,122 @@ def compute_steiner_perimeter_gradient(pa: PartitionArrays,
 # Steiner area Jacobian (finite differences on the analytical formula)
 # =========================================================================
 
+def compute_steiner_area_jacobian_sparse(pa: PartitionArrays,
+                                         eps: float = 1e-7) -> np.ndarray:
+    """Steiner area Jacobian — sparse values in jac_row/jac_col order.
+
+    Uses the same finite-difference approach as compute_steiner_area_jacobian()
+    but writes into a sparse values array instead of a dense matrix.
+
+    Returns:
+        (nnz,) float64
+    """
+    nnz = len(pa.jac_row)
+    values = np.zeros(nnz, dtype=np.float64)
+    if pa.n_triple_points == 0:
+        return values
+
+    n_constraints = pa.n_cells - 1
+    base_steiner = compute_steiner_points(pa)
+    base_areas = compute_steiner_areas(pa, base_steiner)
+    original_lambda = pa.vp_lambda.copy()
+
+    for vp_idx in pa.tp_affected_vps:
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
+        pert_steiner = compute_steiner_points(pa)
+        pert_areas = compute_steiner_areas(pa, pert_steiner)
+        dA = (pert_areas[:n_constraints] - base_areas[:n_constraints]) / eps
+
+        for c in range(n_constraints):
+            offset = pa.nnz_lookup[c, vp_idx]
+            if offset >= 0:
+                values[offset] += dA[c]
+
+        pa.vp_lambda[vp_idx] = original_lambda[vp_idx]
+
+    return values
+
+
+def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
+                                         eps: float = 1e-5) -> np.ndarray:
+    """Steiner perimeter Hessian via central FD on the gradient.
+
+    Only tp_affected_vps have non-zero entries. The inner gradient FD uses
+    eps_inner = eps * 0.1 to avoid nested FD at the same scale.
+
+    Returns:
+        (hess_nnz,) float64
+    """
+    hess_nnz = len(pa.hess_row)
+    values = np.zeros(hess_nnz, dtype=np.float64)
+    if pa.n_triple_points == 0:
+        return values
+
+    original = pa.vp_lambda.copy()
+    affected = pa.tp_affected_vps
+    eps_inner = eps * 0.1
+
+    for vp_i in affected:
+        pa.vp_lambda[vp_i] = original[vp_i] + eps
+        grad_plus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
+        pa.vp_lambda[vp_i] = original[vp_i] - eps
+        grad_minus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
+        pa.vp_lambda[vp_i] = original[vp_i]
+
+        hess_col_i = (grad_plus - grad_minus) / (2.0 * eps)
+
+        for vp_j in affected:
+            if vp_j > vp_i:
+                continue
+            key = (max(int(vp_i), int(vp_j)), min(int(vp_i), int(vp_j)))
+            if key in pa.hess_offset_map:
+                values[pa.hess_offset_map[key]] += hess_col_i[vp_j]
+
+    return values
+
+
+def compute_steiner_area_hessian_fd(pa: PartitionArrays,
+                                    multipliers: np.ndarray,
+                                    eps: float = 1e-5) -> np.ndarray:
+    """Multiplier-weighted Steiner area Hessian via forward FD on the Jacobian.
+
+    The inner Jacobian uses its own default eps (1e-7), much smaller than the
+    outer eps (1e-5), so there is no nested-epsilon accuracy problem.
+
+    Returns:
+        (hess_nnz,) float64
+    """
+    hess_nnz = len(pa.hess_row)
+    values = np.zeros(hess_nnz, dtype=np.float64)
+    if pa.n_triple_points == 0:
+        return values
+
+    n_c = pa.n_cells - 1
+    original = pa.vp_lambda.copy()
+    affected = pa.tp_affected_vps
+
+    base_jac = compute_steiner_area_jacobian(pa)
+
+    for vp_i in affected:
+        pa.vp_lambda[vp_i] = original[vp_i] + eps
+        jac_plus = compute_steiner_area_jacobian(pa)
+        pa.vp_lambda[vp_i] = original[vp_i]
+
+        djac = (jac_plus - base_jac) / eps
+
+        for vp_j in affected:
+            if vp_j > vp_i:
+                continue
+            h_val = 0.0
+            for c in range(n_c):
+                h_val += multipliers[c] * djac[c, vp_j]
+            key = (max(int(vp_i), int(vp_j)), min(int(vp_i), int(vp_j)))
+            if key in pa.hess_offset_map:
+                values[pa.hess_offset_map[key]] += h_val
+
+    return values
+
+
 def compute_steiner_area_jacobian(pa: PartitionArrays,
                                   eps: float = 1e-7) -> np.ndarray:
     """d(steiner_areas)/d(lambda) via finite differences.
