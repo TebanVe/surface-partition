@@ -25,6 +25,9 @@ from projection_iterative import (
 	validate_projection_result,
 )
 from core.interpolation import nearest_neighbor_interpolate
+from find_contours import ContourAnalyzer
+from core.contour_partition import PartitionContour
+from core.perimeter_optimizer import PerimeterOptimizer
 
 
 def optimize_surface_partition(provider, config, solution_dir=None):
@@ -240,6 +243,27 @@ def optimize_surface_partition(provider, config, solution_dir=None):
 		lm['iters']['end_index_global'] = int(cum + max(ni - 1, 0))
 		cum += ni
 
+	# Compute initial perimeter from contour extraction (no IPOPT optimization).
+	# This provides a lambda-independent metric for comparing across runs.
+	initial_perimeter = None
+	try:
+		analyzer = ContourAnalyzer(solution_path)
+		analyzer.load_results(use_initial_condition=False)
+
+		indicators = analyzer.compute_indicator_functions()
+		_, boundary_topology = analyzer.extract_contours_with_topology()
+
+		partition = PartitionContour(mesh, indicators, boundary_topology=boundary_topology)
+
+		target_area_final = total_area / config.n_partitions
+		perim_optimizer = PerimeterOptimizer(partition, mesh, target_area_final)
+		x0_perim = partition.get_variable_vector()
+		initial_perimeter = perim_optimizer.objective(x0_perim)
+
+		logger.info(f"Initial perimeter (contour extraction): {initial_perimeter:.10f}")
+	except Exception as e:
+		logger.warning(f"Could not compute initial perimeter: {e}")
+
 	# Theoretical total area (if provider exposes it)
 	theoretical_total_area = None
 	if hasattr(provider, 'theoretical_total_area') and callable(provider.theoretical_total_area):
@@ -291,6 +315,7 @@ def optimize_surface_partition(provider, config, solution_dir=None):
 		'solution_path': os.path.abspath(solution_path),
 		'optimizer': 'PySLSQP' if optimizer_name == 'PySLSQP' else 'PGD',
 		'theoretical_total_area': theoretical_total_area,
+		'initial_perimeter': float(initial_perimeter) if initial_perimeter is not None else None,
 		'files': {
 			'run_log': os.path.abspath(logfile_path),
 			'solution_path': os.path.abspath(solution_path),
@@ -308,6 +333,10 @@ def optimize_surface_partition(provider, config, solution_dir=None):
 		lv = levels_meta[i-1]
 		mesh_size = f"{int(lv.get(label1, 0))}x{int(lv.get(label2, 0))}"
 		logger.info(f"{i:6d} {mesh_size:>11s} {res['energy']:12.6e} {res['iterations']:10d} {res['time']:10.2f}")
+	if initial_perimeter is not None:
+		logger.info(f"Initial perimeter (contour extraction): {initial_perimeter:.10f}")
+	else:
+		logger.info("Initial perimeter: could not be computed")
 	logger.info(f"✅ Solution file saved: {solution_path}")
 	print(f"Surface partition optimization complete. See {logfile_path} for details.\n")
 	print(f"Results saved in: {outdir}")

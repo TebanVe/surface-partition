@@ -5,8 +5,8 @@ r_inner: 0.5
 r_outer: 1.0
 
 # Optimization parameters (for future use)
-n_partitions: 5
-lambda_penalty: 3.0
+n_partitions: 10
+lambda_penalty: 3.25
 max_iter: 25000
 
 # SLSQP parameters
@@ -85,9 +85,9 @@ penalty_eps: 1.0e-8
 pyslsqp_save_itr: major 
 
 # Torus surface parameters (optional; used when --surface torus)
-n_theta: 60
-n_phi: 48
+n_theta: 80
+n_phi: 66
 R: 1.0
 r: 0.6
-n_theta_increment: 60
-n_phi_increment: 48
+n_theta_increment: 62
+n_phi_increment: 58

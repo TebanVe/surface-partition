@@ -510,12 +510,54 @@ def compute_area_jacobian_sparse(pa: PartitionArrays) -> np.ndarray:
         np.add.at(values, offsets1, dA_dl1[mask])
         np.add.at(values, offsets2, dA_dl2[mask])
 
-    # --- 2-inside triangles (similar pattern, using both sub-triangles) ---
+    # --- 2-inside triangles: A = area(p_in1, pc1, pc2) + area(p_in1, pc2, p_in2) ---
     m2 = pa.btri_n_inside == 2
     if np.any(m2):
-        # ... (mirror the analytical computation from compute_area_jacobian_analytical,
-        #       but write into `values` via nnz_lookup instead of the dense matrix)
-        pass  # Full implementation follows same pattern as 1-inside case
+        p_in1 = pa.vertices[pa.btri_v_in[m2, 0]]
+        p_in2 = pa.vertices[pa.btri_v_in[m2, 1]]
+        pc1 = pos[pa.btri_vp1[m2]]
+        pc2 = pos[pa.btri_vp2[m2]]
+
+        u1 = pc1 - p_in1
+        v1 = pc2 - p_in1
+        u2 = pc2 - p_in1
+        v2 = p_in2 - p_in1
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m2]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m2]]])
+
+        if dim == 3:
+            cross1 = np.cross(u1, v1)
+            norm1 = np.maximum(np.linalg.norm(cross1, axis=1, keepdims=True), 1e-30)
+            n1 = cross1 / norm1
+
+            cross2 = np.cross(u2, v2)
+            norm2 = np.maximum(np.linalg.norm(cross2, axis=1, keepdims=True), 1e-30)
+            n2 = cross2 / norm2
+
+            dA_dl1 = 0.5 * np.sum(n1 * np.cross(d1, v1), axis=1)
+            dA_dl2 = (0.5 * np.sum(n1 * np.cross(u1, d2), axis=1)
+                      + 0.5 * np.sum(n2 * np.cross(d2, v2), axis=1))
+        else:
+            sa1 = 0.5 * (u1[:, 0] * v1[:, 1] - u1[:, 1] * v1[:, 0])
+            s1 = np.sign(sa1); s1[s1 == 0] = 1.0
+            sa2 = 0.5 * (u2[:, 0] * v2[:, 1] - u2[:, 1] * v2[:, 0])
+            s2 = np.sign(sa2); s2[s2 == 0] = 1.0
+            dA_dl1 = s1 * 0.5 * (d1[:, 0] * v1[:, 1] - d1[:, 1] * v1[:, 0])
+            dA_dl2 = (s1 * 0.5 * (u1[:, 0] * d2[:, 1] - u1[:, 1] * d2[:, 0])
+                      + s2 * 0.5 * (d2[:, 0] * v2[:, 1] - d2[:, 1] * v2[:, 0]))
+
+        cells = pa.btri_cell[m2]
+        vp1 = pa.btri_vp1[m2]
+        vp2 = pa.btri_vp2[m2]
+        mask = cells < (pa.n_cells - 1)
+
+        offsets1 = pa.nnz_lookup[cells[mask], vp1[mask]]
+        offsets2 = pa.nnz_lookup[cells[mask], vp2[mask]]
+        np.add.at(values, offsets1, dA_dl1[mask])
+        np.add.at(values, offsets2, dA_dl2[mask])
 
     return values
 ```
@@ -583,10 +625,19 @@ def jacobian(self, x: np.ndarray) -> np.ndarray:
     return area_vals + steiner_vals
 ```
 
-**IMPORTANT**: The adapter must set `vp_lambda` before calling the sparse
-functions, just as the optimizer's `constraint_area_jacobian()` does. Check
-that the sparse functions do NOT call `_compute_vp_positions` with stale
-lambdas. The safest approach is to set `pa.vp_lambda[:] = x` at the start.
+**IMPORTANT — vp_lambda synchronization**: The Phase 2 adapter's `jacobian()`
+sets `pa.vp_lambda[:] = x` directly, bypassing the optimizer's
+`constraint_area_jacobian()` which normally does this. This is correct because
+the sparse functions read `pa.vp_lambda` via `_compute_vp_positions()`.
+
+However, note that `constraint_area_jacobian()` is still called by the
+**SLSQP path** — do not break it. The Phase 2 changes to `jacobian()` only
+affect the adapter's method, not `PerimeterOptimizer.constraint_area_jacobian()`.
+
+The safest approach: always call `pa.vp_lambda[:] = x` at the start of
+`jacobian()`, `hessian()`, and any other adapter method that evaluates
+functions. The sparse functions themselves do NOT set `vp_lambda` — they
+assume it is already current.
 
 ### 3.5 Remove the 50 MB warning
 
@@ -605,36 +656,53 @@ sparsity pattern analogous to the Jacobian pattern.
 The Hessian is symmetric, so IPOPT requires only the **lower triangle** (i.e.,
 entries where `row >= col`).
 
+Place this code in `compile_arrays()` between the Jacobian sparsity logging line
+and the `return PartitionArrays(...)` call. All local variables used below
+(`seg_vp1`, `seg_vp2`, `btri_vp1`, `btri_vp2`, `n_btri`, `n_tp`,
+`tp_vp_indices`) are already in scope at that point — they were built in
+steps 3–7 of the same function.
+
 ```python
-# --- Hessian sparsity pattern ---
+# --- 9. Hessian sparsity pattern (lower triangle: row >= col) ---
 hess_pairs = set()  # (row, col) with row >= col
 
-# Perimeter segments: each segment (a, b) contributes (a,a), (b,b), (max,min)
-for s in range(n_seg):
-    a = seg_vp1[s]
-    b = seg_vp2[s]
+# Perimeter segments: each segment (a, b) → (a,a), (b,b), (max,min)
+for s in range(len(seg_vp1)):
+    a = int(seg_vp1[s])
+    b = int(seg_vp2[s])
     hess_pairs.add((a, a))
     hess_pairs.add((b, b))
     hess_pairs.add((max(a, b), min(a, b)))
 
 # Boundary triangles: each (vp1, vp2) pair
 for k in range(n_btri):
-    a = btri_vp1[k]
-    b = btri_vp2[k]
+    a = int(btri_vp1[k])
+    b = int(btri_vp2[k])
     hess_pairs.add((a, a))
     hess_pairs.add((b, b))
     hess_pairs.add((max(a, b), min(a, b)))
 
 # Triple points: all 3×3 pairs within each triple point
 for tp_i in range(n_tp):
-    vps = tp_vp_indices[tp_i]  # 3 VPs
+    vps = tp_vp_indices[tp_i]  # shape (3,) — 3 active VP indices
     for i in range(3):
         for j in range(i + 1):
-            hess_pairs.add((max(vps[i], vps[j]), min(vps[i], vps[j])))
+            hess_pairs.add((max(int(vps[i]), int(vps[j])),
+                            min(int(vps[i]), int(vps[j]))))
 
-hess_pairs_arr = np.array(sorted(hess_pairs), dtype=np.int32)
-hess_row = hess_pairs_arr[:, 0]
-hess_col = hess_pairs_arr[:, 1]
+if hess_pairs:
+    hess_pairs_arr = np.array(sorted(hess_pairs), dtype=np.int32)
+    hess_row = hess_pairs_arr[:, 0]
+    hess_col = hess_pairs_arr[:, 1]
+else:
+    hess_row = np.empty(0, dtype=np.int32)
+    hess_col = np.empty(0, dtype=np.int32)
+
+hess_offset_map = {}
+for idx in range(len(hess_row)):
+    hess_offset_map[(int(hess_row[idx]), int(hess_col[idx]))] = idx
+
+self.logger.info(f"  Hessian sparsity: {len(hess_row)} non-zeros (lower triangle)")
 ```
 
 Add to `PartitionArrays`:
@@ -818,13 +886,75 @@ def compute_area_hessian_sparse(pa: PartitionArrays,
             values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
 
     # --- 2-inside triangles ---
+    # A = A₁(p_in1, pc1, pc2) + A₂(p_in1, pc2, p_in2)
+    # Sub-triangle 1: u1 = pc1-p_in1, v1 = pc2-p_in1 → λ₁ and λ₂ both appear
+    # Sub-triangle 2: u2 = pc2-p_in1, v2 = p_in2-p_in1 → only λ₂ appears
     m2 = pa.btri_n_inside == 2
     if np.any(m2):
-        # Similar structure: compute Hessian for both sub-triangles
-        # and accumulate with multiplier weighting.
-        # Sub-triangle 1: (p_in1, pc1, pc2) — both λ₁ and λ₂ appear
-        # Sub-triangle 2: (p_in1, pc2, p_in2) — only λ₂ appears
-        pass  # implement following the same pattern
+        p_in1 = pa.vertices[pa.btri_v_in[m2, 0]]
+        p_in2 = pa.vertices[pa.btri_v_in[m2, 1]]
+        pc1 = pos[pa.btri_vp1[m2]]
+        pc2 = pos[pa.btri_vp2[m2]]
+
+        u1 = pc1 - p_in1;  v1 = pc2 - p_in1
+        u2 = pc2 - p_in1;  v2 = p_in2 - p_in1
+
+        d1 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp1[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp1[m2]]])
+        d2 = (pa.vertices[pa.vp_edge_v1[pa.btri_vp2[m2]]]
+              - pa.vertices[pa.vp_edge_v2[pa.btri_vp2[m2]]])
+
+        if dim == 3:
+            # Sub-triangle 1: (p_in1, pc1, pc2)
+            C1 = np.cross(u1, v1)
+            normC1 = np.maximum(np.linalg.norm(C1, axis=1), 1e-30)
+            n1 = C1 / normC1[:, None]
+
+            g1_1 = np.cross(d1, v1)     # ∂C₁/∂λ₁
+            g2_1 = np.cross(u1, d2)     # ∂C₁/∂λ₂
+            d1xd2 = np.cross(d1, d2)
+
+            n1_dot_g1_1 = np.sum(n1 * g1_1, axis=1)
+            n1_dot_g2_1 = np.sum(n1 * g2_1, axis=1)
+
+            H_11_sub1 = (np.sum(g1_1*g1_1, axis=1) - n1_dot_g1_1**2) / (2.0*normC1)
+            H_22_sub1 = (np.sum(g2_1*g2_1, axis=1) - n1_dot_g2_1**2) / (2.0*normC1)
+            H_12_sub1 = ((np.sum(g1_1*g2_1, axis=1) - n1_dot_g1_1*n1_dot_g2_1)
+                         / normC1 + np.sum(n1*d1xd2, axis=1)) / 2.0
+
+            # Sub-triangle 2: (p_in1, pc2, p_in2) — only λ₂ appears
+            C2 = np.cross(u2, v2)
+            normC2 = np.maximum(np.linalg.norm(C2, axis=1), 1e-30)
+            n2 = C2 / normC2[:, None]
+
+            g2_2 = np.cross(d2, v2)     # ∂C₂/∂λ₂  (∂u2/∂λ₂ = d₂)
+            n2_dot_g2_2 = np.sum(n2 * g2_2, axis=1)
+
+            H_22_sub2 = (np.sum(g2_2*g2_2, axis=1) - n2_dot_g2_2**2) / (2.0*normC2)
+
+            # Total: H_11 = sub1 only, H_22 = sub1+sub2, H_12 = sub1 only
+            H_11 = H_11_sub1
+            H_22 = H_22_sub1 + H_22_sub2
+            H_12 = H_12_sub1
+
+        # 2D case: omitted for brevity — implement if needed (same structure)
+
+        cells = pa.btri_cell[m2]
+        vp1_arr = pa.btri_vp1[m2]
+        vp2_arr = pa.btri_vp2[m2]
+
+        for k in range(len(cells)):
+            c = int(cells[k])
+            if c >= n_c:
+                continue
+            mu = multipliers[c]
+            a = int(vp1_arr[k])
+            b = int(vp2_arr[k])
+
+            values[pa.hess_offset_map[(a, a)]] += mu * H_11[k]
+            values[pa.hess_offset_map[(b, b)]] += mu * H_22[k]
+            hi, lo = max(a, b), min(a, b)
+            values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
 
     return values
 ```
@@ -844,6 +974,10 @@ def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
 
     Only tp_affected_vps have non-zero entries.
 
+    IMPORTANT: The inner gradient computation uses its own FD with eps_inner,
+    which must be smaller than the outer Hessian eps to avoid nesting two
+    finite differences at the same scale (which destroys accuracy).
+
     Returns:
         (hess_nnz,) float64
     """
@@ -854,14 +988,13 @@ def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
 
     original = pa.vp_lambda.copy()
     affected = pa.tp_affected_vps
-
-    base_grad = compute_steiner_perimeter_gradient(pa, eps=eps)
+    eps_inner = eps * 0.1  # inner FD must use smaller step than outer
 
     for vp_i in affected:
         pa.vp_lambda[vp_i] = original[vp_i] + eps
-        grad_plus = compute_steiner_perimeter_gradient(pa, eps=eps)
+        grad_plus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
         pa.vp_lambda[vp_i] = original[vp_i] - eps
-        grad_minus = compute_steiner_perimeter_gradient(pa, eps=eps)
+        grad_minus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
         pa.vp_lambda[vp_i] = original[vp_i]
 
         hess_col_i = (grad_plus - grad_minus) / (2.0 * eps)
@@ -882,6 +1015,11 @@ def compute_steiner_area_hessian_fd(pa: PartitionArrays,
                                     eps: float = 1e-5) -> np.ndarray:
     """Σ_k μ_k · ∂²(steiner_area_k)/∂λ_i∂λ_j via finite differences.
 
+    Uses forward-difference on the Jacobian (which itself uses forward-
+    difference internally).  The inner Jacobian's eps is its own default
+    (1e-7), much smaller than the outer eps (1e-5), so there is no
+    nested-epsilon accuracy problem here.
+
     Returns:
         (hess_nnz,) float64
     """
@@ -894,11 +1032,11 @@ def compute_steiner_area_hessian_fd(pa: PartitionArrays,
     original = pa.vp_lambda.copy()
     affected = pa.tp_affected_vps
 
-    base_jac = compute_steiner_area_jacobian(pa)  # (n_c, n_vp)
+    base_jac = compute_steiner_area_jacobian(pa)  # (n_c, n_vp), uses eps=1e-7
 
     for vp_i in affected:
         pa.vp_lambda[vp_i] = original[vp_i] + eps
-        jac_plus = compute_steiner_area_jacobian(pa)
+        jac_plus = compute_steiner_area_jacobian(pa)  # inner FD uses eps=1e-7
         pa.vp_lambda[vp_i] = original[vp_i]
 
         # ∂(jac[:, j])/∂λ_i ≈ (jac_plus[:, j] - base_jac[:, j]) / eps
@@ -975,7 +1113,9 @@ it does NOT define them (or defines them as `None`), and IPOPT falls back to
 L-BFGS.
 
 The cleanest way is to pass `exact_hessian` to the adapter's `__init__` and
-conditionally define the methods:
+conditionally **delete** the methods (not set them to `None` — `hasattr()` returns
+`True` for attributes set to `None`, which would cause cyipopt to try calling
+`None()` and crash):
 
 ```python
 class IPOPTProblemAdapter:
@@ -987,10 +1127,27 @@ class IPOPTProblemAdapter:
         # ... existing init ...
 
         if not exact_hessian:
-            # Remove hessian methods so IPOPT falls back to L-BFGS
-            self.hessian = None
-            self.hessianstructure = None
+            # Delete hessian methods so hasattr() returns False and
+            # IPOPT falls back to L-BFGS
+            if hasattr(self, 'hessian'):
+                del self.hessian
+            if hasattr(self, 'hessianstructure'):
+                del self.hessianstructure
 ```
+
+**Note**: This deletes instance-level overrides, but the class-level methods
+still exist. A cleaner alternative is to define `hessian` and
+`hessianstructure` only when `exact_hessian=True`, using dynamic method
+binding:
+
+```python
+        if exact_hessian:
+            self.hessian = self._hessian_impl
+            self.hessianstructure = self._hessianstructure_impl
+```
+
+where `_hessian_impl` and `_hessianstructure_impl` are the actual methods.
+This avoids the `del` pattern entirely and makes the intent explicit.
 
 **IMPORTANT**: In the `optimize()` method, only set
 `problem.add_option('hessian_approximation', 'limited-memory')` when
@@ -1023,17 +1180,27 @@ After both phases, the adapter will have these methods:
 
 ### 5.2 Updated PartitionArrays
 
-New fields added:
+New fields added. **All must have `= None` defaults** so that existing code
+creating `PartitionArrays` without these fields (e.g., an older `compile_arrays`)
+still works. The adapter and sparse functions must check for `None` before use.
+The `Optional` type annotation conveys the same intent.
 
 ```python
+from typing import Optional
+
 # Phase 2 additions:
-nnz_lookup: np.ndarray        # int32 (n_cells-1, n_active_vp) — Jacobian offset lookup
+nnz_lookup: Optional[np.ndarray] = None   # int32 (n_cells-1, n_active_vp) — Jacobian offset lookup
 
 # Phase 4 additions:
-hess_row: np.ndarray          # int32 (hess_nnz,) — Hessian row indices (lower tri)
-hess_col: np.ndarray          # int32 (hess_nnz,) — Hessian col indices (lower tri)
-hess_offset_map: dict         # {(int, int): int} — (row, col) → flat offset
+hess_row: Optional[np.ndarray] = None     # int32 (hess_nnz,) — Hessian row indices (lower tri)
+hess_col: Optional[np.ndarray] = None     # int32 (hess_nnz,) — Hessian col indices (lower tri)
+hess_offset_map: Optional[dict] = None    # {(int, int): int} — (row, col) → flat offset
 ```
+
+**IMPORTANT**: In Python dataclasses, fields with defaults must come **after**
+fields without defaults. Since the existing `PartitionArrays` fields have no
+defaults, the new fields (with `= None`) must be appended at the end of the
+dataclass, after `jac_col`.
 
 ### 5.3 Updated optimize() signature
 
@@ -1163,6 +1330,8 @@ The exact Hessian adds computation per iteration. Verify the trade-off:
 
 - [ ] IPOPT expects **lower triangle** — all `(row, col)` pairs satisfy
       `row >= col`
+- [ ] `hessianstructure()` returns `(rows, cols)` — same convention as
+      `np.nonzero(np.tril(...))` per modern cyipopt docs (1.6+)
 - [ ] `hessian()` signature matches cyipopt: `(x, lagrange, obj_factor)`
 - [ ] `obj_factor` multiplies the objective Hessian; `lagrange[k]` multiplies
       constraint k's Hessian
@@ -1171,9 +1340,11 @@ The exact Hessian adds computation per iteration. Verify the trade-off:
       `exact_hessian=True`
 - [ ] Perimeter Hessian uses `r = max(r, 1e-12)` to avoid division by zero
 - [ ] Area Hessian uses `normC = max(normC, 1e-30)` for degenerate triangles
-- [ ] Steiner Hessian FD uses central differences for accuracy
-- [ ] Steiner FD epsilon is large enough to avoid numerical noise (1e-5 or
-      1e-6, not 1e-7)
+- [ ] Steiner perimeter Hessian FD uses central differences for accuracy
+- [ ] Steiner FD outer epsilon (1e-5) and inner gradient epsilon (1e-6) are
+      different — nested FD at the same scale destroys accuracy
+- [ ] Steiner area Hessian FD uses forward differences on the Jacobian, with
+      the Jacobian's own inner eps (1e-7) being much smaller than outer eps
 - [ ] `hessianstructure()` and `hessian()` are only defined on the adapter
       when `exact_hessian=True`
 - [ ] The adapter does NOT define `hessian()`/`hessianstructure()` when
@@ -1191,3 +1362,7 @@ The exact Hessian adds computation per iteration. Verify the trade-off:
 - [ ] Existing SLSQP / trust-constr paths are not affected by any changes
 - [ ] The dense Jacobian path (Phase 1) still works when `nnz_lookup` is None
       (backward compatibility)
+- [ ] New `PartitionArrays` fields have `Optional` types and `= None` defaults,
+      and are placed **after** all existing fields (dataclass ordering rule)
+- [ ] New fields are included in the `return PartitionArrays(...)` call in
+      `compile_arrays()` with their computed values (not `None`)
