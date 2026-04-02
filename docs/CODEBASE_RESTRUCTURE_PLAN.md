@@ -70,7 +70,6 @@ src/
 examples/
 ├── data_loader.py                  (shared loading utility — imported by multiple scripts)
 ├── find_surface_partition.py       (Phase 1 entry point — Γ-convergence relaxation)
-├── refine_perimeter.py             (Phase 2/3 entry point — perimeter refinement)
 ├── optimization_analyzer.py        (diagnostic/analysis tool for optimizer output)
 ├── visualize_partition.py          (PyVista visualization of solutions)
 ├── visualize_type1_vertex_collapse.py (Type 1 migration visualization)
@@ -166,7 +165,7 @@ Once `data_loader.py` moves to `src/pipeline/io.py` and the pipeline orchestrato
 ```
 examples/
 ├── find_surface_partition.py       (CLI: Phase 1 relaxation — calls pipeline/pipeline_orchestrator.py)
-├── refine_perimeter.py             (CLI: Phase 2/3 refinement — calls pipeline/pipeline_orchestrator.py)
+├── refine_perimeter.py             (CLI: Phase 2/3 refinement — NEW thin wrapper, calls pipeline)
 ├── run_full_pipeline.py            (CLI: full end-to-end run — NEW, wraps all stages)
 ├── optimization_analyzer.py        (diagnostic tool — reads HDF5 results)
 ├── visualize_partition.py          (PyVista visualization)
@@ -276,7 +275,6 @@ To minimize disruption, `src/__init__.py` can re-export key symbols at the old p
 |--------|-----------------|
 | `find_surface_partition.py` | Main driver — config, optimizers, mesh, surfaces |
 | `data_loader.py` | `ContourAnalyzer`, `TriMesh`, `PartitionContour` |
-| `refine_perimeter.py` | `ContourAnalyzer`, `TriMesh`, partition + optimization |
 | `optimization_analyzer.py` | Diagnostic tool — may import config, plotting |
 | `visualize_partition.py` | Plotting, `TriMesh`, `PartitionContour` |
 | `visualize_type1_vertex_collapse.py` | Migration + plotting |
@@ -326,7 +324,7 @@ The topology switch system is implemented and under active testing. The restruct
 1. Design the `PipelineOrchestrator` API: inputs (config, surface, mesh resolutions, seeds), outputs (HDF5 paths, final partition state, per-stage logs).
 2. Implement `src/pipeline/pipeline_orchestrator.py` to chain all four stages.
 3. The orchestrator API must expose IPOPT-specific options that are currently CLI flags in `testing/refine_perimeter_iterative.py` and parameters on `PerimeterOptimizer.optimize()`: `method` (`'SLSQP'` vs `'ipopt'`), `exact_hessian`, `best_iterate`, `lbfgs_memory`, and `allow_partial_convergence`.
-4. Refactor `examples/find_surface_partition.py` and `examples/refine_perimeter.py` into thin CLI wrappers that call `PipelineOrchestrator`.
+4. Refactor `examples/find_surface_partition.py` into a thin CLI wrapper that calls `PipelineOrchestrator`. Create a new `examples/refine_perimeter.py` as a thin CLI wrapper (the old script was removed in pre-restructure cleanup; `testing/refine_perimeter_iterative.py` contains the pipeline logic to extract).
 5. Optionally add `examples/run_full_pipeline.py` as a single end-to-end entry point.
 
 ### Cleanup pass (any phase)

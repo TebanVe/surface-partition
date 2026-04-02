@@ -219,7 +219,6 @@ Test the migrate→optimize workflow starting from a refined partition file. Thi
 - **Iterative workflow**: migrate → optimize → detect → [repeat until convergence]
 
 **Key differences from other scripts**:
-- **vs `refine_perimeter.py`**: Uses new v2/v4 migration methods, opposite workflow order
 - **vs `refine_perimeter_iterative.py`**: Different workflow (MIGRATE first vs OPTIMIZE first), different starting point (iteration file vs base solution)
 - **Complementary roles**: 
   - `refine_perimeter_iterative.py`: Start from BASE solution, optimize→migrate loop
@@ -353,14 +352,14 @@ Implement a complete production-ready iterative refinement workflow that automat
 - Complete convergence tracking across multiple iterations
 
 **Key differences from other scripts**:
-| Feature | `refine_perimeter.py` | `test_migration_and_continue.py` | `refine_perimeter_iterative.py` |
-|---------|----------------------|----------------------------------|----------------------------------|
-| **Input** | Initial solution | Refined contours | Initial solution |
-| **Migrations** | Old methods (broken) | New v2/v4 methods | New v2/v4 methods |
-| **Workflow** | Opt → detect → stop | Migrate → optimize (1 cycle) | Loop(optimize → detect → migrate) |
-| **Iterations** | Stops at first switch | Single cycle | Multiple until convergence |
-| **Output** | Single refined file | Single iteration file | Multiple iteration files + final |
-| **Purpose** | Legacy (outdated) | Testing/debugging | **Production workflow** |
+| Feature | `test_migration_and_continue.py` | `refine_perimeter_iterative.py` |
+|---------|----------------------------------|----------------------------------|
+| **Input** | Refined contours | Initial solution |
+| **Migrations** | New v2/v4 methods | New v2/v4 methods |
+| **Workflow** | Migrate → optimize (1 cycle) | Loop(optimize → detect → migrate) |
+| **Iterations** | Single cycle | Multiple until convergence |
+| **Output** | Single iteration file | Multiple iteration files + final |
+| **Purpose** | Testing/debugging | **Production workflow** |
 
 **Usage**:
 ```bash

@@ -154,10 +154,9 @@ After obtaining a relaxed solution, refine the contours to get accurate perimete
 python examples/find_surface_partition.py --input parameters/input.yaml
 
 # Step 2: Refine contours (Section 5)
-python examples/refine_perimeter.py \
+python testing/refine_perimeter_iterative.py \
     --solution results/run_xyz/solution_level0.h5 \
-    --max-iterations 10 \
-    --tolerance 1e-7
+    --max-iterations 10
 
 # Step 3: Visualize refined contours
 python examples/visualize_partition.py \
