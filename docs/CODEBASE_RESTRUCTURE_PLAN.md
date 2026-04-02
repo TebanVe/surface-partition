@@ -22,43 +22,40 @@ The current layout has three issues:
 
 ## Current Structure
 
-### `src/` (34 files)
+### `src/` (31 files, after pre-restructure cleanup)
 
 ```
 src/
-├── __init__.py                     (package exports, __version__ = "0.2.0")
-├── config.py                       (131 lines — configuration)
-├── logging_config.py               (284 lines — logging setup)
-├── find_contours.py                (296 lines — contour extraction from HDF5 solutions)
+├── __init__.py                     (37 lines — package exports, __version__ = "0.2.0")
+├── config.py                       (118 lines — configuration)
+├── logging_config.py               (133 lines — logging setup)
+├── find_contours.py                (276 lines — contour extraction from HDF5 solutions)
 ├── projection_iterative.py         (363 lines — projection onto constraints)
-├── plot_utils.py                   (411 lines — 2D plotting)
-├── plot_utils_3d.py                (160 lines — 3D PyVista plotting)
-├── core/                           (NO __init__.py — 25 files)
-│   ├── tri_mesh.py                 (311 lines — mesh container + FEM)
-│   ├── mesh_topology.py            (204 lines — mesh connectivity)
+├── plot_utils.py                   (232 lines — 2D plotting)
+├── core/                           (NO __init__.py — 22 files)
+│   ├── tri_mesh.py                 (156 lines — mesh container + FEM)
+│   ├── mesh_topology.py            (156 lines — mesh connectivity)
 │   ├── interpolation.py            (23 lines — nearest-neighbor interp)
-│   ├── contour_partition.py        (1398 lines — VP, segments, partition)
-│   ├── area_calculator.py          (511 lines — area computation)
-│   ├── perimeter_calculator.py     (274 lines — perimeter computation)
-│   ├── steiner_handler.py          (457 lines — triple point Steiner trees)
+│   ├── contour_partition.py        (1187 lines — VP, segments, partition)
+│   ├── area_calculator.py          (493 lines — area computation)
+│   ├── perimeter_calculator.py     (252 lines — perimeter computation)
+│   ├── steiner_handler.py          (429 lines — triple point Steiner trees)
 │   ├── partition_arrays.py         (86 lines — flat NumPy snapshot for vectorized eval)
 │   ├── vectorized_area.py          (560 lines — vectorized area + Jacobian + Hessian)
 │   ├── vectorized_perimeter.py     (146 lines — vectorized perimeter + gradient + Hessian)
 │   ├── vectorized_steiner.py       (297 lines — analytical Steiner vectorized + FD Hessian)
-│   ├── perimeter_optimizer.py      (1064 lines — SLSQP/IPOPT perimeter optimization)
+│   ├── perimeter_optimizer.py      (719 lines — SLSQP/IPOPT perimeter optimization)
 │   ├── pgd_optimizer.py            (394 lines — projected gradient descent)
-│   ├── pyslsqp_optimizer.py        (306 lines — PySLSQP wrapper)
+│   ├── pyslsqp_optimizer.py        (295 lines — PySLSQP wrapper)
 │   ├── migration_types.py          (108 lines — migration dataclasses)
 │   ├── migration_utils.py          (94 lines — migration helpers)
-│   ├── migration_detector.py       (328 lines — Type 1/2 trigger detection)
+│   ├── migration_detector.py       (311 lines — Type 1/2 trigger detection)
 │   ├── migration_executor.py       (531 lines — snapshot + T1/T2 execution)
-│   ├── migration_orchestrator.py   (308 lines — optimize–detect–migrate loop)
+│   ├── migration_orchestrator.py   (264 lines — optimize–detect–migrate loop)
 │   ├── one_ring_rebuilder.py       (199 lines — 1-ring rebuild after migration)
 │   ├── type1_component_analyzer.py (1434 lines — Type 1 component analysis)
-│   ├── type2_migration_history.py  (203 lines — in-memory migration history)
-│   ├── type2_migration_io.py       (198 lines — HDF5 I/O for migration history)
-│   ├── topology_switcher.py        (3824 lines — LEGACY monolithic migration)
-│   └── topology_switcher_legacy.py (3824 lines — LEGACY duplicate)
+│   ├── type2_migration_history.py  (110 lines — in-memory migration history)
+│   └── type2_migration_io.py       (198 lines — HDF5 I/O for migration history)
 └── surfaces/                       (NO __init__.py)
     ├── torus.py                    (106 lines — torus mesh provider)
     └── ring.py                     (89 lines — ring mesh provider)
@@ -152,11 +149,10 @@ src/
 │
 └── visualization/           (all plotting)
     ├── __init__.py
-    ├── plot_utils.py        (2D matplotlib plots)
-    └── plot_utils_3d.py     (3D PyVista plots)
+    └── plot_utils.py        (2D matplotlib plots)
 ```
 
-**Total: 33 active files** (two legacy `topology_switcher*.py` files removed; see §Legacy Files below).
+**Total: 31 active files** (after pre-restructure cleanup: `topology_switcher*.py`, `plot_utils_3d.py`, and `refine_perimeter.py` removed; dead methods trimmed from 14 files).
 
 ### `examples/` (after Phase B + C)
 
@@ -203,7 +199,7 @@ The modular migration system that replaces the legacy monolithic `topology_switc
 The extension point for closed surfaces (surfaces without boundary). The torus is the primary surface for the project. The ring (`ring.py`) was used during early planar tests but will be **removed** — the mathematical setting requires surfaces without boundary, and the ring (an annulus) does not satisfy this. After removal, `surfaces/` will contain only `torus.py`, but the subpackage is designed to accommodate future closed surfaces (e.g. sphere, genus-2 surface) as the research expands.
 
 ### `visualization/` — Plotting
-All matplotlib and PyVista plotting utilities. Used only by example/testing scripts, never by the computational core.
+Matplotlib plotting utilities. Used only by example/testing scripts, never by the computational core. (`plot_utils_3d.py` was removed in pre-restructure cleanup — the visualization scripts use PyVista directly.)
 
 ### `pipeline/` — Pipeline Orchestration (Phase C)
 Two new files that serve different roles:
@@ -223,16 +219,9 @@ Two new files that serve different roles:
 
 The following files should be removed as part of the restructure.
 
-### Monolithic topology switcher
+### Monolithic topology switcher — DONE
 
-The modular migration system (`migration_detector.py`, `migration_executor.py`, `migration_orchestrator.py`, etc.) is its replacement and is already in use.
-
-| File | Action |
-|------|--------|
-| `topology_switcher.py` (3824 lines) | **Remove.** |
-| `topology_switcher_legacy.py` (3824 lines) | **Remove.** Duplicate of `topology_switcher.py`, kept as a safety copy. No longer needed once the modular system is validated. |
-
-If a fallback is desired during transition, move both files to a `_legacy/` directory outside `src/` (or a `legacy/` subdirectory within `migration/`) rather than keeping them as active code.
+Both `topology_switcher.py` and `topology_switcher_legacy.py` (3824 lines each) were removed in the pre-restructure cleanup. The modular migration system (`migration_detector.py`, `migration_executor.py`, `migration_orchestrator.py`, etc.) is their replacement and is fully in use. The `--use-legacy` CLI flags were also removed from all scripts.
 
 ### Ring surface
 
@@ -261,9 +250,8 @@ The restructure changes import paths. Examples of the most common transitions:
 | `from src.core.pyslsqp_optimizer import PySLSQPOptimizer` | `from src.optimization.pyslsqp_optimizer import PySLSQPOptimizer` |
 | `from src.projection_iterative import ...` | `from src.optimization.projection import ...` |
 | `from src.core.migration_orchestrator import MigrationOrchestrator` | `from src.migration.migration_orchestrator import MigrationOrchestrator` |
-| `from src.core.topology_switcher import TopologySwitcher` | **Removed** (use modular migration system) |
+| `from src.core.topology_switcher import TopologySwitcher` | **Already removed** in pre-restructure cleanup |
 | `from src.plot_utils import ...` | `from src.visualization.plot_utils import ...` |
-| `from src.plot_utils_3d import ...` | `from src.visualization.plot_utils_3d import ...` |
 
 To minimize disruption, `src/__init__.py` can re-export key symbols at the old paths during a transition period.
 
@@ -299,7 +287,7 @@ The topology switch system is implemented and under active testing. The restruct
 
 ### Phase A — Reorganize `src/core/` into subpackages
 
-1. **Validate the modular migration system** passes all current tests before removing legacy files.
+1. ~~Validate the modular migration system~~ — **DONE** (legacy files removed, `--use-legacy` flags stripped).
 2. **Add `__init__.py` files** to all new subpackages.
 3. **Move files one subpackage at a time**, in dependency order:
    - `mesh/` first (no internal deps)
@@ -311,7 +299,7 @@ The topology switch system is implemented and under active testing. The restruct
 4. **Update imports** in all consumer scripts after each subpackage move. Use `git grep` to find all import statements.
 5. **Run all tests** after each subpackage move to catch broken imports immediately.
 6. **Update `src/__init__.py`** to re-export from new locations for backward compatibility.
-7. **Remove legacy files** (`topology_switcher.py`, `topology_switcher_legacy.py`) after confirming the modular migration system covers all use cases.
+7. ~~Remove legacy files~~ — **DONE** (removed in pre-restructure cleanup).
 
 ### Phase B — Elevate `examples/data_loader.py` into `src/`
 

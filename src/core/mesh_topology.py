@@ -142,50 +142,6 @@ class MeshTopology:
         normalized_edge = tuple(sorted(edge))
         return self.edge_to_triangles.get(normalized_edge, [])
     
-    def get_free_edges_at_vertex(self, vertex_idx: int, 
-                                   occupied_edges: Set[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """
-        Get edges at a vertex that don't have variable points.
-        
-        Args:
-            vertex_idx: Index of the vertex
-            occupied_edges: Set of edges that already have variable points
-            
-        Returns:
-            List of free edge tuples
-        """
-        all_edges = self.get_edges_at_vertex(vertex_idx)
-        return [e for e in all_edges if e not in occupied_edges]
-    
-    def is_boundary_edge(self, edge: Tuple[int, int]) -> bool:
-        """
-        Check if an edge is on the mesh boundary (only 1 adjacent triangle).
-        
-        Args:
-            edge: Edge tuple
-            
-        Returns:
-            True if edge is on boundary
-        """
-        triangles = self.get_triangles_sharing_edge(edge)
-        return len(triangles) == 1
-    
-    def get_adjacent_edges_through_vertex(self, current_edge: Tuple[int, int], 
-                                          vertex_idx: int) -> List[Tuple[int, int]]:
-        """
-        Get edges adjacent to current_edge through a specific vertex.
-        
-        Args:
-            current_edge: Current edge containing variable point
-            vertex_idx: Vertex that variable point is approaching
-            
-        Returns:
-            List of adjacent edges (excluding current_edge)
-        """
-        all_edges = self.get_edges_at_vertex(vertex_idx)
-        normalized_current = tuple(sorted(current_edge))
-        return [e for e in all_edges if e != normalized_current]
-    
     def _build_vertex_neighbors(self):
         """Build cached vertex neighbor lookup from edge data."""
         self._vertex_neighbors = {}
@@ -193,10 +149,6 @@ class MeshTopology:
             v1, v2 = edge
             self._vertex_neighbors.setdefault(v1, set()).add(v2)
             self._vertex_neighbors.setdefault(v2, set()).add(v1)
-    
-    def get_vertex_neighbors(self, vertex_idx: int) -> Set[int]:
-        """All vertices directly connected to vertex_idx. Cached O(1)."""
-        return self._vertex_neighbors.get(vertex_idx, set())
     
     def are_neighbors(self, v1: int, v2: int) -> bool:
         """Check if two vertices are at mesh distance 1."""

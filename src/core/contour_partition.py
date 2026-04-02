@@ -757,25 +757,6 @@ class PartitionContour:
         self._build_segment_to_triangle_map()
         self.logger.info("Rebuilt segment_to_triangle map")
     
-    def validate_segment_to_triangle_map(self) -> bool:
-        """Validate that segment_to_triangle map is consistent with triangle_segments."""
-        expected_count = sum(1 for ts in self._triangle_segments.values() if len(ts.var_point_indices) == 2)
-        
-        if len(self.segment_to_triangle) != expected_count:
-            self.logger.error(f"Map size mismatch: {len(self.segment_to_triangle)} vs {expected_count} (2-VP segments)")
-            return False
-        
-        for tri_seg in self._triangle_segments.values():
-            if len(tri_seg.var_point_indices) == 2:
-                seg_key = tuple(sorted(tri_seg.var_point_indices))
-                mapped_tri = self.segment_to_triangle.get(seg_key)
-                
-                if mapped_tri != tri_seg.triangle_idx:
-                    self.logger.error(f"Inconsistency: segment {seg_key} maps to {mapped_tri}, expected {tri_seg.triangle_idx}")
-                    return False
-        
-        return True
-    
     def get_triangle_based_segments(self) -> List[Tuple[int, int]]:
         """
         Extract all segments from triangle_segments.
@@ -839,80 +820,6 @@ class PartitionContour:
                 continue
         
         return segments
-    
-    def to_visualization_format(self) -> Dict[int, List[np.ndarray]]:
-        """
-        Export refined contours in the same format as ContourAnalyzer.extract_contours().
-        
-        Phase 4: Uses explicit boundary_segments for accurate visualization after
-        topology switches. This ensures cross-triangle segments are properly rendered.
-        
-        Returns:
-            Dict[region_idx] -> List[segment arrays (2, D)]
-            where D is 2 or 3 depending on mesh dimension
-        """
-        contours_dict = {i: [] for i in range(self.n_cells)}
-        
-        # Phase 4: Use explicit boundary_segments for complete coverage
-        if self.boundary_segments:
-            for seg in self.boundary_segments:
-                # Get positions of both VPs
-                p1 = self.evaluate_variable_point(seg.vp_idx_1)
-                p2 = self.evaluate_variable_point(seg.vp_idx_2)
-                
-                segment = np.vstack([p1, p2])
-                
-                # Add to both cells that this segment separates
-                cell_a, cell_b = seg.cell_pair
-                if cell_a < self.n_cells:
-                    contours_dict[cell_a].append(segment)
-                if cell_b < self.n_cells and cell_b != cell_a:
-                    contours_dict[cell_b].append(segment)
-            
-            total_segments = sum(len(segs) for segs in contours_dict.values())
-            self.logger.info(f"Converted to visualization format (Phase 4 boundary_segments): "
-                            f"{total_segments} total segments")
-        else:
-            # Fallback to triangle-based extraction (for backward compatibility)
-            self.logger.warning("No boundary_segments found, using fallback triangle-based extraction")
-        vertex_labels = self._vertex_labels
-        for tri_seg in self._triangle_segments.values():
-            if tri_seg.num_cells(vertex_labels) == 2:
-                if len(tri_seg.var_point_indices) == 2:
-                    vp_idx1, vp_idx2 = tri_seg.var_point_indices
-                    
-                    p1 = self.evaluate_variable_point(vp_idx1)
-                    p2 = self.evaluate_variable_point(vp_idx2)
-                    
-                    segment = np.vstack([p1, p2])
-                    
-                    cells_in_triangle = tri_seg.get_cell_indices(vertex_labels)
-                    for cell_idx in cells_in_triangle:
-                        contours_dict[cell_idx].append(segment)
-            
-            elif tri_seg.is_triple_point():
-                if len(tri_seg.var_point_indices) == 3:
-                    vp_idx1, vp_idx2, vp_idx3 = tri_seg.var_point_indices
-                    
-                    p1 = self.evaluate_variable_point(vp_idx1)
-                    p2 = self.evaluate_variable_point(vp_idx2)
-                    p3 = self.evaluate_variable_point(vp_idx3)
-                    
-                    seg12 = np.vstack([p1, p2])
-                    seg23 = np.vstack([p2, p3])
-                    seg31 = np.vstack([p3, p1])
-                    
-                    cells_in_triangle = tri_seg.get_cell_indices(vertex_labels)
-                    for cell_idx in cells_in_triangle:
-                        contours_dict[cell_idx].append(seg12)
-                        contours_dict[cell_idx].append(seg23)
-                        contours_dict[cell_idx].append(seg31)
-        
-        total_segments = sum(len(segs) for segs in contours_dict.values())
-        self.logger.info(f"Converted to visualization format (Phase 3 fallback): "
-                        f"{total_segments} total segments")
-        
-        return contours_dict
     
     # =========================================================================
     # Vectorized evaluation support
@@ -1222,39 +1129,6 @@ class PartitionContour:
             hess_offset_map=hess_offset_map,
         )
 
-    def identify_triple_points(self) -> List[Tuple[int, List[int]]]:
-        """
-        Identify mesh triangles where three different partition cells meet.
-        
-        Uses vertex_labels directly.
-        
-        Returns:
-            List of (triangle_idx, [var_point_idx1, var_point_idx2, var_point_idx3])
-        """
-        triple_points = []
-        vertex_labels = self._vertex_labels
-        
-        for tri_idx, face in enumerate(self.mesh.faces):
-            v1, v2, v3 = int(face[0]), int(face[1]), int(face[2])
-            labels = {int(vertex_labels[v1]), int(vertex_labels[v2]), int(vertex_labels[v3])}
-            
-            if len(labels) == 3:
-                edges = [
-                    tuple(sorted([v1, v2])),
-                    tuple(sorted([v2, v3])),
-                    tuple(sorted([v3, v1]))
-                ]
-                var_points = []
-                for edge in edges:
-                    if edge in self.edge_to_varpoint:
-                        var_points.append(self.edge_to_varpoint[edge])
-                
-                if len(var_points) == 3:
-                    triple_points.append((tri_idx, var_points))
-        
-        self.logger.info(f"Identified {len(triple_points)} triple points")
-        return triple_points
-    
     def identify_triple_points_from_current_vps(self) -> List[Tuple[int, List[int]]]:
         """
         Identify triple points based on CURRENT VP positions (works after topology switches).

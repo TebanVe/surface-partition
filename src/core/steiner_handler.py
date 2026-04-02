@@ -297,28 +297,6 @@ class TriplePoint:
         
         return gradients
     
-    def get_segments(self, partition: Optional[PartitionContour] = None) -> Dict[int, List[np.ndarray]]:
-        """Get Steiner tree segments for visualization."""
-        if self.steiner_point is None:
-            self.compute_steiner_point(partition=partition)
-        
-        segments_dict = {cell_idx: [] for cell_idx in self.cell_indices}
-        
-        for i, vp_idx in enumerate(self.var_point_indices):
-            vp_pos = self.boundary_points[i]
-            segment = np.vstack([vp_pos, self.steiner_point])
-            
-            if partition is not None:
-                vp = partition.variable_points[vp_idx]
-                for cell_idx in vp.belongs_to_cells:
-                    if cell_idx in segments_dict:
-                        segments_dict[cell_idx].append(segment)
-            else:
-                for cell_idx in self.cell_indices:
-                    segments_dict[cell_idx].append(segment)
-        
-        return segments_dict
-    
     def compute_gradients_finite_difference(self, partition: PartitionContour,
                                             eps: float = 1e-6) -> np.ndarray:
         """Compute gradients of Steiner tree perimeter w.r.t. λ parameters."""
@@ -449,9 +427,3 @@ class SteinerHandler:
         """Find triple points with Steiner point near triangle boundary."""
         return [tp for tp in self.triple_points if tp.is_on_triangle_boundary(self.mesh, tol)]
     
-    def update_after_lambda_change(self):
-        """Recompute all Steiner points after λ parameters change."""
-        for tp in self.triple_points:
-            tp.steiner_point = None
-            vp_positions = [self.partition.evaluate_variable_point(vi) for vi in tp.var_point_indices]
-            tp.compute_steiner_point(vp_positions=vp_positions)

@@ -59,19 +59,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'examples'))
 
 # Pre-parse --use-legacy before conditional imports
 _pre_parser = argparse.ArgumentParser(add_help=False)
-_pre_parser.add_argument('--use-legacy', action='store_true',
-                         help='Use legacy migration path (TopologySwitcher, Type1ComponentAnalyzer, etc.)')
 _pre_args, _ = _pre_parser.parse_known_args()
-_use_legacy = _pre_args.use_legacy
 
-if _use_legacy:
-    from src.core.topology_switcher_legacy import TopologySwitcher
-    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-    from src.core.type2_migration_history import Type2MigrationHistory
-    from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
-else:
-    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-    from src.core.migration_types import TriplePointHistory
+from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.core.migration_types import TriplePointHistory
 
 from examples.data_loader import load_partition_from_refined_file
 from src.core.tri_mesh import TriMesh

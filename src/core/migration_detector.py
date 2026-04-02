@@ -17,7 +17,7 @@ try:
     from .contour_partition import PartitionContour
     from .mesh_topology import MeshTopology
     from .steiner_handler import SteinerHandler, TriplePoint
-    from .migration_types import Type1Trigger, Type2Trigger, DetectionResult
+    from .migration_types import Type1Trigger, Type2Trigger
     from . import migration_utils
 except ImportError:
     import sys, os
@@ -26,7 +26,7 @@ except ImportError:
     from core.contour_partition import PartitionContour
     from core.mesh_topology import MeshTopology
     from core.steiner_handler import SteinerHandler, TriplePoint
-    from core.migration_types import Type1Trigger, Type2Trigger, DetectionResult
+    from core.migration_types import Type1Trigger, Type2Trigger
     from core import migration_utils
 
 logger = get_logger(__name__)
@@ -309,20 +309,3 @@ def select_highest_priority(type1_triggers: List[Type1Trigger],
     if type1_triggers:
         return min(type1_triggers, key=lambda t: t.min_lambda_distance)
     return None
-
-
-def detect_all(partition: PartitionContour,
-               mesh_topology: MeshTopology,
-               steiner_handler: Optional[SteinerHandler] = None,
-               delta: float = 0.05,
-               angle_threshold: float = 120.0) -> DetectionResult:
-    """Run full detection pipeline and return combined result."""
-    t1 = detect_type1_triggers(partition, mesh_topology, delta)
-    t2 = detect_type2_triggers(partition, steiner_handler, mesh_topology,
-                                angle_threshold) if steiner_handler else []
-    
-    return DetectionResult(
-        type1_triggers=t1,
-        type2_triggers=t2,
-        conflicts_resolved=False
-    )

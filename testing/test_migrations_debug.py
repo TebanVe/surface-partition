@@ -34,17 +34,6 @@ import numpy as np
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'examples'))
 
-# Pre-parse --use-legacy to determine which modules to load
-# Skip pre-parse when --help is passed so the main parser can show full help
-if '--help' in sys.argv or '-h' in sys.argv:
-    USE_LEGACY = False
-else:
-    _pre_parser = argparse.ArgumentParser()
-    _pre_parser.add_argument('--use-legacy', action='store_true',
-                             help='Use legacy TopologySwitcher')
-    _pre_args, _ = _pre_parser.parse_known_args()
-    USE_LEGACY = _pre_args.use_legacy
-
 from examples.data_loader import load_partition_from_refined_file
 from src.core.tri_mesh import TriMesh
 from src.core.mesh_topology import MeshTopology
@@ -55,14 +44,8 @@ from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.type2_migration_io import load_type2_migration_history
 from src.core import migration_utils
 from src.logging_config import get_logger, setup_logging
-
-if USE_LEGACY:
-    from src.core.topology_switcher_legacy import TopologySwitcher
-    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-    from src.core.type2_migration_history import Type2MigrationHistory
-else:
-    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-    from src.core.migration_types import TriplePointHistory
+from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.core.migration_types import TriplePointHistory
 
 
 # ============================================================================

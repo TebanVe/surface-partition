@@ -117,16 +117,3 @@ class Config:
 				else:
 					print(f"  Warning: Unknown parameter '{k}' with value {v}")
 			print("\n")
-	
-	def get_theoretical_area(self):
-		"""Compute the theoretical area of the ring."""
-		return np.pi * (self.r_outer**2 - self.r_inner**2)
-	
-	def get_mesh_parameters(self):
-		"""Get mesh generation parameters."""
-		return {
-			'n_radial': self.n_radial,
-			'n_angular': self.n_angular,
-			'r_inner': self.r_inner,
-			'r_outer': self.r_outer
-		} 

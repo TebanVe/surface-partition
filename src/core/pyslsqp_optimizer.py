@@ -294,14 +294,3 @@ class PySLSQPOptimizer:
 		if iter_num % self.log_frequency == 0:
 			self.logger.info(f"    Target area per partition: {self.target_area:.6e}")
 			self.logger.info(f"    Current partition areas: {areas}")
-
-	def print_optimization_log(self):
-		self.logger.info("Optimization Log Summary:")
-		self.logger.info("=" * 80)
-		self.logger.info("Total iterations: %d" % len(self.log['iterations']))
-		self.logger.info("Area evolution snapshots: %d" % len(self.log['area_evolution']))
-		if self.log['warnings']:
-			self.logger.info(f"Warnings: {len(self.log['warnings'])}")
-			for w in self.log['warnings']:
-				self.logger.info(f"  - {w}")
-		self.logger.info("=" * 80) 

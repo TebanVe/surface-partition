@@ -472,24 +472,6 @@ class AreaCalculator:
         area2 = self._triangle_area_3d(p1, p3, p4)
         return area1 + area2
     
-    def compute_area_constraints(self, lambda_vec: np.ndarray, 
-                                target_area: float) -> np.ndarray:
-        """
-        Compute area constraint violations: Area_i - target_area.
-        
-        Used in optimization to enforce equal-area constraints.
-        Last cell area is not constrained (determined by others).
-        
-        Args:
-            lambda_vec: Current variable point parameters
-            target_area: Target area for each cell
-            
-        Returns:
-            Array of shape (n_cells - 1,) with constraint violations
-        """
-        areas = self.compute_all_cell_areas(lambda_vec)
-        return areas[:-1] - target_area
-    
     def compute_area_jacobian(self, lambda_vec: np.ndarray) -> np.ndarray:
         """
         Compute Jacobian of area constraints: ∂(Area_i - target)/∂λ.

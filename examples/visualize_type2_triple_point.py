@@ -44,14 +44,7 @@ from src.core.area_calculator import AreaCalculator
 
 # Pre-parse --use-legacy before conditional imports
 import argparse as _argparse
-_preparser = _argparse.ArgumentParser(add_help=False)
-_preparser.add_argument('--use-legacy', action='store_true')
-_preargs, _ = _preparser.parse_known_args()
-
-if _preargs.use_legacy:
-    from src.core.topology_switcher_legacy import TopologySwitcher
-else:
-    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
 # Import data loading from the reference script
 from examples.data_loader import load_partition_from_refined_file

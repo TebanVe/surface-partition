@@ -66,18 +66,8 @@ from src.core.perimeter_optimizer import PerimeterOptimizer
 from src.core.mesh_topology import MeshTopology
 from src.logging_config import get_logger, setup_logging
 
-# Early parse for --use-legacy (before migration-specific imports)
-_preparser = argparse.ArgumentParser(add_help=False)
-_preparser.add_argument('--use-legacy', action='store_true', help='Use legacy TopologySwitcher')
-_preargs, _ = _preparser.parse_known_args()
-
-if _preargs.use_legacy:
-    from src.core.topology_switcher_legacy import TopologySwitcher
-    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-    from src.core.type2_migration_io import load_type2_migration_history, save_type2_migration_history
-else:
-    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-    from src.core.migration_types import TriplePointHistory
+from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.core.migration_types import TriplePointHistory
 
 
 def detect_file_type(path):

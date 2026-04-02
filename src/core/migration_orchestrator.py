@@ -18,7 +18,7 @@ try:
     from .perimeter_calculator import PerimeterCalculator
     from .migration_types import (
         Type1Trigger, Type2Trigger, TriplePointHistory,
-        DetectionResult, MigrationResult, CycleResult
+        DetectionResult, MigrationResult
     )
     from .migration_detector import (
         detect_type1_triggers, detect_type2_triggers, resolve_conflicts
@@ -38,7 +38,7 @@ except ImportError:
     from core.perimeter_calculator import PerimeterCalculator
     from core.migration_types import (
         Type1Trigger, Type2Trigger, TriplePointHistory,
-        DetectionResult, MigrationResult, CycleResult
+        DetectionResult, MigrationResult
     )
     from core.migration_detector import (
         detect_type1_triggers, detect_type2_triggers, resolve_conflicts
@@ -53,8 +53,6 @@ class MigrationConfig:
     """Configuration for the migration orchestrator."""
     delta: float = 0.05
     angle_threshold: float = 120.0
-    batch_mode: bool = True
-    max_iterations: int = 50
 
 
 class MigrationOrchestrator:
@@ -200,48 +198,6 @@ class MigrationOrchestrator:
             self.reinitialize_steiner_handler()
         
         return success
-    
-    def run_one_cycle(self, optimizer=None, delta: Optional[float] = None,
-                      mode: str = 'batch') -> CycleResult:
-        """
-        Run one optimize-detect-switch cycle.
-        
-        Args:
-            optimizer: If provided, call optimizer.optimize() first
-            delta: Detection threshold (overrides config)
-            mode: 'batch' or 'single'
-        """
-        cycle = CycleResult()
-        
-        if optimizer is not None:
-            optimizer.optimize()
-        
-        cycle.detection = self.detect_all_triggers(delta)
-        
-        if (not cycle.detection.type1_triggers and 
-            not cycle.detection.type2_triggers):
-            cycle.converged = True
-            return cycle
-        
-        cycle.migration = self.execute_migrations(mode)
-        return cycle
-    
-    def get_migration_summary(self) -> Dict:
-        """Return a summary dict of migration state for logging/export."""
-        return {
-            'n_triple_junctions': len(self._triple_point_histories),
-            'triple_junction_details': {
-                str(sorted(tid)): {
-                    'visited_triangles': h.visited_triangles,
-                    'n_snapshots': len(h.snapshots),
-                    'flipped_vertices': h.flipped_vertices
-                }
-                for tid, h in self._triple_point_histories.items()
-            },
-            'type1_history_length': len(self._type1_history),
-            'active_vps': len(self.partition.active_vp_indices),
-            'total_vps': len(self.partition.variable_points)
-        }
     
     def _check_reversals(self, type2_triggers):
         """Check if any Type 2 triggers would cause a reversal (return to visited triangle)."""

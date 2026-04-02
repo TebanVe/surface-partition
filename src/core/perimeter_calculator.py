@@ -249,26 +249,4 @@ class PerimeterCalculator:
         
         return gradient
     
-    def verify_gradient_finite_differences(self, lambda_vec: np.ndarray, 
-                                          eps: float = 1e-7) -> np.ndarray:
-        """
-        Verify analytical gradient using finite differences (for debugging).
-        
-        Args:
-            lambda_vec: Current variable point parameters
-            eps: Perturbation size
-            
-        Returns:
-            Finite difference gradient array
-        """
-        grad_fd = np.zeros(len(lambda_vec))
-        f0 = self.compute_total_perimeter(lambda_vec)
-        
-        for i in range(len(lambda_vec)):
-            lambda_perturbed = lambda_vec.copy()
-            lambda_perturbed[i] += eps
-            f_perturbed = self.compute_total_perimeter(lambda_perturbed)
-            grad_fd[i] = (f_perturbed - f0) / eps
-        
-        return grad_fd
 

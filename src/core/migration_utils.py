@@ -3,7 +3,7 @@ Shared utility functions for Type 1 migration calculations.
 
 This module contains low-level helper functions used by both:
 - Component analysis (type1_component_analyzer.py)
-- Migration execution (topology_switcher.py)
+- Migration execution (migration_executor.py)
 """
 
 import numpy as np

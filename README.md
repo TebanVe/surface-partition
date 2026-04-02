@@ -107,7 +107,6 @@ RingTest/
 │   │   └── torus.py             # Torus of revolution (R3) provider
 │   ├── config.py                 # Configuration management
 │   ├── plot_utils.py             # 2D visualization utilities (Matplotlib)
-│   ├── plot_utils_3d.py          # 3D visualization utilities (PyVista)
 │   ├── logging_config.py         # Logging system
 │   ├── projection_iterative.py   # Constraint projection algorithms
 │   ├── find_contours.py          # Contour extraction utilities (R2/R3)

@@ -8,7 +8,7 @@ __email__ = "your.email@example.com"
 
 from .config import Config
 from .plot_utils import plot_ring_mesh, plot_matrices, plot_mesh_statistics, save_mesh_plots
-from .logging_config import setup_logging, get_logger, log_performance, log_performance_conditional
+from .logging_config import setup_logging, get_logger, log_performance
 # Expose core optimizer
 from .core.pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
 from .core.pgd_optimizer import ProjectedGradientOptimizer
@@ -28,7 +28,6 @@ __all__ = [
 	"setup_logging",
 	"get_logger",
 	"log_performance",
-	"log_performance_conditional",
 	"PySLSQPOptimizer",
 	"ProjectedGradientOptimizer",
 	"RefinementTriggered",

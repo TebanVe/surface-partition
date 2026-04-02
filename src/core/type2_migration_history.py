@@ -13,7 +13,7 @@ Author: Type 2 reverse migration system
 Date: February 2026
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 import logging
 
 
@@ -61,24 +61,6 @@ class Type2MigrationRecord:
         self.iteration_sequence.append(iteration)
         self.vp_records.append(vp_record)
     
-    def truncate_to_index(self, target_index: int):
-        """
-        Truncate history after reverse migration.
-        
-        This removes all migrations from target_index+1 onwards, effectively
-        "undoing" those migrations from the recorded history.
-        
-        Args:
-            target_index: Index to truncate to (keep everything up to and including this)
-        """
-        self.triangle_sequence = self.triangle_sequence[:target_index + 1]
-        self.iteration_sequence = self.iteration_sequence[:target_index]
-        self.vp_records = self.vp_records[:target_index]
-    
-    def get_current_triangle(self) -> int:
-        """Get the current triangle (last in sequence)."""
-        return self.triangle_sequence[-1]
-    
     def get_num_migrations(self) -> int:
         """Get number of migrations from original position."""
         return len(self.triangle_sequence) - 1
@@ -120,81 +102,6 @@ class Type2MigrationHistory:
             if record.get_current_triangle() == current_triangle:
                 return record
         return None
-    
-    def check_for_reverse(
-        self, 
-        current_triangle: int, 
-        target_triangle: int
-    ) -> Optional[Tuple[int, int]]:
-        """
-        Check if this is a reverse migration.
-        
-        A migration is a reverse if:
-        1. There's a record for the current triangle
-        2. The target triangle appears earlier in that record's sequence
-        
-        Args:
-            current_triangle: Triangle the triple point is currently in
-            target_triangle: Triangle the triple point wants to migrate to
-            
-        Returns:
-            None: Not reversible (forward migration)
-            (original_triangle, target_index): Reversible, truncate to target_index
-        """
-        record = self.find_record_by_current_triangle(current_triangle)
-        if record is None:
-            return None
-        
-        # Check if target appears earlier in sequence
-        # Exclude the last element (current position) from search
-        try:
-            target_index = record.triangle_sequence[:-1].index(target_triangle)
-            return (record.original_triangle, target_index)
-        except ValueError:
-            return None  # Target not in history
-    
-    def record_forward_migration(
-        self,
-        current_triangle: int,
-        target_triangle: int,
-        iteration: int,
-        vp_record: Dict
-    ):
-        """
-        Record a forward migration.
-        
-        Creates a new record if this is the first migration from this triangle,
-        otherwise appends to existing record.
-        
-        Args:
-            current_triangle: Triangle migrating from
-            target_triangle: Triangle migrating to
-            iteration: Iteration number
-            vp_record: VP state data for reversal
-        """
-        # Find or create record
-        record = self.find_record_by_current_triangle(current_triangle)
-        
-        if record is None:
-            # First migration from this triangle - create new record
-            record = Type2MigrationRecord(current_triangle)
-            self.records[current_triangle] = record
-        
-        # Add the migration
-        record.add_forward_migration(target_triangle, iteration, vp_record)
-    
-    def get_summary(self) -> Dict:
-        """
-        Get summary statistics of migration history.
-        
-        Returns:
-            Dict with summary information
-        """
-        return {
-            'num_tracked_triple_points': len(self.records),
-            'total_migrations': sum(r.get_num_migrations() for r in self.records.values()),
-            'current_iteration': self.current_iteration
-        }
     
     def __repr__(self) -> str:
         """String representation for debugging."""

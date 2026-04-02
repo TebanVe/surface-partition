@@ -221,26 +221,6 @@ class ContourAnalyzer:
         contours, _ = self.extract_contours_with_topology(level)
         return contours
 
-    def label_triangles_from_indicator(self) -> np.ndarray:
-        """
-        Assign a region label to each triangle via majority vote of its 3 vertices' labels.
-
-        Returns:
-            triangle_labels: (T,) integer labels in [0, n_partitions-1]
-        """
-        if self.densities is None:
-            raise ValueError("Call load_results() before labeling triangles")
-
-        vertex_labels = np.argmax(self.densities, axis=1)
-        T = self.faces.shape[0]
-        labels = np.zeros(T, dtype=int)
-        for t, (v1, v2, v3) in enumerate(self.faces.astype(int)):
-            votes = [vertex_labels[v1], vertex_labels[v2], vertex_labels[v3]]
-            # Majority vote; if tie, pick the first max
-            counts = np.bincount(votes, minlength=self.densities.shape[1])
-            labels[t] = int(np.argmax(counts))
-        return labels
-
     def stitch_segments_to_polylines(self, segments: List[np.ndarray], tol: float = 1e-8) -> List[np.ndarray]:
         """
         Greedy stitching of small line segments into ordered polylines by connecting
