@@ -23,8 +23,7 @@ Key features:
 - --save-iterations flag (default off; only final converged file saved)
 - Auto-detect starting iteration number from filename via regex
 - Full diagnostic suite: VP consistency checks, perimeter roundtrip, drift detection
-- Uses latest v2/v4 migration methods with full component analysis
-- Type 2 migrations applied before Type 1 (proven order)
+- MigrationOrchestrator handles Type 1/2 detection, execution, and rollback
 - Exits immediately on first migration failure with detailed diagnostics
 
 Usage:
@@ -67,7 +66,6 @@ from src.core.mesh_topology import MeshTopology
 from src.logging_config import get_logger, setup_logging
 
 from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-from src.core.migration_types import TriplePointHistory
 
 
 def detect_file_type(path):
@@ -133,359 +131,8 @@ def _check_indicator_vp_consistency(partition, mesh, logger):
         return True
 
 
-def apply_type1_migrations(partition, mesh, vp_candidates, logger, boundary_tol=0.01,
-                          distance_preservation='preserve', steiner_handler=None):
-    """
-    Apply Type 1 migrations for boundary VPs.
-
-    Returns immediately on first failure with detailed failure info.
-    Includes pre-execution VP revalidation and post-migration segment rebuild.
-
-    Args:
-        partition: PartitionContour object
-        mesh: TriMesh object
-        vp_candidates: List of candidate VP indices
-        logger: Logger instance
-        boundary_tol: Boundary tolerance (default: 0.01)
-        distance_preservation: VP placement strategy after migration
-        steiner_handler: Optional pre-created SteinerHandler (for efficiency)
-
-    Returns:
-        dict with keys:
-            - migrations_applied: int
-            - failed: bool
-            - failure_type: str (if failed=True)
-            - component: dict (if failed=True)
-            - component_idx: int (if failed=True)
-            - error: str (if failed=True)
-            - result: dict (if failed=True)
-    """
-    logger.info("")
-    logger.info("="*80)
-    logger.info(f"APPLYING TYPE 1 MIGRATIONS ({len(vp_candidates)} candidates)")
-    logger.info(f"  Boundary tolerance: {boundary_tol}")
-    logger.info(f"  Distance preservation: {distance_preservation}")
-    logger.info("="*80)
-
-    if len(vp_candidates) == 0:
-        logger.info("No Type 1 migrations to apply")
-        logger.info("="*80)
-        return {'migrations_applied': 0, 'failed': False}
-
-    # Create topology objects
-    mesh_topology = MeshTopology(mesh)
-    switcher = TopologySwitcher(mesh, partition, mesh_topology)
-    analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology,
-                                     steiner_handler=steiner_handler)
-
-    # Run full component analysis
-    logger.info("\nStep 1: Running full component analysis...")
-    logger.info("="*80)
-
-    # Temporarily suppress verbose switcher logging
-    import logging
-    switcher_logger = logging.getLogger('src.core.topology_switcher')
-    original_level = switcher_logger.level
-    switcher_logger.setLevel(logging.WARNING)
-
-    analysis_result = analyzer.run_full_analysis(
-        boundary_tol=boundary_tol,
-        conflict_strategy='exclude_one',
-        build_migration_plan=True,
-        protect_type2=True
-    )
-
-    switcher_logger.setLevel(original_level)
-
-    to_migrate = analysis_result['to_migrate']
-    excluded = analysis_result['excluded']
-    type2_excluded = analysis_result.get('type2_excluded', [])
-    migration_plan = analysis_result.get('migration_plan', [])
-
-    logger.info(f"\nComponents selected for migration: {len(to_migrate)}")
-    logger.info(f"Components excluded (conflicts): {len(excluded)}")
-    logger.info(f"Components excluded (Type 2 protection): {len(type2_excluded)}")
-    if migration_plan:
-        logger.info(f"Migration plan entries: {len(migration_plan)}")
-    logger.info("="*80)
-
-    if not migration_plan:
-        logger.info("\nNo components selected for migration after analysis")
-        return {'migrations_applied': 0, 'failed': False}
-
-    migrations_applied = 0
-
-    # Temporarily suppress verbose logging during migration
-    contour_logger = logging.getLogger('src.core.contour_partition')
-    original_contour_level = contour_logger.level
-    switcher_logger.setLevel(logging.WARNING)
-    contour_logger.setLevel(logging.WARNING)
-
-    logger.info("\nApplying migrations using pre-computed plan...")
-
-    for i, plan_entry in enumerate(migration_plan):
-        comp = plan_entry['component']
-        comp_idx = comp['index']
-
-        # Pre-execution VP revalidation: verify auxiliary VPs are still on
-        # edges incident to the target vertex (earlier migrations may have
-        # moved neighbors)
-        target_vertex = comp['target_vertex']
-        aux_vps = plan_entry['auxiliary_component']
-
-        skip_migration = False
-        for vp_idx in aux_vps:
-            vp = partition.variable_points[vp_idx]
-            if target_vertex not in vp.edge:
-                logger.warning(f"  Component {comp_idx}: VP {vp_idx} is on edge {vp.edge} "
-                             f"which does NOT contain target vertex {target_vertex} -- "
-                             f"skipping (invalidated by earlier migration)")
-                skip_migration = True
-                break
-
-        if skip_migration:
-            continue
-
-        try:
-            result = switcher.apply_type1_switch_v2(
-                component=comp,
-                distance_preservation=distance_preservation,
-                migrating_vp=plan_entry['migrating_vp'],
-                auxiliary_component=plan_entry['auxiliary_component'],
-                left_neighbor=plan_entry['left_neighbor'],
-                right_neighbor=plan_entry['right_neighbor']
-            )
-
-            if result['success']:
-                logger.info(f"  Component {comp_idx}: Migration successful")
-                migrations_applied += 1
-                partition.rebuild_triangle_segments_from_current_vps()
-            else:
-                # RETURN IMMEDIATELY ON FIRST FAILURE
-                switcher_logger.setLevel(original_level)
-                contour_logger.setLevel(original_contour_level)
-                return {
-                    'migrations_applied': migrations_applied,
-                    'failed': True,
-                    'failure_type': 'type1',
-                    'component': comp,
-                    'component_idx': comp_idx,
-                    'error': result.get('error', 'Unknown error'),
-                    'result': result
-                }
-
-        except Exception as e:
-            # RETURN IMMEDIATELY ON EXCEPTION
-            switcher_logger.setLevel(original_level)
-            contour_logger.setLevel(original_contour_level)
-            return {
-                'migrations_applied': migrations_applied,
-                'failed': True,
-                'failure_type': 'type1',
-                'component': comp,
-                'component_idx': comp_idx,
-                'error': str(e),
-                'result': {'exception': True}
-            }
-
-    # Restore logging levels
-    switcher_logger.setLevel(original_level)
-    contour_logger.setLevel(original_contour_level)
-
-    # Summary
-    logger.info("")
-    logger.info("="*80)
-    logger.info(f"Type 1 migrations completed: {migrations_applied}/{len(migration_plan)}")
-    logger.info("="*80)
-
-    return {'migrations_applied': migrations_applied, 'failed': False}
-
-
-def apply_type2_migrations(partition, mesh, tp_candidates, logger, steiner_handler=None,
-                          distance_preservation='preserve', migration_history=None, iteration_number=None):
-    """
-    Apply Type 2 migrations for boundary triple points.
-
-    Returns immediately on first failure with detailed failure info.
-    Includes boundary_segments drift check and post-migration segment rebuild.
-
-    Args:
-        partition: PartitionContour object
-        mesh: TriMesh object
-        tp_candidates: List of TriplePoint objects
-        logger: Logger instance
-        steiner_handler: Optional pre-created SteinerHandler (for efficiency)
-        distance_preservation: VP placement strategy after migration
-        migration_history: Optional Type2MigrationHistory object (for reverse migrations)
-        iteration_number: Current iteration number (for history recording)
-
-    Returns:
-        dict with keys:
-            - migrations_applied: int
-            - reversed_migrations: int
-            - failed: bool
-            - failure_type: str (if failed=True)
-            - triple_point: TriplePoint (if failed=True)
-            - tp_idx: int (if failed=True)
-            - error: str (if failed=True)
-            - result: dict (if failed=True)
-    """
-    logger.info("")
-    logger.info("="*80)
-    logger.info(f"APPLYING TYPE 2 MIGRATIONS ({len(tp_candidates)} candidates)")
-    logger.info(f"  Distance preservation: {distance_preservation}")
-    if migration_history is not None:
-        logger.info(f"  Migration history: {len(migration_history.records)} triple points tracked")
-        logger.info(f"  Iteration: {iteration_number}")
-    logger.info("="*80)
-
-    if len(tp_candidates) == 0:
-        logger.info("No Type 2 migrations to apply")
-        logger.info("="*80)
-        return {'migrations_applied': 0, 'reversed_migrations': 0, 'failed': False}
-
-    # Create topology objects
-    mesh_topology = MeshTopology(mesh)
-    switcher = TopologySwitcher(mesh, partition, mesh_topology)
-
-    # Attach migration history and set current iteration
-    if migration_history is not None:
-        switcher.type2_migration_history = migration_history
-        migration_history.current_iteration = iteration_number
-
-    # Reuse steiner_handler if provided
-    if steiner_handler is None:
-        from src.core.steiner_handler import SteinerHandler
-        steiner_handler = SteinerHandler(mesh, partition)
-
-    migrations_applied = 0
-    reversed_migrations = 0
-
-    # Temporarily suppress verbose logging
-    import logging
-    switcher_logger = logging.getLogger('src.core.topology_switcher')
-    contour_logger = logging.getLogger('src.core.contour_partition')
-    original_switcher_level = switcher_logger.level
-    original_contour_level = contour_logger.level
-    switcher_logger.setLevel(logging.WARNING)
-    contour_logger.setLevel(logging.WARNING)
-
-    logger.info("\nApplying migrations...")
-
-    for i, tp in enumerate(tp_candidates):
-        # Find the index of this triple point in steiner_handler.triple_points
-        tp_idx = None
-        for idx, handler_tp in enumerate(steiner_handler.triple_points):
-            if handler_tp.triangle_idx == tp.triangle_idx:
-                tp_idx = idx
-                break
-
-        if tp_idx is None:
-            logger.error(f"  Triple point {i} (triangle {tp.triangle_idx}): Could not find in steiner_handler")
-            continue
-
-        seg_count_before = len(partition.boundary_segments)
-
-        try:
-            result = switcher.apply_type2_switch_v4(
-                steiner_handler=steiner_handler,
-                triple_point_idx=tp_idx,
-                distance_preservation=distance_preservation
-            )
-
-            if result['success']:
-                seg_count_after = len(partition.boundary_segments)
-                if result.get('reversed', False):
-                    logger.info(f"  Triple point {tp_idx} (triangle {tp.triangle_idx}): REVERSE migration successful (reversed {result.get('num_reversed', 1)} migration(s))")
-                    reversed_migrations += result.get('num_reversed', 1)
-                else:
-                    logger.info(f"  Triple point {tp_idx} (triangle {tp.triangle_idx}): Forward migration successful")
-                logger.info(f"    boundary_segments: {seg_count_before} -> {seg_count_after} "
-                           f"(net {seg_count_after - seg_count_before:+d})")
-
-                # boundary_segments drift check
-                canonical_pairs = set()
-                for ts in partition.triangle_segments:
-                    vi = ts.var_point_indices
-                    if len(vi) == 2:
-                        canonical_pairs.add((min(vi[0], vi[1]), max(vi[0], vi[1])))
-                    elif len(vi) == 3:
-                        for a in range(3):
-                            for b in range(a + 1, 3):
-                                canonical_pairs.add((min(vi[a], vi[b]), max(vi[a], vi[b])))
-
-                live_pairs = set()
-                for seg in partition.boundary_segments:
-                    live_pairs.add((min(seg.vp_idx_1, seg.vp_idx_2), max(seg.vp_idx_1, seg.vp_idx_2)))
-
-                extra_in_live = live_pairs - canonical_pairs
-                missing_in_live = canonical_pairs - live_pairs
-
-                if extra_in_live or missing_in_live:
-                    logger.warning(f"    boundary_segments DRIFT detected after Type 2 tp={tp_idx}:")
-                    if extra_in_live:
-                        logger.warning(f"      Phantom segments: {len(extra_in_live)}")
-                        for pair in sorted(extra_in_live)[:5]:
-                            logger.warning(f"        VP {pair[0]} <-> VP {pair[1]}")
-                    if missing_in_live:
-                        logger.warning(f"      Missing segments: {len(missing_in_live)}")
-                        for pair in sorted(missing_in_live)[:5]:
-                            logger.warning(f"        VP {pair[0]} <-> VP {pair[1]}")
-                else:
-                    logger.info(f"    boundary_segments consistent with triangle_segments "
-                               f"({len(live_pairs)} pairs match)")
-
-                partition.rebuild_triangle_segments_from_current_vps()
-                migrations_applied += 1
-            else:
-                # RETURN IMMEDIATELY ON FIRST FAILURE
-                switcher_logger.setLevel(original_switcher_level)
-                contour_logger.setLevel(original_contour_level)
-                return {
-                    'migrations_applied': migrations_applied,
-                    'reversed_migrations': reversed_migrations,
-                    'failed': True,
-                    'failure_type': 'type2',
-                    'triple_point': tp,
-                    'tp_idx': tp_idx,
-                    'error': result.get('error', 'Unknown error'),
-                    'result': result
-                }
-
-        except Exception as e:
-            # RETURN IMMEDIATELY ON EXCEPTION
-            switcher_logger.setLevel(original_switcher_level)
-            contour_logger.setLevel(original_contour_level)
-            return {
-                'migrations_applied': migrations_applied,
-                'reversed_migrations': reversed_migrations,
-                'failed': True,
-                'failure_type': 'type2',
-                'triple_point': tp,
-                'tp_idx': tp_idx,
-                'error': str(e),
-                'result': {'exception': True}
-            }
-
-    # Restore logging levels
-    switcher_logger.setLevel(original_switcher_level)
-    contour_logger.setLevel(original_contour_level)
-
-    # Summary
-    logger.info("")
-    logger.info("="*80)
-    logger.info(f"Type 2 migrations completed: {migrations_applied}/{len(tp_candidates)}")
-    if reversed_migrations > 0:
-        logger.info(f"  Forward migrations: {migrations_applied - reversed_migrations}")
-        logger.info(f"  Reverse migrations: {reversed_migrations}")
-    logger.info("="*80)
-
-    return {'migrations_applied': migrations_applied, 'reversed_migrations': reversed_migrations, 'failed': False}
-
-
 def export_intermediate_state(partition, iteration_number, base_output_path, opt_info, logger,
-                              migration_history=None, boundary_tol=None,
-                              pending_migration=True, mesh=None):
+                              boundary_tol=None, pending_migration=True, mesh=None):
     """
     Export intermediate partition state to HDF5.
 
@@ -498,7 +145,6 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
         base_output_path: Base path without extension
         opt_info: Dictionary with optimization results
         logger: Logger instance
-        migration_history: Optional Type2MigrationHistory object to save
         boundary_tol: Optional boundary tolerance value to include in filename
         pending_migration: Whether topology migration is pending (True) or converged (False)
         mesh: TriMesh object (enables consistency check and roundtrip verification)
@@ -567,13 +213,6 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
         opt_grp.attrs['percent_reduction'] = opt_info['percent_reduction']
         opt_grp.create_dataset('constraint_violations', data=opt_info['final_constraint_violations'])
 
-        # Save Type 2 migration history (legacy path)
-        if migration_history is not None and len(migration_history.records) > 0:
-            save_type2_migration_history(f, migration_history)
-            logger.info(f"Saved migration history: {len(migration_history.records)} triple points tracked")
-            for orig_tri, record in migration_history.records.items():
-                logger.debug(f"  Triangle {orig_tri}: {record.triangle_sequence}")
-
     logger.info("State exported successfully")
     logger.info(f"  {len(lambda_opt)} lambda parameters saved")
     logger.info(f"  Indicator functions saved: {indicator_functions.shape}")
@@ -619,79 +258,6 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
     logger.info("="*80)
 
     return output_path
-
-
-def handle_type1_migration_failure(failure_info, iteration_file, boundary_tol, logger):
-    """Handle Type 1 migration failure with detailed logging."""
-    comp = failure_info['component']
-    comp_idx = failure_info['component_idx']
-    error = failure_info['error']
-
-    logger.error("")
-    logger.error("="*80)
-    logger.error("MIGRATION FAILURE - TYPE 1")
-    logger.error("="*80)
-    logger.error(f"Component {comp_idx} migration FAILED")
-    logger.error("")
-    logger.error("Component details:")
-    logger.error(f"  VPs involved: {comp['vp_indices']}")
-    logger.error(f"  Target vertex: {comp['target_vertex']}")
-    logger.error(f"  Cells involved: {comp['cell_indices']}")
-    logger.error(f"  Distance to target: {comp['distance']:.6f}")
-    logger.error(f"  Component size: {len(comp['vp_indices'])} VPs")
-    logger.error("")
-    logger.error(f"Error: {error}")
-    logger.error("")
-    logger.error("="*80)
-    logger.error("DIAGNOSTIC RECOMMENDATION")
-    logger.error("="*80)
-    logger.error("Visualize this component to investigate the failure:")
-    logger.error("")
-    logger.error(f"  python examples/visualize_type1_vertex_collapse.py \\")
-    logger.error(f"    --solution {iteration_file} \\")
-    logger.error(f"    --component-index {comp_idx} \\")
-    logger.error(f"    --boundary-tol {boundary_tol} \\")
-    logger.error(f"    --state before \\")
-    logger.error(f"    --show-vps \\")
-    logger.error(f"    --show-steiner")
-    logger.error("")
-    logger.error(f"State before failure saved to: {iteration_file}")
-    logger.error("="*80)
-
-
-def handle_type2_migration_failure(failure_info, iteration_file, boundary_tol, logger):
-    """Handle Type 2 migration failure with detailed logging."""
-    tp = failure_info['triple_point']
-    tp_idx = failure_info['tp_idx']
-    error = failure_info['error']
-
-    logger.error("")
-    logger.error("="*80)
-    logger.error("MIGRATION FAILURE - TYPE 2")
-    logger.error("="*80)
-    logger.error(f"Triple point {tp_idx} migration FAILED")
-    logger.error("")
-    logger.error("Triple point details:")
-    logger.error(f"  Triangle: {tp.triangle_idx}")
-    logger.error(f"  VPs involved: {tp.var_point_indices}")
-    logger.error(f"  Cells involved: {tp.cell_indices}")
-    logger.error("")
-    logger.error(f"Error: {error}")
-    logger.error("")
-    logger.error("="*80)
-    logger.error("DIAGNOSTIC RECOMMENDATION")
-    logger.error("="*80)
-    logger.error("Visualize this triple point to investigate the failure:")
-    logger.error("")
-    logger.error(f"  python examples/visualize_type2_triple_point.py \\")
-    logger.error(f"    --solution {iteration_file} \\")
-    logger.error(f"    --triple-point-index {tp_idx} \\")
-    logger.error(f"    --state before \\")
-    logger.error(f"    --show-vps \\")
-    logger.error(f"    --show-steiner")
-    logger.error("")
-    logger.error(f"State before failure saved to: {iteration_file}")
-    logger.error("="*80)
 
 
 def main():
@@ -774,9 +340,6 @@ Example usage:
                             'Requires more computation per iteration. '
                             'Ignored for SLSQP / trust-constr.')
 
-    parser.add_argument('--use-legacy', action='store_true',
-                       help='Use legacy TopologySwitcher')
-
     parser.add_argument('--save-iterations', action='store_true',
                        help='Save an HDF5 checkpoint after each optimization step. '
                             'Enables mid-run resume. Default: off (only final converged result saved).')
@@ -829,7 +392,6 @@ Example usage:
     logger.info("="*80)
     logger.info("Unified Iterative Perimeter Refinement with Automatic Migrations")
     logger.info("="*80)
-    logger.info(f"Migration path: {'legacy (TopologySwitcher)' if args.use_legacy else 'MigrationOrchestrator'}")
     logger.info(f"Input: {args.solution}")
     logger.info(f"Maximum iterations: {args.max_iterations}")
     logger.info(f"Distance preservation: {args.distance_preservation}")
@@ -945,28 +507,6 @@ Example usage:
     logger.info(f"Target area per cell: {target_area:.6f}")
 
     # -------------------------------------------------------------------------
-    # Initialize Type 2 Migration History (legacy path only)
-    # -------------------------------------------------------------------------
-    if args.use_legacy:
-        from src.core.type2_migration_history import Type2MigrationHistory
-        if enter_at == 'migrate':
-            # Load history from checkpoint file on resume
-            try:
-                with h5py.File(args.solution, 'r') as f:
-                    migration_history = load_type2_migration_history(f)
-                logger.info(f"Loaded migration history: {len(migration_history.records)} records")
-                for orig_tri, record in migration_history.records.items():
-                    logger.info(f"  Triangle {orig_tri}: {record.triangle_sequence}")
-            except Exception as e:
-                logger.warning(f"Could not load migration history: {e}. Starting fresh.")
-                migration_history = Type2MigrationHistory()
-        else:
-            migration_history = Type2MigrationHistory()
-            logger.info("Initialized empty Type 2 migration history")
-    else:
-        migration_history = None
-
-    # -------------------------------------------------------------------------
     # Main iteration loop
     # -------------------------------------------------------------------------
     logger.info("")
@@ -1004,74 +544,27 @@ Example usage:
             logger.info(f"RESUMING: Applying pending migration from iteration {starting_iteration}")
             logger.info("="*80)
 
-            # Create optimizer for detection and steiner_handler
-            optimizer = PerimeterOptimizer(partition, mesh, target_area,
-                                           use_vectorized=args.use_vectorized)
+            mesh_topology = MeshTopology(mesh)
+            orchestrator = MigrationOrchestrator(
+                partition, mesh, mesh_topology,
+                MigrationConfig(delta=args.boundary_tol))
+            detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
 
-            if args.use_legacy:
-                switches_needed, switch_info = optimizer.check_topology_switches_needed(
-                    tol=args.boundary_tol)
+            if not detection.type1_triggers and not detection.type2_triggers:
+                logger.warning("File had pending_migration=True but no switches found on resume")
+                converged = True
+                break
 
-                if not switches_needed:
-                    logger.warning("File had pending_migration=True but no switches found on resume")
-                    converged = True
-                    break
+            logger.info(f"Re-detected: {len(detection.type1_triggers)} Type 1, "
+                      f"{len(detection.type2_triggers)} Type 2")
 
-                type1_candidates = [i for i, vp in enumerate(partition.variable_points)
-                                   if vp.on_boundary(tol=args.boundary_tol)]
-                type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(
-                    tol=args.boundary_tol)
-
-                logger.info(f"Re-detected: {len(type1_candidates)} Type 1, {len(type2_candidates)} Type 2")
-
-                # Apply Type 2 first
-                if len(type2_candidates) > 0:
-                    type2_result = apply_type2_migrations(
-                        partition, mesh, type2_candidates, logger,
-                        steiner_handler=optimizer.steiner_handler,
-                        distance_preservation=args.distance_preservation,
-                        migration_history=migration_history,
-                        iteration_number=starting_iteration)
-                    if type2_result.get('failed'):
-                        handle_type2_migration_failure(
-                            type2_result, args.solution, args.boundary_tol, logger)
-                        return 1
-                    total_type2_migrations += type2_result['migrations_applied']
-
-                # Apply Type 1
-                if len(type1_candidates) > 0:
-                    type1_result = apply_type1_migrations(
-                        partition, mesh, type1_candidates, logger,
-                        boundary_tol=args.boundary_tol,
-                        distance_preservation=args.distance_preservation,
-                        steiner_handler=optimizer.steiner_handler)
-                    if type1_result.get('failed'):
-                        handle_type1_migration_failure(
-                            type1_result, args.solution, args.boundary_tol, logger)
-                        return 1
-                    total_type1_migrations += type1_result['migrations_applied']
-            else:
-                mesh_topology = MeshTopology(mesh)
-                orchestrator = MigrationOrchestrator(
-                    partition, mesh, mesh_topology,
-                    MigrationConfig(delta=args.boundary_tol))
-                detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
-
-                if not detection.type1_triggers and not detection.type2_triggers:
-                    logger.warning("File had pending_migration=True but no switches found on resume")
-                    converged = True
-                    break
-
-                logger.info(f"Re-detected: {len(detection.type1_triggers)} Type 1, "
-                          f"{len(detection.type2_triggers)} Type 2")
-
-                mig_result = orchestrator.execute_migrations(mode='batch')
-                if mig_result.failed:
-                    logger.error(f"Migration failure on resume: {mig_result.error_message}")
-                    return 1
-                total_type1_migrations += mig_result.type1_applied
-                total_type2_migrations += (mig_result.type2_forward_applied +
-                                          mig_result.type2_rollbacks_applied)
+            mig_result = orchestrator.execute_migrations(mode='batch')
+            if mig_result.failed:
+                logger.error(f"Migration failure on resume: {mig_result.error_message}")
+                return 1
+            total_type1_migrations += mig_result.type1_applied
+            total_type2_migrations += (mig_result.type2_forward_applied +
+                                      mig_result.type2_rollbacks_applied)
 
             _check_indicator_vp_consistency(partition, mesh, logger)
             logger.info("Pending migration applied. Continuing to optimization.")
@@ -1157,7 +650,7 @@ Example usage:
 
                 failure_file = export_intermediate_state(
                     partition, iteration_number, base_output, opt_info, logger,
-                    migration_history, args.boundary_tol,
+                    boundary_tol=args.boundary_tol,
                     pending_migration=True, mesh=mesh
                 )
                 logger.info(f"State saved to: {failure_file}")
@@ -1172,42 +665,19 @@ Example usage:
 
         pending_migration = False
 
-        if args.use_legacy:
-            switches_needed, switch_info = optimizer.check_topology_switches_needed(
-                tol=args.boundary_tol
-            )
+        mesh_topology = MeshTopology(mesh)
+        orchestrator = MigrationOrchestrator(
+            partition, mesh, mesh_topology,
+            MigrationConfig(delta=args.boundary_tol)
+        )
+        detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
 
-            if switches_needed:
-                pending_migration = True
-                type1_candidates = []
-                for vp_idx, vp in enumerate(partition.variable_points):
-                    if vp.on_boundary(tol=args.boundary_tol):
-                        type1_candidates.append(vp_idx)
-
-                type2_candidates = optimizer.steiner_handler.get_boundary_triple_points(
-                    tol=args.boundary_tol
-                )
-
-                logger.info(f"Switches detected:")
-                logger.info(f"  Type 1 candidates (boundary VPs): {len(type1_candidates)}")
-                logger.info(f"  Type 2 candidates (boundary triple points): {len(type2_candidates)}")
-            else:
-                logger.info("No topology switches needed")
+        if detection.type1_triggers or detection.type2_triggers:
+            pending_migration = True
+            logger.info(f"Switches detected: {len(detection.type1_triggers)} Type 1, "
+                      f"{len(detection.type2_triggers)} Type 2")
         else:
-            # New MigrationOrchestrator API
-            mesh_topology = MeshTopology(mesh)
-            orchestrator = MigrationOrchestrator(
-                partition, mesh, mesh_topology,
-                MigrationConfig(delta=args.boundary_tol)
-            )
-            detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
-
-            if detection.type1_triggers or detection.type2_triggers:
-                pending_migration = True
-                logger.info(f"Switches detected: {len(detection.type1_triggers)} Type 1, "
-                          f"{len(detection.type2_triggers)} Type 2")
-            else:
-                logger.info("No topology switches needed")
+            logger.info("No topology switches needed")
 
         # -----------------------------------------------------------------
         # PHASE 3: Export (with pending_migration flag)
@@ -1223,7 +693,7 @@ Example usage:
 
             iteration_file = export_intermediate_state(
                 partition, iteration_number, base_output, opt_info, logger,
-                migration_history, args.boundary_tol,
+                boundary_tol=args.boundary_tol,
                 pending_migration=pending_migration, mesh=mesh
             )
             iteration_files.append(iteration_file)
@@ -1250,75 +720,28 @@ Example usage:
 
         iteration_migrations = 0
 
-        if args.use_legacy:
-            type1_result = {'migrations_applied': 0}
-            type2_result = {'migrations_applied': 0}
+        mig_result = orchestrator.execute_migrations(mode='batch')
 
-            # Type 2 migrations first
-            if len(type2_candidates) > 0:
-                type2_result = apply_type2_migrations(
-                    partition, mesh, type2_candidates, logger,
-                    steiner_handler=optimizer.steiner_handler,
-                    distance_preservation=args.distance_preservation,
-                    migration_history=migration_history,
-                    iteration_number=iteration_number
-                )
+        if mig_result.failed:
+            logger.error("")
+            logger.error("="*80)
+            logger.error("MIGRATION FAILURE")
+            logger.error("="*80)
+            logger.error(f"Error: {mig_result.error_message}")
+            diag_file = iteration_file if iteration_file else args.solution
+            logger.error(f"State saved to: {diag_file}")
+            logger.error("="*80)
+            return 1
 
-                if type2_result.get('failed'):
-                    diag_file = iteration_file if iteration_file else args.solution
-                    handle_type2_migration_failure(
-                        type2_result, diag_file, args.boundary_tol, logger
-                    )
-                    return 1
+        iteration_migrations = (mig_result.type1_applied +
+                               mig_result.type2_forward_applied +
+                               mig_result.type2_rollbacks_applied)
+        total_type1_migrations += mig_result.type1_applied
+        total_type2_migrations += (mig_result.type2_forward_applied +
+                                  mig_result.type2_rollbacks_applied)
 
-                iteration_migrations += type2_result['migrations_applied']
-                total_type2_migrations += type2_result['migrations_applied']
-
-            # Type 1 migrations second
-            if len(type1_candidates) > 0:
-                type1_result = apply_type1_migrations(
-                    partition, mesh, type1_candidates, logger,
-                    boundary_tol=args.boundary_tol,
-                    distance_preservation=args.distance_preservation,
-                    steiner_handler=optimizer.steiner_handler
-                )
-
-                if type1_result.get('failed'):
-                    diag_file = iteration_file if iteration_file else args.solution
-                    handle_type1_migration_failure(
-                        type1_result, diag_file, args.boundary_tol, logger
-                    )
-                    return 1
-
-                iteration_migrations += type1_result['migrations_applied']
-                total_type1_migrations += type1_result['migrations_applied']
-
-            _t1_count = type1_result.get('migrations_applied', 0)
-            _t2_count = type2_result.get('migrations_applied', 0)
-        else:
-            # New MigrationOrchestrator API
-            mig_result = orchestrator.execute_migrations(mode='batch')
-
-            if mig_result.failed:
-                logger.error("")
-                logger.error("="*80)
-                logger.error("MIGRATION FAILURE")
-                logger.error("="*80)
-                logger.error(f"Error: {mig_result.error_message}")
-                diag_file = iteration_file if iteration_file else args.solution
-                logger.error(f"State saved to: {diag_file}")
-                logger.error("="*80)
-                return 1
-
-            iteration_migrations = (mig_result.type1_applied +
-                                   mig_result.type2_forward_applied +
-                                   mig_result.type2_rollbacks_applied)
-            total_type1_migrations += mig_result.type1_applied
-            total_type2_migrations += (mig_result.type2_forward_applied +
-                                      mig_result.type2_rollbacks_applied)
-
-            _t1_count = mig_result.type1_applied
-            _t2_count = mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
+        _t1_count = mig_result.type1_applied
+        _t2_count = mig_result.type2_forward_applied + mig_result.type2_rollbacks_applied
 
         if iteration_migrations == 0:
             logger.warning("")

@@ -25,7 +25,7 @@ starget: 1.0
 c: 0.5
 rho: 0.5
 m: 10
-seed: 163498
+seed: 2234657
 
 # PGD parameters (used when optimizer_type: pgd)
 pgd_step0: 1.0
@@ -35,7 +35,7 @@ pgd_projection_max_iter: 200
 pgd_projection_tol: 1.0e-10
 
 # Refinement parameters
-refinement_levels: 7
+refinement_levels: 2
 n_radial_increment: 0
 n_angular_increment: 0
 use_analytic: true

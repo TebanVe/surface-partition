@@ -22,7 +22,7 @@ The current layout has three issues:
 
 ## Current Structure
 
-### `src/` (31 files, after pre-restructure cleanup)
+### `src/` (31 files)
 
 ```
 src/
@@ -152,7 +152,7 @@ src/
     └── plot_utils.py        (2D matplotlib plots)
 ```
 
-**Total: 31 active files** (after pre-restructure cleanup: `topology_switcher*.py`, `plot_utils_3d.py`, and `refine_perimeter.py` removed; dead methods trimmed from 14 files).
+**Total: 31 active files.**
 
 ### `examples/` (after Phase B + C)
 
@@ -191,7 +191,7 @@ All optimization algorithms: the two Γ-convergence optimizers (`pgd_optimizer`,
 **Future split (not blocking):** Consider extracting `IPOPTProblemAdapter` into a dedicated `optimization/ipopt_adapter.py`. This would isolate the `cyipopt` dependency from the SLSQP path and keep `perimeter_optimizer.py` focused on the solver-agnostic `PerimeterOptimizer` class.
 
 ### `migration/` — Topology Switches
-The modular migration system that replaces the legacy monolithic `topology_switcher.py`. Fully self-contained with clear internal layering:
+The modular migration system. Fully self-contained with clear internal layering:
 - **Types** → **Detection** → **Rebuild** → **Execution** → **Orchestration**
 - Includes the Type 1 component analyzer and Type 2 history tracking/persistence, which are tightly coupled to migration logic.
 
@@ -199,7 +199,7 @@ The modular migration system that replaces the legacy monolithic `topology_switc
 The extension point for closed surfaces (surfaces without boundary). The torus is the primary surface for the project. The ring (`ring.py`) was used during early planar tests but will be **removed** — the mathematical setting requires surfaces without boundary, and the ring (an annulus) does not satisfy this. After removal, `surfaces/` will contain only `torus.py`, but the subpackage is designed to accommodate future closed surfaces (e.g. sphere, genus-2 surface) as the research expands.
 
 ### `visualization/` — Plotting
-Matplotlib plotting utilities. Used only by example/testing scripts, never by the computational core. (`plot_utils_3d.py` was removed in pre-restructure cleanup — the visualization scripts use PyVista directly.)
+Matplotlib plotting utilities. Used only by example/testing scripts, never by the computational core. The 3D visualization scripts use PyVista directly.
 
 ### `pipeline/` — Pipeline Orchestration (Phase C)
 Two new files that serve different roles:
@@ -216,12 +216,6 @@ Two new files that serve different roles:
   This makes the full pipeline callable from a single entry point, testable as a unit, and accessible to external tools and AI agents without requiring script execution.
 
 ## Legacy Files
-
-The following files should be removed as part of the restructure.
-
-### Monolithic topology switcher — DONE
-
-Both `topology_switcher.py` and `topology_switcher_legacy.py` (3824 lines each) were removed in the pre-restructure cleanup. The modular migration system (`migration_detector.py`, `migration_executor.py`, `migration_orchestrator.py`, etc.) is their replacement and is fully in use. The `--use-legacy` CLI flags were also removed from all scripts.
 
 ### Ring surface
 
@@ -250,7 +244,6 @@ The restructure changes import paths. Examples of the most common transitions:
 | `from src.core.pyslsqp_optimizer import PySLSQPOptimizer` | `from src.optimization.pyslsqp_optimizer import PySLSQPOptimizer` |
 | `from src.projection_iterative import ...` | `from src.optimization.projection import ...` |
 | `from src.core.migration_orchestrator import MigrationOrchestrator` | `from src.migration.migration_orchestrator import MigrationOrchestrator` |
-| `from src.core.topology_switcher import TopologySwitcher` | **Already removed** in pre-restructure cleanup |
 | `from src.plot_utils import ...` | `from src.visualization.plot_utils import ...` |
 
 To minimize disruption, `src/__init__.py` can re-export key symbols at the old paths during a transition period.
@@ -283,23 +276,21 @@ Seven archived debug scripts with legacy import paths. Update as a batch; these 
 
 ## Execution Strategy
 
-The topology switch system is implemented and under active testing. The restructure can proceed once the current test run completes. It is organized into three sequential phases.
+The restructure is organized into three sequential phases.
 
 ### Phase A — Reorganize `src/core/` into subpackages
 
-1. ~~Validate the modular migration system~~ — **DONE** (legacy files removed, `--use-legacy` flags stripped).
-2. **Add `__init__.py` files** to all new subpackages.
-3. **Move files one subpackage at a time**, in dependency order:
+1. **Add `__init__.py` files** to all new subpackages.
+2. **Move files one subpackage at a time**, in dependency order:
    - `mesh/` first (no internal deps)
    - `partition/` second (depends on `mesh/`)
    - `optimization/` third (depends on `partition/`)
    - `migration/` fourth (depends on `partition/` and `optimization/`)
    - `surfaces/` (depends on `mesh/`)
    - `visualization/` last (standalone)
-4. **Update imports** in all consumer scripts after each subpackage move. Use `git grep` to find all import statements.
-5. **Run all tests** after each subpackage move to catch broken imports immediately.
-6. **Update `src/__init__.py`** to re-export from new locations for backward compatibility.
-7. ~~Remove legacy files~~ — **DONE** (removed in pre-restructure cleanup).
+3. **Update imports** in all consumer scripts after each subpackage move. Use `git grep` to find all import statements.
+4. **Run all tests** after each subpackage move to catch broken imports immediately.
+5. **Update `src/__init__.py`** to re-export from new locations for backward compatibility.
 
 ### Phase B — Elevate `examples/data_loader.py` into `src/`
 
@@ -309,16 +300,19 @@ The topology switch system is implemented and under active testing. The restruct
 
 ### Phase C — Implement the pipeline orchestrator
 
+**Source of truth:** `testing/refine_perimeter_iterative.py` is the current production entry point for phases 2–4 (contour extraction → perimeter refinement → topology migration). Its `main()` function contains the complete iterate-refine loop: optimize → detect → export → migrate → repeat with checkpointing and resume. The pipeline orchestrator will be built by extracting this logic into a library API.
+
 1. Design the `PipelineOrchestrator` API: inputs (config, surface, mesh resolutions, seeds), outputs (HDF5 paths, final partition state, per-stage logs).
-2. Implement `src/pipeline/pipeline_orchestrator.py` to chain all four stages.
+2. Implement `src/pipeline/pipeline_orchestrator.py` by extracting the iterate-refine loop from `testing/refine_perimeter_iterative.py` into a callable library class.
 3. The orchestrator API must expose IPOPT-specific options that are currently CLI flags in `testing/refine_perimeter_iterative.py` and parameters on `PerimeterOptimizer.optimize()`: `method` (`'SLSQP'` vs `'ipopt'`), `exact_hessian`, `best_iterate`, `lbfgs_memory`, and `allow_partial_convergence`.
-4. Refactor `examples/find_surface_partition.py` into a thin CLI wrapper that calls `PipelineOrchestrator`. Create a new `examples/refine_perimeter.py` as a thin CLI wrapper (the old script was removed in pre-restructure cleanup; `testing/refine_perimeter_iterative.py` contains the pipeline logic to extract).
+4. Refactor `examples/find_surface_partition.py` into a thin CLI wrapper that calls `PipelineOrchestrator`. Create `examples/refine_perimeter.py` as a thin CLI wrapper for the refinement stages.
 5. Optionally add `examples/run_full_pipeline.py` as a single end-to-end entry point.
+6. After extraction, `testing/refine_perimeter_iterative.py` can be reduced to a thin integration test that calls the pipeline orchestrator with a known input and asserts convergence.
 
 ### Cleanup pass (any phase)
 
 - Remove ring surface files and references (see §Legacy Files — Ring surface).
-- Update `README.md` (still references deleted files: `island_analysis.py`, `ring_visualization.py`, ring surface, etc.).
+- Update `README.md` to remove stale references (ring surface, etc.).
 - Fix `pyproject.toml` version mismatch (`0.1.0` → `0.2.0`) and `testpaths` (points to nonexistent `tests/`; should be `testing/`).
 - Remove the broken link to `docs/PERIMETER_REFINEMENT.md` from `README.md`.
 - Fix the typo on line 23 of `parameters/input.yaml` (`# Optimization parametersJeez`).
