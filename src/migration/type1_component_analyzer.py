@@ -356,7 +356,7 @@ class Type1ComponentAnalyzer:
         # CRITICAL: Validate that both VPs in the component approach the same target vertex
         # This must be checked BEFORE trying to construct the auxiliary component
         # Use identify_target_vertex() which considers lambda value, not just edge containment
-        from src.core.migration_utils import identify_target_vertex
+        from .migration_utils import identify_target_vertex
         
         invalid_vps = []
         for vp_idx in vp_indices:
@@ -906,7 +906,7 @@ class Type1ComponentAnalyzer:
             target_vertex = component.get('target_vertex')
             if target_vertex is None:
                 # Fallback: compute from first VP
-                from src.core.migration_utils import identify_target_vertex
+                from .migration_utils import identify_target_vertex
                 vp0 = self.partition.variable_points[vp_indices[0]]
                 target_vertex = identify_target_vertex(vp0)
                 if target_vertex is None:
@@ -914,7 +914,7 @@ class Type1ComponentAnalyzer:
             
             # Validate each VP approaches the target vertex
             # Use identify_target_vertex() which considers lambda value, not just edge containment
-            from src.core.migration_utils import identify_target_vertex
+            from .migration_utils import identify_target_vertex
             
             invalid_vps = []
             for vp_idx in vp_indices:

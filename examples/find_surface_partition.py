@@ -70,7 +70,7 @@ def optimize_surface_partition(provider, config, solution_dir=None):
 		provider.set_resolution(n1, n2)
 
 		mesh = provider.build()
-		from core.tri_mesh import TriMesh  # type: ignore
+		from src.mesh.tri_mesh import TriMesh
 		assert isinstance(mesh, TriMesh)
 		mesh.compute_matrices()
 		stats = mesh.get_mesh_statistics()

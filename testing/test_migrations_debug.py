@@ -346,7 +346,7 @@ def main():
 
             import logging as _logging
             # Suppress verbose sub-logger output during analysis (unless debug mode)
-            _sw_log = _logging.getLogger('src.core.topology_switcher')
+            _sw_log = _logging.getLogger('src.migration.migration_orchestrator')
             _orig_sw = _sw_log.level
             if not args.debug:
                 _sw_log.setLevel(_logging.WARNING)

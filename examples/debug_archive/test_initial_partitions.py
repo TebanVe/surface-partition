@@ -20,7 +20,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.find_contours import ContourAnalyzer
+from src.partition.find_contours import ContourAnalyzer
 from src.logging_config import get_logger, setup_logging
 
 
