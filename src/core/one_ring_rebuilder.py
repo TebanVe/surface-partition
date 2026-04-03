@@ -9,18 +9,10 @@ determines which VPs to destroy/create/keep, and updates the partition structure
 import numpy as np
 from typing import List, Tuple, Optional, Set
 
-try:
-    from ..logging_config import get_logger
-    from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
-    from .mesh_topology import MeshTopology
-    from .migration_types import RebuildResult
-except ImportError:
-    import sys, os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.contour_partition import PartitionContour, VariablePoint, TriangleSegment
-    from core.mesh_topology import MeshTopology
-    from core.migration_types import RebuildResult
+from ..logging_config import get_logger
+from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
+from .mesh_topology import MeshTopology
+from .migration_types import RebuildResult
 
 logger = get_logger(__name__)
 

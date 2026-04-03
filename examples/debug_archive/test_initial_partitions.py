@@ -12,16 +12,16 @@ Usage:
 
 import os
 import sys
+from pathlib import Path
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from find_contours import ContourAnalyzer
-from logging_config import get_logger, setup_logging
+from src.find_contours import ContourAnalyzer
+from src.logging_config import get_logger, setup_logging
 
 
 def test_boundary_connectivity(polylines, region_idx, tolerance=1e-6):

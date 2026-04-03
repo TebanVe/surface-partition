@@ -22,18 +22,18 @@ Usage:
 
 import os
 import sys
+from pathlib import Path
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 import pyvista as pv
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.tri_mesh import TriMesh
-from core.contour_partition import PartitionContour
-from logging_config import get_logger, setup_logging
+from src.core.tri_mesh import TriMesh
+from src.core.contour_partition import PartitionContour
+from src.logging_config import get_logger, setup_logging
 
 
 def load_partition_contour(solution_file):

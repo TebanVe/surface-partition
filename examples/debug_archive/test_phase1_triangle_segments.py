@@ -6,8 +6,9 @@ populated alongside the old CellContour structure.
 """
 
 import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import h5py

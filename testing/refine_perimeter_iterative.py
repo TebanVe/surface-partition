@@ -54,8 +54,8 @@ import re
 import numpy as np
 import h5py
 
-# Add paths
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples.data_loader import load_partition_from_refined_file
 from src.find_contours import ContourAnalyzer

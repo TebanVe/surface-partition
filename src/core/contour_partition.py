@@ -25,17 +25,9 @@ import h5py
 from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 
-try:
-    from ..logging_config import get_logger
-    from .tri_mesh import TriMesh
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.tri_mesh import TriMesh
+from ..logging_config import get_logger
+from .tri_mesh import TriMesh
 
-# Import BoundaryTriangleInfo for type hints (optional parameter)
 try:
     from ..find_contours import BoundaryTriangleInfo
 except ImportError:

@@ -17,23 +17,12 @@ import numpy as np
 from typing import List, Tuple, Optional, Set, Dict
 from collections import defaultdict, Counter, deque
 
-try:
-    from ..logging_config import get_logger
-    from .tri_mesh import TriMesh
-    from .contour_partition import PartitionContour, VariablePoint
-    from .mesh_topology import MeshTopology
-    from .steiner_handler import SteinerHandler
-    from . import migration_utils
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.tri_mesh import TriMesh
-    from core.contour_partition import PartitionContour, VariablePoint
-    from core.mesh_topology import MeshTopology
-    from core.steiner_handler import SteinerHandler
-    import migration_utils
+from ..logging_config import get_logger
+from .tri_mesh import TriMesh
+from .contour_partition import PartitionContour, VariablePoint
+from .mesh_topology import MeshTopology
+from .steiner_handler import SteinerHandler
+from . import migration_utils
 
 
 class Type1ComponentAnalyzer:

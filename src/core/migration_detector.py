@@ -12,22 +12,12 @@ from collections import defaultdict
 
 import numpy as np
 
-try:
-    from ..logging_config import get_logger
-    from .contour_partition import PartitionContour
-    from .mesh_topology import MeshTopology
-    from .steiner_handler import SteinerHandler, TriplePoint
-    from .migration_types import Type1Trigger, Type2Trigger
-    from . import migration_utils
-except ImportError:
-    import sys, os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.contour_partition import PartitionContour
-    from core.mesh_topology import MeshTopology
-    from core.steiner_handler import SteinerHandler, TriplePoint
-    from core.migration_types import Type1Trigger, Type2Trigger
-    from core import migration_utils
+from ..logging_config import get_logger
+from .contour_partition import PartitionContour
+from .mesh_topology import MeshTopology
+from .steiner_handler import SteinerHandler, TriplePoint
+from .migration_types import Type1Trigger, Type2Trigger
+from . import migration_utils
 
 logger = get_logger(__name__)
 

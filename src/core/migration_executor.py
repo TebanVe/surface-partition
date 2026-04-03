@@ -12,28 +12,15 @@ import copy
 import numpy as np
 from typing import Dict, List, Optional, Set, Tuple, FrozenSet
 
-try:
-    from ..logging_config import get_logger
-    from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
-    from .mesh_topology import MeshTopology
-    from .steiner_handler import SteinerHandler, TriplePoint
-    from .migration_types import (
-        Type1Trigger, Type2Trigger, LocalStateSnapshot, SteinerSnapshot,
-        TriplePointHistory, RebuildResult
-    )
-    from .one_ring_rebuilder import rebuild_one_ring
-except ImportError:
-    import sys, os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.contour_partition import PartitionContour, VariablePoint, TriangleSegment
-    from core.mesh_topology import MeshTopology
-    from core.steiner_handler import SteinerHandler, TriplePoint
-    from core.migration_types import (
-        Type1Trigger, Type2Trigger, LocalStateSnapshot, SteinerSnapshot,
-        TriplePointHistory, RebuildResult
-    )
-    from core.one_ring_rebuilder import rebuild_one_ring
+from ..logging_config import get_logger
+from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
+from .mesh_topology import MeshTopology
+from .steiner_handler import SteinerHandler, TriplePoint
+from .migration_types import (
+    Type1Trigger, Type2Trigger, LocalStateSnapshot, SteinerSnapshot,
+    TriplePointHistory, RebuildResult
+)
+from .one_ring_rebuilder import rebuild_one_ring
 
 logger = get_logger(__name__)
 

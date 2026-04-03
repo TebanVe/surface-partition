@@ -5,11 +5,7 @@ from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 from dataclasses import dataclass
 
-# Add src to path if needed
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__)))
-
-from logging_config import get_logger
+from .logging_config import get_logger
 
 
 @dataclass

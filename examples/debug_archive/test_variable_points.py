@@ -11,18 +11,18 @@ Usage:
 
 import os
 import sys
+from pathlib import Path
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from find_contours import ContourAnalyzer
-from core.tri_mesh import TriMesh
-from core.contour_partition import PartitionContour
-from logging_config import get_logger, setup_logging
+from src.find_contours import ContourAnalyzer
+from src.core.tri_mesh import TriMesh
+from src.core.contour_partition import PartitionContour
+from src.logging_config import get_logger, setup_logging
 
 
 def extract_variable_point_data(partition):

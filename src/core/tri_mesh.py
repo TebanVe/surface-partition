@@ -2,12 +2,7 @@ import numpy as np
 import scipy.sparse as sparse
 from typing import Tuple, Dict, List
 
-try:
-	from ..logging_config import get_logger, log_performance
-except Exception:
-	import sys, os
-	sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-	from logging_config import get_logger, log_performance
+from ..logging_config import get_logger, log_performance
 
 
 class TriMesh:

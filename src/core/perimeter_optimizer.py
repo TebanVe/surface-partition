@@ -22,31 +22,16 @@ from scipy.optimize import minimize, OptimizeResult
 from typing import Dict, Optional, Tuple, List, Set
 import time
 
-try:
-    from ..logging_config import get_logger
-    from .tri_mesh import TriMesh
-    from .contour_partition import PartitionContour
-    from .area_calculator import AreaCalculator
-    from .perimeter_calculator import PerimeterCalculator
-    from .steiner_handler import SteinerHandler
-    from .partition_arrays import PartitionArrays
-    from . import vectorized_perimeter
-    from . import vectorized_area
-    from . import vectorized_steiner
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.tri_mesh import TriMesh
-    from core.contour_partition import PartitionContour
-    from core.area_calculator import AreaCalculator
-    from core.perimeter_calculator import PerimeterCalculator
-    from core.steiner_handler import SteinerHandler
-    from core.partition_arrays import PartitionArrays
-    from core import vectorized_perimeter
-    from core import vectorized_area
-    from core import vectorized_steiner
+from ..logging_config import get_logger
+from .tri_mesh import TriMesh
+from .contour_partition import PartitionContour
+from .area_calculator import AreaCalculator
+from .perimeter_calculator import PerimeterCalculator
+from .steiner_handler import SteinerHandler
+from .partition_arrays import PartitionArrays
+from . import vectorized_perimeter
+from . import vectorized_area
+from . import vectorized_steiner
 
 
 class IPOPTProblemAdapter:

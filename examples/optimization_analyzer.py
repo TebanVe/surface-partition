@@ -14,13 +14,13 @@ import glob
 from typing import Dict, List, Optional, Tuple
 import logging
 import re
+from pathlib import Path
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from logging_config import get_logger
-from surfaces.ring import RingMeshProvider
-from surfaces.torus import TorusMeshProvider
+from src.logging_config import get_logger
+from src.surfaces.ring import RingMeshProvider
+from src.surfaces.torus import TorusMeshProvider
 
 def load_pyslsqp_internal_data(hdf5_file_path: str) -> Optional[Dict]:
 	"""

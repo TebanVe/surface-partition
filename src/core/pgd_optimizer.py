@@ -7,23 +7,9 @@ from typing import Optional, Tuple, List, Dict
 import h5py
 import numpy as np
 
-try:
-	from ..logging_config import get_logger
-	from .pyslsqp_optimizer import RefinementTriggered
-	except_import_ok = True
-except Exception:
-	# Fallback when executed standalone
-	except_import_ok = False
-	import sys
-	import os as _os
-	sys.path.append(_os.path.join(_os.path.dirname(__file__), '..'))
-	from logging_config import get_logger  # type: ignore
-	from core.pyslsqp_optimizer import RefinementTriggered  # type: ignore
-
-try:
-	from ..projection_iterative import orthogonal_projection_iterative
-except Exception:
-	from projection_iterative import orthogonal_projection_iterative
+from ..logging_config import get_logger
+from .pyslsqp_optimizer import RefinementTriggered
+from ..projection_iterative import orthogonal_projection_iterative
 
 
 class ProjectedGradientOptimizer:

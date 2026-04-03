@@ -2,15 +2,7 @@ import numpy as np
 from typing import Tuple, Optional, Dict, Any
 import logging
 
-# Import our logging system
-try:
-    from .logging_config import get_logger
-except ImportError:
-    # Fallback for when running as script
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__)))
-    from logging_config import get_logger
+from .logging_config import get_logger
 
 def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray, 
                                   max_iter: int = 1000, tol: float = 1e-10, 

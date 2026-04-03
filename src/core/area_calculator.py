@@ -19,17 +19,9 @@ based on the indicator functions φ_i and the current variable point positions.
 import numpy as np
 from typing import Tuple, Dict, List, Optional
 
-try:
-    from ..logging_config import get_logger
-    from .tri_mesh import TriMesh
-    from .contour_partition import PartitionContour
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.tri_mesh import TriMesh
-    from core.contour_partition import PartitionContour
+from ..logging_config import get_logger
+from .tri_mesh import TriMesh
+from .contour_partition import PartitionContour
 
 
 class AreaCalculator:

@@ -3,13 +3,7 @@ from typing import Tuple, Optional
 import os
 import datetime
 
-try:
-	from ..logging_config import get_logger, log_performance
-except Exception:
-	import sys
-	import os
-	sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-	from logging_config import get_logger, log_performance
+from ..logging_config import get_logger, log_performance
 
 # PySLSQP
 try:

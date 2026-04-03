@@ -12,22 +12,22 @@ import platform
 import socket
 import numpy as np
 import gc
+from pathlib import Path
 
-# Add src
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from logging_config import setup_logging, get_logger
-from core.pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
-from core.pgd_optimizer import ProjectedGradientOptimizer
-from projection_iterative import (
+from src.logging_config import setup_logging, get_logger
+from src.core.pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
+from src.core.pgd_optimizer import ProjectedGradientOptimizer
+from src.projection_iterative import (
 	orthogonal_projection_iterative,
 	create_initial_condition_with_projection,
 	validate_projection_result,
 )
-from core.interpolation import nearest_neighbor_interpolate
-from find_contours import ContourAnalyzer
-from core.contour_partition import PartitionContour
-from core.perimeter_optimizer import PerimeterOptimizer
+from src.core.interpolation import nearest_neighbor_interpolate
+from src.find_contours import ContourAnalyzer
+from src.core.contour_partition import PartitionContour
+from src.core.perimeter_optimizer import PerimeterOptimizer
 
 
 def optimize_surface_partition(provider, config, solution_dir=None):
@@ -344,7 +344,7 @@ def optimize_surface_partition(provider, config, solution_dir=None):
 
 
 def main():
-	from config import Config
+	from src.config import Config
 	parser = argparse.ArgumentParser(description='Generic surface partition optimization')
 	parser.add_argument('--input', type=str, help='Path to input YAML')
 	parser.add_argument('--solution-dir', type=str, help='Directory to save solutions')
@@ -362,12 +362,12 @@ def main():
 		config = Config()
 
 	if args.surface == 'ring':
-		from surfaces.ring import RingMeshProvider
+		from src.surfaces.ring import RingMeshProvider
 		provider = RingMeshProvider(config.n_radial, config.n_angular, config.r_inner, config.r_outer,
 								 n_radial_increment=getattr(config, 'n_radial_increment', 0),
 								 n_angular_increment=getattr(config, 'n_angular_increment', 0))
 	elif args.surface == 'torus':
-		from surfaces.torus import TorusMeshProvider
+		from src.surfaces.torus import TorusMeshProvider
 		# Fall back to defaults if not present in config
 		n_theta = int(getattr(config, 'n_theta', 32))
 		n_phi = int(getattr(config, 'n_phi', 24))

@@ -31,8 +31,8 @@ import re
 import argparse
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'examples'))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples.data_loader import load_partition_from_refined_file
 from src.core.tri_mesh import TriMesh

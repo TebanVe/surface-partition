@@ -1,14 +1,8 @@
 import numpy as np
 from typing import Tuple
 
-try:
-	from ..logging_config import get_logger
-	from ..core.tri_mesh import TriMesh
-except Exception:
-	import sys, os
-	sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-	from logging_config import get_logger  # type: ignore
-	from core.tri_mesh import TriMesh  # type: ignore
+from ..logging_config import get_logger
+from ..core.tri_mesh import TriMesh
 
 
 class TorusMeshProvider:

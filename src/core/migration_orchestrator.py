@@ -8,44 +8,23 @@ with a clean public API for test scripts and workflow scripts.
 from typing import Dict, List, Optional, Union, FrozenSet
 from dataclasses import dataclass, field
 
-try:
-    from ..logging_config import get_logger
-    from .contour_partition import PartitionContour
-    from .tri_mesh import TriMesh
-    from .mesh_topology import MeshTopology
-    from .steiner_handler import SteinerHandler
-    from .area_calculator import AreaCalculator
-    from .perimeter_calculator import PerimeterCalculator
-    from .migration_types import (
-        Type1Trigger, Type2Trigger, TriplePointHistory,
-        DetectionResult, MigrationResult
-    )
-    from .migration_detector import (
-        detect_type1_triggers, detect_type2_triggers, resolve_conflicts
-    )
-    from .migration_executor import (
-        execute_type1, execute_type2_forward, execute_type2_rollback
-    )
-except ImportError:
-    import sys, os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.contour_partition import PartitionContour
-    from core.tri_mesh import TriMesh
-    from core.mesh_topology import MeshTopology
-    from core.steiner_handler import SteinerHandler
-    from core.area_calculator import AreaCalculator
-    from core.perimeter_calculator import PerimeterCalculator
-    from core.migration_types import (
-        Type1Trigger, Type2Trigger, TriplePointHistory,
-        DetectionResult, MigrationResult
-    )
-    from core.migration_detector import (
-        detect_type1_triggers, detect_type2_triggers, resolve_conflicts
-    )
-    from core.migration_executor import (
-        execute_type1, execute_type2_forward, execute_type2_rollback
-    )
+from ..logging_config import get_logger
+from .contour_partition import PartitionContour
+from .tri_mesh import TriMesh
+from .mesh_topology import MeshTopology
+from .steiner_handler import SteinerHandler
+from .area_calculator import AreaCalculator
+from .perimeter_calculator import PerimeterCalculator
+from .migration_types import (
+    Type1Trigger, Type2Trigger, TriplePointHistory,
+    DetectionResult, MigrationResult
+)
+from .migration_detector import (
+    detect_type1_triggers, detect_type2_triggers, resolve_conflicts
+)
+from .migration_executor import (
+    execute_type1, execute_type2_forward, execute_type2_rollback
+)
 
 
 @dataclass

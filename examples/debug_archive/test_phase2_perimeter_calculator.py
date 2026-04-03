@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Test Phase 2 refactoring of PerimeterCalculator."""
 
-import os
 import sys
+from pathlib import Path
+
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.tri_mesh import TriMesh
-from core.contour_partition import PartitionContour
-from core.perimeter_calculator import PerimeterCalculator
-from logging_config import setup_logging, get_logger
+from src.core.tri_mesh import TriMesh
+from src.core.contour_partition import PartitionContour
+from src.core.perimeter_calculator import PerimeterCalculator
+from src.logging_config import setup_logging, get_logger
 
 
 def main():

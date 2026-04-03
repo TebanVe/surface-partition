@@ -9,17 +9,9 @@ This module contains low-level helper functions used by both:
 import numpy as np
 from typing import Tuple, Optional
 
-try:
-    from ..logging_config import get_logger
-    from .tri_mesh import TriMesh
-    from .contour_partition import PartitionContour, VariablePoint
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from logging_config import get_logger
-    from core.tri_mesh import TriMesh
-    from core.contour_partition import PartitionContour, VariablePoint
+from ..logging_config import get_logger
+from .tri_mesh import TriMesh
+from .contour_partition import PartitionContour, VariablePoint
 
 
 def identify_target_vertex(vp: VariablePoint) -> Optional[int]:

@@ -18,7 +18,8 @@ longer-term algorithmic redesigns.
 ## Empirical evidence
 
 All runs below were executed on the same torus surface (total area ≈ 23.68)
-using `method=ipopt`, `best_iterate=True`, `exact_hessian=True`.
+using `method=ipopt`, `best_iterate=True`.  Runs 1 and 2 use
+`exact_hessian=True`; Run 3 uses L-BFGS (`exact_hessian=False`).
 
 ### Run 1 — 5 partitions, fresh from base solution
 
@@ -59,6 +60,82 @@ using `method=ipopt`, `best_iterate=True`, `exact_hessian=True`.
 The 10-partition problem has **fewer VPs** yet takes **~38× longer** than the
 5-partition problem.  The bottleneck is not the number of optimisation
 variables; it is the problem structure imposed by more partitions.
+
+### Run 3 — 10 partitions, L-BFGS (no exact Hessian), same base solution as Run 2
+
+| Property | Value |
+|---|---|
+| Log | `logs/ring_partition_20260402_222701.log` |
+| Mesh vertices | 17,608 |
+| Active VPs | 1,942 |
+| Triple points | 20 |
+| Area constraints | 9 |
+| L-BFGS memory | 20 |
+| `exact_hessian` | **False** |
+| Initial constraint violation | 1.20e-02 |
+| Perimeter (start → end) | 70.12 → 58.61 (16.4%) |
+| Iterations | 1000 (hit max_iter) |
+| Per-iteration time | **~0.3 s (constant)** |
+| **Total optimisation time** | **304 s (≈ 5 min)** |
+
+### Head-to-head: exact Hessian vs L-BFGS (10 partitions)
+
+| Metric | Run 2: Exact Hessian | Run 3: L-BFGS (m=20) |
+|---|---|---|
+| Per-iter time (iter 0–10) | 9.5 s | 0.3 s |
+| Per-iter time (iter 200–300) | 4.3 s | 0.3 s |
+| Per-iter time (iter 400+) | 1.2 s | 0.3 s |
+| Total IPOPT iterations | ~525 | 1000 (max_iter) |
+| **Total optimisation time** | **7,245 s (2.0 h)** | **304 s (5.1 min)** |
+| **Wall-clock speedup** | — | **23.8×** |
+| Final perimeter | 58.6012 | 58.6059 |
+| Perimeter difference | — | +0.0048 (0.008%) |
+| Max constraint violation | 1.08e-07 | 1.06e-06 |
+| Converged? | Yes (acceptable tol) | No (max_iter reached) |
+| Migrations: Type 1 | 77 | **0** |
+| Migrations: Type 2 | 11 | 12 |
+| **Total migrations** | **88** | **12** |
+
+The L-BFGS run is **23.8× faster** with a perimeter difference of only
+0.008%.  However, the migration asymmetry reveals a critical quality concern
+discussed below.
+
+### L-BFGS quality trade-off: migration deficit and boundary jaggedness
+
+The L-BFGS run triggered **zero Type 1 migrations** compared to the exact
+Hessian's 77.  This reproduces a known issue documented in detail in
+`IPOPT_REFINEMENT_QUALITY.md` (Sections 2.2, 3.5):
+
+- **Insufficient VP saturation.** The exact Hessian pushes VPs to triangle
+  edge endpoints (min_dist ≈ 0.0000), triggering Type 1 migrations that
+  enable large topology changes.  L-BFGS lacks the curvature information to
+  coordinate neighbouring VPs to this degree, so VPs stop short of the
+  boundary and Type 1 triggers never fire.
+
+- **Jagged boundaries.** Without exact second-order coupling between
+  neighbouring VPs, L-BFGS moves each VP semi-independently.  On coarser
+  meshes (where each VP controls a long boundary segment), this produces
+  visibly jagged partition boundaries.  The issue is mesh-resolution-dependent:
+  on finer meshes (>100k vertices) the coupling becomes more local and L-BFGS
+  produces smoother results (see `IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
+
+- **Oscillatory convergence.**  The L-BFGS objective trace shows non-monotone
+  behaviour (e.g., obj bounces between 58.606 and 58.614 around iterations
+  480–640), whereas the exact Hessian monotonically converges after the initial
+  descent.  This is consistent with restoration-phase losses amplified by the
+  crude curvature approximation.
+
+- **Reduced topology exploration.**  With 88 migrations (exact) vs 12
+  (L-BFGS), the exact Hessian explores a much richer set of topological
+  configurations across outer iterations.  Over multiple optimize → detect →
+  migrate cycles, this compounding difference can lead to significantly
+  different final partition quality.
+
+These observations confirm that L-BFGS is not a drop-in replacement for the
+exact Hessian when solution quality and topology exploration matter.  It is
+best understood as a **fast rough solver** whose results require either:
+(a) polishing with the exact Hessian, (b) polishing with SLSQP, or
+(c) running on sufficiently fine meshes where the quality gap narrows.
 
 ---
 
@@ -139,17 +216,23 @@ Rough estimates for a torus mesh fine enough to resolve boundaries
 (n_vp ∝ √N for fixed surface area, assuming mesh refinement follows boundary
 density).  Times assume the same hardware as the empirical runs above.
 
-| N | VPs (est.) | Triple pts | Constraints | Exact Hessian (est.) | L-BFGS (est.) |
+| N | VPs (est.) | Triple pts | Constraints | Exact Hessian (est.) | L-BFGS (est.)† |
 |---|---|---|---|---|---|
 | 5 | 3,500 | 8 | 4 | **3 min** (measured) | ~1–2 min |
-| 10 | 2,000* | 20 | 9 | **2 h** (measured) | ~15–30 min |
-| 30 | ~5,000 | ~60 | 29 | ~1 day | ~2–4 h |
-| 100 | ~10,000 | ~200 | 99 | weeks (impractical) | ~1–3 days |
-| 500 | ~25,000 | ~1,000 | 499 | impractical | ~weeks |
-| 1,000 | ~50,000 | ~2,000 | 999 | impractical | impractical |
+| 10 | 2,000* | 20 | 9 | **2 h** (measured) | **5 min** (measured) |
+| 30 | ~5,000 | ~60 | 29 | ~1 day | ~30 min–1 h |
+| 100 | ~10,000 | ~200 | 99 | weeks (impractical) | ~4–12 h |
+| 500 | ~25,000 | ~1,000 | 499 | impractical | ~days |
+| 1,000 | ~50,000 | ~2,000 | 999 | impractical | ~weeks |
 
 *The 10-partition run used a coarser mesh than the 5-partition run; VPs would
 be higher on the same mesh.
+
+†L-BFGS times represent optimisation wall time only.  Quality caveats apply:
+L-BFGS may require a subsequent exact Hessian or SLSQP polishing pass to
+achieve equivalent boundary smoothness and trigger necessary topology
+migrations.  The combined time (L-BFGS + polish) should be used when
+comparing against pure exact Hessian runs for quality-equivalent results.
 
 ---
 
@@ -170,15 +253,28 @@ python testing/refine_perimeter_iterative.py \
   --solution <file.h5> --max-iterations 1
 ```
 
-**Impact**: eliminates Hessian computation entirely.  Per-iteration cost drops
-from ~15–25 s to ~2–5 s for the 10-partition case.  Trades quadratic
-convergence rate for superlinear, but total wall-clock time is expected to be
-3–5× shorter for N ≥ 10.
+**Measured impact (10-partition benchmark):** per-iteration cost dropped from
+1.2–9.5 s to 0.3 s; total wall time dropped from 2 h to 5 min (**23.8×
+speedup**).  The initial scalability estimates (3–5× speedup, 15–30 min) were
+conservative; the FD Steiner Hessian dominated per-iteration cost more than
+expected.
 
-**Trade-off**: may need more iterations to reach the same tight tolerance.
-Final perimeter is expected to be identical for practical purposes.
+**Quality trade-off — significant.** The benchmark revealed that L-BFGS
+triggered **zero Type 1 migrations** versus 77 for the exact Hessian (see
+the head-to-head comparison above and `IPOPT_REFINEMENT_QUALITY.md`).
+L-BFGS does not push VPs to triangle edge endpoints, so the topology
+exploration that Type 1 migrations enable is effectively disabled.  On
+coarser meshes the boundaries also appear jagged due to the lack of
+curvature coupling between neighbouring VPs.
 
-**When to use**: N ≥ 10, or whenever per-iteration cost exceeds ~5 s.
+**When to use**: as a **fast initial solver** for rapid descent from contour
+extraction, followed by an exact Hessian or SLSQP polishing pass if
+boundary quality and topology exploration matter.  Also suitable as a
+standalone solver on fine meshes (>100k vertices) where the quality gap
+narrows (see `IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
+
+**Not recommended** as the sole solver when topology migrations are important
+or when visual boundary smoothness is required at coarse mesh resolutions.
 
 #### 1B. Loosen acceptable tolerance
 
@@ -233,20 +329,40 @@ unnecessary zero-filling.  Most impactful for N > 50.
 
 **Status**: planned in `SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`.
 
-#### 2C. Adaptive Hessian strategy
+#### 2C. Hybrid solver strategy (L-BFGS → exact Hessian, or L-BFGS → SLSQP)
 
-Use L-BFGS for the early iterations (when far from the optimum and exact
-curvature is wasted) and switch to exact Hessian for the final polish:
+The benchmark confirms that L-BFGS and exact Hessian have complementary
+strengths.  A two-phase workflow exploits both:
 
-```python
-if iter_count < warmup_iters:
-    use L-BFGS
-else:
-    switch to exact Hessian
+1. **Phase 1 (L-BFGS):** rapid descent from contour extraction.  At 0.3 s
+   per iteration, 1000–2000 iterations take 5–10 minutes and capture >95%
+   of the perimeter reduction.
+2. **Phase 2 (exact Hessian or SLSQP):** polishing pass starting from the
+   L-BFGS solution.  Pushes VPs to edge endpoints (triggering Type 1
+   migrations), smooths boundaries, and tightens constraint feasibility.
+
+This is already possible with the current CLI:
+
+```bash
+# Phase 1: fast L-BFGS descent (5 min)
+python testing/refine_perimeter_iterative.py \
+  --solution base.h5 --method ipopt --lbfgs-memory 20 \
+  --best-iterate --max-opt-iter 2000 --max-iterations 1 \
+  --allow-partial-convergence
+
+# Phase 2: exact Hessian polish (from checkpoint)
+python testing/refine_perimeter_iterative.py \
+  --solution iteration1_refined_contours.h5 --method ipopt \
+  --exact-hessian --best-iterate --max-iterations 1
 ```
 
-This requires restarting IPOPT mid-solve (or using IPOPT's warm-start
-mechanism), but combines the best of both approaches.
+For the 10-partition problem, Phase 1 (5 min) + Phase 2 (starting near the
+optimum, expect ~10–30 min) would likely total ~15–35 min — significantly
+faster than pure exact Hessian (2 h) while preserving quality.
+
+A `--method auto` or `--hybrid` flag could automate this in a future
+refactoring pass.  See also `IPOPT_REFINEMENT_QUALITY.md` Option C for
+the analogous IPOPT → SLSQP hybrid strategy.
 
 ### Tier 3 — Algorithmic redesigns (significant effort)
 
@@ -357,8 +473,8 @@ Significant implementation effort.
 | N range | Recommended approach |
 |---|---|
 | 1–7 | Current pipeline with exact Hessian. Fast enough (minutes). |
-| 8–30 | Switch to L-BFGS (Tier 1A). Consider looser tolerances (1B). |
-| 30–100 | L-BFGS + analytical Steiner Hessian (2A) + coarse-to-fine warm start (1C). |
+| 8–30 | **Hybrid: L-BFGS rapid descent → exact Hessian polish (Tier 2C).** L-BFGS alone is fast but misses Type 1 migrations and produces jagged boundaries; the polishing pass recovers quality. Looser tolerances (1B) for the L-BFGS phase. |
+| 30–100 | Hybrid (2C) + analytical Steiner Hessian (2A) to make the polishing pass affordable + coarse-to-fine warm start (1C). |
 | 100–500 | Augmented Lagrangian decomposition (3A) or multigrid (3B). |
 | 500+ | Lloyd initialiser (3C) + local IPOPT polish, or curve-shortening flow (3D). |
 
@@ -366,15 +482,30 @@ Significant implementation effort.
 
 ## Action items
 
-| Priority | Item | Effort | Impact |
-|---|---|---|---|
-| **Immediate** | Benchmark L-BFGS vs exact Hessian on the 10-partition problem | 1 hour | Validates Tier 1A estimate |
-| **Short-term** | Implement analytical Steiner Hessian (Tier 2A) | 1–2 weeks | Removes dominant per-iter cost |
-| **Short-term** | Experiment with `acceptable_tol` tuning (Tier 1B) | 1 hour | May cut 10-partition time by 50%+ |
-| **Medium-term** | Direct sparse Jacobian (Tier 2B) | 1 week | Needed for N > 50 |
-| **Medium-term** | Augmented Lagrangian prototype (Tier 3A) | 2–4 weeks | Enables N = 100+ |
-| **Long-term** | Lloyd CVT initialiser (Tier 3C) | 2–4 weeks | Unlocks N = 1,000+ |
-| **Research** | Curve-shortening flow (Tier 3D) | months | Theoretically optimal |
+| Priority | Item | Effort | Impact | Status |
+|---|---|---|---|---|
+| ~~Immediate~~ | ~~Benchmark L-BFGS vs exact Hessian on 10-partition~~ | ~~1 hour~~ | ~~Validates Tier 1A~~ | **Done** — 23.8× speedup confirmed; quality trade-offs documented |
+| **Immediate** | Test hybrid L-BFGS → exact Hessian workflow (Tier 2C) on 10-partition | 1–2 hours | Validates combined speed + quality | Pending |
+| **Immediate** | Increase `max_opt_iter` for L-BFGS runs to 2000–3000 | trivial | L-BFGS did not converge in 1000 iters | Pending |
+| **Short-term** | Implement analytical Steiner Hessian (Tier 2A) | 1–2 weeks | Removes dominant per-iter cost for exact Hessian; makes polishing pass affordable at larger N | Pending |
+| **Short-term** | Experiment with `acceptable_tol` tuning (Tier 1B) | 1 hour | May cut exact Hessian polishing time by 50%+ | Pending |
+| **Medium-term** | Direct sparse Jacobian (Tier 2B) | 1 week | Needed for N > 50 | Pending |
+| **Medium-term** | Augmented Lagrangian prototype (Tier 3A) | 2–4 weeks | Enables N = 100+ | Pending |
+| **Long-term** | Lloyd CVT initialiser (Tier 3C) | 2–4 weeks | Unlocks N = 1,000+ | Pending |
+| **Research** | Curve-shortening flow (Tier 3D) | months | Theoretically optimal | Pending |
+
+---
+
+## Related documents
+
+- **`IPOPT_REFINEMENT_QUALITY.md`** — Detailed analysis of L-BFGS quality
+  issues (jagged boundaries, migration deficit, restoration-phase losses),
+  including the mesh-resolution dependence that makes L-BFGS adequate on
+  fine meshes but insufficient on coarser ones.  The findings in that
+  document directly explain the migration asymmetry observed in the
+  benchmark above.
+- **`SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`** — Implementation plan for
+  analytical Steiner Hessian (Tier 2A) and sparse Jacobian (Tier 2B).
 
 ---
 
