@@ -1,10 +1,4 @@
-# Ring mesh parameters for testing
-n_radial: 95
-n_angular: 95
-r_inner: 0.5
-r_outer: 1.0
-
-# Optimization parameters (for future use)
+# Optimization parameters
 n_partitions: 10
 lambda_penalty: 3.25
 max_iter: 25000
@@ -20,7 +14,7 @@ optimizer_type: pgd  # options: pyslsqp or pgd
 # Use discrete area (Σv) for constraints rather than theoretical area
 use_discrete_area_for_constraints: true
 
-# Optimization parametersJeez
+# Optimization parameters
 starget: 1.0
 c: 0.5
 rho: 0.5
@@ -36,8 +30,6 @@ pgd_projection_tol: 1.0e-10
 
 # Refinement parameters
 refinement_levels: 2
-n_radial_increment: 0
-n_angular_increment: 0
 use_analytic: true
 
 # Mesh refinement convergence criteria
@@ -82,9 +74,9 @@ penalty_target_mode: fixed   # fixed (paper) or adaptive
 penalty_eps: 1.0e-8
 
 # PySLSQP parameters
-pyslsqp_save_itr: major 
+pyslsqp_save_itr: major
 
-# Torus surface parameters (optional; used when --surface torus)
+# Torus surface parameters (used when --surface torus)
 n_theta: 80
 n_phi: 66
 R: 1.0

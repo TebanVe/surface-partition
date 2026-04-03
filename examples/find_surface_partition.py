@@ -348,7 +348,7 @@ def main():
 	parser = argparse.ArgumentParser(description='Generic surface partition optimization')
 	parser.add_argument('--input', type=str, help='Path to input YAML')
 	parser.add_argument('--solution-dir', type=str, help='Directory to save solutions')
-	parser.add_argument('--surface', type=str, default='ring', help='Surface type (ring or torus)')
+	parser.add_argument('--surface', type=str, default='torus', help='Surface type (torus)')
 	args = parser.parse_args()
 
 	setup_logging(log_level='INFO', log_to_console=True, log_to_file=False)
@@ -361,14 +361,8 @@ def main():
 	else:
 		config = Config()
 
-	if args.surface == 'ring':
-		from src.surfaces.ring import RingMeshProvider
-		provider = RingMeshProvider(config.n_radial, config.n_angular, config.r_inner, config.r_outer,
-								 n_radial_increment=getattr(config, 'n_radial_increment', 0),
-								 n_angular_increment=getattr(config, 'n_angular_increment', 0))
-	elif args.surface == 'torus':
+	if args.surface == 'torus':
 		from src.surfaces.torus import TorusMeshProvider
-		# Fall back to defaults if not present in config
 		n_theta = int(getattr(config, 'n_theta', 32))
 		n_phi = int(getattr(config, 'n_phi', 24))
 		R = float(getattr(config, 'R', 1.0))

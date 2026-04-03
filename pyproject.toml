@@ -3,9 +3,9 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ring-partition"
-version = "0.1.0"
-description = "Ring partition optimization using Γ-convergence"
+name = "surface-partition"
+version = "0.2.0"
+description = "Minimal-perimeter partition optimization on closed surfaces using Γ-convergence"
 authors = [{name = "Your Name", email = "your.email@example.com"}]
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ipopt = [
+    "cyipopt>=1.3.0",
+]
 dev = [
     "pytest>=6.0",
     "black>=22.0",
@@ -31,5 +34,5 @@ line-length = 88
 target-version = ['py39']
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"] 
+testpaths = ["testing"]
+python_files = ["test_*.py"]

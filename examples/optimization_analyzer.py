@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analysis and visualization tool for ring partition optimization results.
+Analysis and visualization tool for surface partition optimization results.
 """
 
 import os
@@ -19,7 +19,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.logging_config import get_logger
-from src.surfaces.ring import RingMeshProvider
 from src.surfaces.torus import TorusMeshProvider
 
 def load_pyslsqp_internal_data(hdf5_file_path: str) -> Optional[Dict]:
@@ -792,7 +791,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     
     # Load surface/provider info from metadata
     input_params = metadata.get('input_parameters', {})
-    surface_name = input_params.get('surface', 'ring')
+    surface_name = input_params.get('surface', 'torus')
     resolution_labels = input_params.get('resolution_labels') or ['v1', 'v2']
     label1 = resolution_labels[0]
     label2 = resolution_labels[1] if len(resolution_labels) > 1 else 'v2'
@@ -801,17 +800,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     results = []
     theoretical_total_area = metadata.get('theoretical_total_area')
     
-    # Instantiate provider per surface
-    if surface_name == 'ring':
-        # Fallbacks if surface_params missing
-        r_inner = float(surface_params.get('r_inner', 0.5))
-        r_outer = float(surface_params.get('r_outer', 1.0))
-        # Try to infer initial resolution from first level meta if present
-        first_level = levels_meta_sorted[0]
-        v1_init = int(first_level.get(label1, 8))
-        v2_init = int(first_level.get(label2, 16))
-        provider = RingMeshProvider(v1_init, v2_init, r_inner, r_outer)
-    elif surface_name == 'torus':
+    if surface_name == 'torus':
         R = float(surface_params.get('R', 1.0))
         r = float(surface_params.get('r', 0.3))
         first_level = levels_meta_sorted[0]

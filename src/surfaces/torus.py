@@ -9,8 +9,7 @@ class TorusMeshProvider:
 	"""
 	Surface provider for a torus of revolution embedded in R3.
 	Builds a TriMesh from torus parameters and provides naming metadata
-	for orchestrators. The interface mirrors RingMeshProvider so the
-	orchestrator can remain surface-agnostic.
+	for orchestrators.
 	"""
 
 	def __init__(self, n_theta: int, n_phi: int, R: float, r: float,

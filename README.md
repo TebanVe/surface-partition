@@ -26,11 +26,11 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 - **Steiner Trees**: Optimal handling of triple points (3 regions meet)
 - **Topology Management**: Variable points on mesh edges with automatic detection
 - **Accurate Perimeter Values**: Match paper benchmarks (Tables 1 & 2)
-- See [docs/PERIMETER_REFINEMENT.md](docs/PERIMETER_REFINEMENT.md) for details
+- See `docs/PERIMETER_REFINEMENT.md` for details
 
 ### 🚀 **Surface-Agnostic Design**
 - **TriMesh**: Universal triangle mesh class supporting both 2D and 3D surfaces
-- **Surface Providers**: Modular system for different surface types (ring, sphere, torus, etc.)
+- **Surface Providers**: Modular system for different surface types (torus, sphere, etc.)
 - **P1 FEM Assembly**: Automatic mass and stiffness matrix computation for any triangulation
 
 ### 🔧 **Dual Optimizer Support**
@@ -45,7 +45,6 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 
 ### 📊 **Enhanced Analysis Tools**
 - **Optimization Analyzer**: Comprehensive result analysis with constraint evolution plots
-- **Island Analysis**: Tools for diagnosing partition quality and identifying ambiguous regions
 - **Visualization Suite**: Advanced plotting and mesh visualization capabilities
 
 ### 💾 **Robust Data Management**
@@ -103,20 +102,16 @@ RingTest/
 │   │   ├── pgd_optimizer.py     # Projected gradient descent optimizer
 │   │   └── interpolation.py     # Solution interpolation utilities
 │   ├── surfaces/                 # Surface-specific providers
-│   │   ├── ring.py              # Ring/annulus surface provider
 │   │   └── torus.py             # Torus of revolution (R3) provider
 │   ├── config.py                 # Configuration management
 │   ├── plot_utils.py             # 2D visualization utilities (Matplotlib)
 │   ├── logging_config.py         # Logging system
 │   ├── projection_iterative.py   # Constraint projection algorithms
-│   ├── find_contours.py          # Contour extraction utilities (R2/R3)
-│   └── island_analysis.py        # Partition quality analysis
+│   └── find_contours.py          # Contour extraction utilities (R2/R3)
 ├── examples/                      # Example scripts and analysis tools
 │   ├── find_surface_partition.py # Main optimization orchestrator
 │   ├── optimization_analyzer.py  # Surface-agnostic result analysis
-│   ├── visualize_partition.py    # Partition viewer (3D/PyVista, base or refined)
-│   ├── island_analyzer.py        # Island detection and analysis
-│   └── ring_visualization.py     # Ring-only visualization
+│   └── visualize_partition.py    # Partition viewer (3D/PyVista, base or refined)
 ├── parameters/                    # Configuration files
 │   └── input.yaml                # Default input parameters
 ├── scripts/                       # Utility scripts
@@ -139,8 +134,7 @@ python examples/find_surface_partition.py --input parameters/input.yaml
 # Specify output directory for solutions
 python examples/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_solutions
 
-# Use specific surface provider ('ring' or 'torus')
-python examples/find_surface_partition.py --input parameters/input.yaml --surface ring
+# Use specific surface provider (e.g. torus)
 python examples/find_surface_partition.py --input parameters/input.yaml --surface torus
 ```
 
@@ -163,7 +157,7 @@ python examples/visualize_partition.py \
     --show-steiner
 ```
 
-For complete documentation, see [docs/PERIMETER_REFINEMENT.md](docs/PERIMETER_REFINEMENT.md)
+For complete documentation, see `docs/PERIMETER_REFINEMENT.md`.
 
 ### Optimizer Selection
 
@@ -177,15 +171,15 @@ optimizer_type: 'pyslsqp'  # or 'pgd'
 Refinement is configured in the YAML file:
 ```yaml
 refinement_levels: 3
-n_radial_increment: 2
-n_angular_increment: 2
+n_theta_increment: 2
+n_phi_increment: 2
 ```
 
 ### Analysis and Visualization
 
 ```bash
 # Analyze optimization results
-python examples/optimization_analyzer.py --results-dir results/run_20250101_120000_ring_npart2_nr8_na16_lam0.0_seed42
+python examples/optimization_analyzer.py --results-dir results/run_20250101_120000_torus_npart2_lam0.0_seed42
 
 # Analyze multiple runs matching pattern
 python examples/optimization_analyzer.py --results-dir results --pattern "npart2_lam0.0"
@@ -252,12 +246,6 @@ Flag descriptions (brief):
 
 The project uses comprehensive configuration through `parameters/input.yaml`. Key parameters include:
 
-### Surface Configuration
-- `n_radial`, `n_angular`: Initial mesh resolution
-- `r_inner`, `r_outer`: Ring geometry (for ring surface)
-- `refinement_levels`: Number of mesh refinement levels
-- `n_radial_increment`, `n_angular_increment`: Resolution increments per level
-
 ### Optimization Parameters
 - `optimizer_type`: Choose between 'pyslsqp' and 'pgd'
 - `n_partitions`: Number of equal-area partitions
@@ -320,9 +308,6 @@ The framework automatically refines meshes when optimization plateaus, interpola
 - **SLURM submission script** for UPPMAX (Rackham) cluster
 - **Generic design** for other cluster systems
 - **Automatic job naming** based on configuration
-
-### Island Analysis
-Tools for diagnosing partition quality by identifying ambiguous regions where multiple phases have similar values.
 
 ## Results and Output
 

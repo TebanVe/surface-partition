@@ -1,15 +1,9 @@
 import numpy as np
 
 class Config:
-	"""Configuration parameters for the ring partition optimization."""
+	"""Configuration parameters for surface partition optimization."""
 	def __init__(self, params=None):
-		# Ring parameters
-		self.n_radial = 8      # Number of points in radial direction
-		self.n_angular = 16    # Number of points in angular direction
-		self.r_inner = 0.5     # Inner radius
-		self.r_outer = 1.0     # Outer radius
-		
-		# Optimization parameters (for future use)
+		# Optimization parameters
 		self.n_partitions = 3
 		self.lambda_penalty = 1.0
 		self.max_iter = 1000
@@ -41,10 +35,8 @@ class Config:
 		self.pgd_projection_tol = 1e-8
 		
 		# Refinement parameters
-		self.refinement_levels = 1  # Number of mesh refinement levels
-		self.n_radial_increment = 2  # Number of n_radial to add per refinement
-		self.n_angular_increment = 2  # Number of n_angular to add per refinement
-		self.use_analytic = True  # Whether to use analytic gradients
+		self.refinement_levels = 1
+		self.use_analytic = True
 		
 		# Mesh refinement convergence criteria
 		self.refine_patience = 30

@@ -51,9 +51,9 @@ def setup_logging(log_level: str = 'INFO',
         if include_timestamp:
             # Create timestamped filename
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            log_file = os.path.join(log_dir, f'ring_partition_{timestamp}.log')
+            log_file = os.path.join(log_dir, f'surface_partition_{timestamp}.log')
         else:
-            log_file = os.path.join(log_dir, 'ring_partition.log')
+            log_file = os.path.join(log_dir, 'surface_partition.log')
         
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
