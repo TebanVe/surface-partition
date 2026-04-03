@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 from dataclasses import dataclass
 
-from .logging_config import get_logger
+from ..logging_config import get_logger
 
 
 @dataclass

@@ -36,15 +36,15 @@ except ImportError:
     print("ERROR: PyVista is required. Install with: pip install pyvista")
     sys.exit(1)
 
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
-from src.core.mesh_topology import MeshTopology
-from src.core.steiner_handler import SteinerHandler, TriplePoint
-from src.core.area_calculator import AreaCalculator
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
+from src.mesh.mesh_topology import MeshTopology
+from src.partition.steiner_handler import SteinerHandler, TriplePoint
+from src.partition.area_calculator import AreaCalculator
 
 # Pre-parse --use-legacy before conditional imports
 import argparse as _argparse
-from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
 # Import data loading from the reference script
 from examples.data_loader import load_partition_from_refined_file
@@ -628,7 +628,7 @@ def run_visualization(args):
     migration_history = None
     try:
         import h5py
-        from src.core.type2_migration_io import load_type2_migration_history
+        from src.migration.type2_migration_io import load_type2_migration_history
         with h5py.File(args.solution, 'r') as f:
             migration_history = load_type2_migration_history(f)
         if len(migration_history.records) > 0:

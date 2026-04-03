@@ -10,8 +10,8 @@ import numpy as np
 from typing import List, Tuple, Optional, Set
 
 from ..logging_config import get_logger
-from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
-from .mesh_topology import MeshTopology
+from ..partition.contour_partition import PartitionContour, VariablePoint, TriangleSegment
+from ..mesh.mesh_topology import MeshTopology
 from .migration_types import RebuildResult
 
 logger = get_logger(__name__)

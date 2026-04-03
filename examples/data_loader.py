@@ -7,9 +7,9 @@ files, used by visualization scripts to construct mesh and partition objects.
 
 import os
 import h5py
-from src.find_contours import ContourAnalyzer
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
+from src.partition.find_contours import ContourAnalyzer
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
 
 
 def load_partition_from_base_file(base_path, use_initial=False, verbose=False):

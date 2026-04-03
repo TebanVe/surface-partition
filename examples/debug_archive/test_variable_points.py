@@ -19,9 +19,9 @@ from mpl_toolkits.mplot3d import Axes3D
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.find_contours import ContourAnalyzer
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
+from src.partition.find_contours import ContourAnalyzer
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
 from src.logging_config import get_logger, setup_logging
 
 

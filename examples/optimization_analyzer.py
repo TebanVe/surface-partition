@@ -877,7 +877,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     lam = metadata.get('input_parameters', {}).get('lambda_penalty')
     seed = metadata.get('input_parameters', {}).get('seed')
     use_analytic_flag = metadata.get('input_parameters', {}).get('use_analytic')
-    from src.plot_utils import build_plot_title
+    from src.visualization.plot_utils import build_plot_title
     metrics_title = build_plot_title(optimizer_name, surface_name, label1, var1_val, label2, var2_val, lam, seed, use_analytic_flag, prefix='Optimization Metrics')
     plot_refinement_optimization_metrics(
         energies, grad_norms, cnorms, steps, level_boundaries,

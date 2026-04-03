@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import h5py
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
 from src.logging_config import setup_logging, get_logger
 
 def load_test_data(solution_path: str):

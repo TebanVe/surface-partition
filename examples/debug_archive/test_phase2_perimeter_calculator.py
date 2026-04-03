@@ -8,9 +8,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
-from src.core.perimeter_calculator import PerimeterCalculator
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
+from src.partition.perimeter_calculator import PerimeterCalculator
 from src.logging_config import setup_logging, get_logger
 
 

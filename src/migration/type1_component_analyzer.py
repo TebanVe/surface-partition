@@ -18,10 +18,10 @@ from typing import List, Tuple, Optional, Set, Dict
 from collections import defaultdict, Counter, deque
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
-from .contour_partition import PartitionContour, VariablePoint
-from .mesh_topology import MeshTopology
-from .steiner_handler import SteinerHandler
+from ..mesh.tri_mesh import TriMesh
+from ..partition.contour_partition import PartitionContour, VariablePoint
+from ..mesh.mesh_topology import MeshTopology
+from ..partition.steiner_handler import SteinerHandler
 from . import migration_utils
 
 
@@ -1347,7 +1347,7 @@ class Type1ComponentAnalyzer:
             return self._steiner_handler_cache
         
         # Create new SteinerHandler
-        from .steiner_handler import SteinerHandler
+        from ..partition.steiner_handler import SteinerHandler
         steiner_handler = SteinerHandler(self.mesh, self.partition)
         self._steiner_handler_cache = steiner_handler
         

@@ -36,16 +36,16 @@ except ImportError:
     print("ERROR: PyVista is required. Install with: pip install pyvista")
     sys.exit(1)
 
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
-from src.core.mesh_topology import MeshTopology
-from src.core.steiner_handler import SteinerHandler
-from src.core.area_calculator import AreaCalculator
-from src.core import migration_utils
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
+from src.mesh.mesh_topology import MeshTopology
+from src.partition.steiner_handler import SteinerHandler
+from src.partition.area_calculator import AreaCalculator
+from src.migration import migration_utils
 
 # Pre-parse --use-legacy before conditional imports
-from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-from src.core.migration_detector import detect_type1_triggers
+from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.migration.migration_detector import detect_type1_triggers
 
 # Import data loading utility
 from examples.data_loader import load_partition_from_refined_file

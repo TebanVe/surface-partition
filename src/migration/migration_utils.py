@@ -10,8 +10,8 @@ import numpy as np
 from typing import Tuple, Optional
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
-from .contour_partition import PartitionContour, VariablePoint
+from ..mesh.tri_mesh import TriMesh
+from ..partition.contour_partition import PartitionContour, VariablePoint
 
 
 def identify_target_vertex(vp: VariablePoint) -> Optional[int]:

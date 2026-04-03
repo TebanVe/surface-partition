@@ -17,17 +17,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.logging_config import setup_logging, get_logger
-from src.core.pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
-from src.core.pgd_optimizer import ProjectedGradientOptimizer
-from src.projection_iterative import (
+from src.optimization.pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
+from src.optimization.pgd_optimizer import ProjectedGradientOptimizer
+from src.optimization.projection import (
 	orthogonal_projection_iterative,
 	create_initial_condition_with_projection,
 	validate_projection_result,
 )
-from src.core.interpolation import nearest_neighbor_interpolate
-from src.find_contours import ContourAnalyzer
-from src.core.contour_partition import PartitionContour
-from src.core.perimeter_optimizer import PerimeterOptimizer
+from src.mesh.interpolation import nearest_neighbor_interpolate
+from src.partition.find_contours import ContourAnalyzer
+from src.partition.contour_partition import PartitionContour
+from src.optimization.perimeter_optimizer import PerimeterOptimizer
 
 
 def optimize_surface_partition(provider, config, solution_dir=None):

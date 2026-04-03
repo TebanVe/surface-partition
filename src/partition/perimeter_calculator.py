@@ -24,7 +24,7 @@ import numpy as np
 from typing import Tuple
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
+from ..mesh.tri_mesh import TriMesh
 from .contour_partition import PartitionContour
 
 

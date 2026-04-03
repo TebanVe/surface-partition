@@ -9,7 +9,7 @@ import numpy as np
 
 from ..logging_config import get_logger
 from .pyslsqp_optimizer import RefinementTriggered
-from ..projection_iterative import orthogonal_projection_iterative
+from .projection import orthogonal_projection_iterative
 
 
 class ProjectedGradientOptimizer:

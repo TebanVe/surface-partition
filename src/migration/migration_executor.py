@@ -13,9 +13,9 @@ import numpy as np
 from typing import Dict, List, Optional, Set, Tuple, FrozenSet
 
 from ..logging_config import get_logger
-from .contour_partition import PartitionContour, VariablePoint, TriangleSegment
-from .mesh_topology import MeshTopology
-from .steiner_handler import SteinerHandler, TriplePoint
+from ..partition.contour_partition import PartitionContour, VariablePoint, TriangleSegment
+from ..mesh.mesh_topology import MeshTopology
+from ..partition.steiner_handler import SteinerHandler, TriplePoint
 from .migration_types import (
     Type1Trigger, Type2Trigger, LocalStateSnapshot, SteinerSnapshot,
     TriplePointHistory, RebuildResult

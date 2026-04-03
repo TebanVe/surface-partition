@@ -52,11 +52,11 @@ except ImportError:
     print("ERROR: PyVista is required.  Install with: pip install pyvista")
     sys.exit(1)
 
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
-from src.core.steiner_handler import SteinerHandler
-from src.core.area_calculator import AreaCalculator
-from src.core.perimeter_calculator import PerimeterCalculator
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
+from src.partition.steiner_handler import SteinerHandler
+from src.partition.area_calculator import AreaCalculator
+from src.partition.perimeter_calculator import PerimeterCalculator
 
 # Boundary clipping + Steiner helpers — identical to the original script
 from examples.visualize_type2_triple_point import (

@@ -14,7 +14,7 @@ from typing import List, Tuple, Dict, Optional
 from scipy.optimize import minimize
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
+from ..mesh.tri_mesh import TriMesh
 from .contour_partition import PartitionContour
 
 

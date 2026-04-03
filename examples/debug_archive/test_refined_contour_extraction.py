@@ -31,8 +31,8 @@ import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
 from src.logging_config import get_logger, setup_logging
 
 

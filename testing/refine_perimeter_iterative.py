@@ -58,14 +58,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples.data_loader import load_partition_from_refined_file
-from src.find_contours import ContourAnalyzer
-from src.core.tri_mesh import TriMesh
-from src.core.contour_partition import PartitionContour
-from src.core.perimeter_optimizer import PerimeterOptimizer
-from src.core.mesh_topology import MeshTopology
+from src.partition.find_contours import ContourAnalyzer
+from src.mesh.tri_mesh import TriMesh
+from src.partition.contour_partition import PartitionContour
+from src.optimization.perimeter_optimizer import PerimeterOptimizer
+from src.mesh.mesh_topology import MeshTopology
 from src.logging_config import get_logger, setup_logging
 
-from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
 
 def detect_file_type(path):
@@ -95,7 +95,7 @@ def _check_indicator_vp_consistency(partition, mesh, logger):
     Returns True if consistent, False if a mismatch is detected.
     """
     import numpy as np
-    from src.find_contours import ContourAnalyzer
+    from src.partition.find_contours import ContourAnalyzer
 
     logger.info("  Running indicator_functions <-> VP roundtrip consistency check...")
 
@@ -222,8 +222,8 @@ def export_intermediate_state(partition, iteration_number, base_output_path, opt
     # Post-write roundtrip perimeter check
     if mesh is not None:
         try:
-            from src.core.perimeter_calculator import PerimeterCalculator
-            from src.core.steiner_handler import SteinerHandler
+            from src.partition.perimeter_calculator import PerimeterCalculator
+            from src.partition.steiner_handler import SteinerHandler
 
             mesh_r, partition_r = load_partition_from_refined_file(output_path, verbose=False)
 

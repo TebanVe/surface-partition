@@ -26,15 +26,9 @@ from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
+from ..mesh.tri_mesh import TriMesh
 
-try:
-    from ..find_contours import BoundaryTriangleInfo
-except ImportError:
-    try:
-        from find_contours import BoundaryTriangleInfo
-    except ImportError:
-        BoundaryTriangleInfo = None  # Fallback if not available
+from .find_contours import BoundaryTriangleInfo
 
 
 @dataclass

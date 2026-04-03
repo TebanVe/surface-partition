@@ -13,9 +13,9 @@ from collections import defaultdict
 import numpy as np
 
 from ..logging_config import get_logger
-from .contour_partition import PartitionContour
-from .mesh_topology import MeshTopology
-from .steiner_handler import SteinerHandler, TriplePoint
+from ..partition.contour_partition import PartitionContour
+from ..mesh.mesh_topology import MeshTopology
+from ..partition.steiner_handler import SteinerHandler, TriplePoint
 from .migration_types import Type1Trigger, Type2Trigger
 from . import migration_utils
 

@@ -9,12 +9,12 @@ from typing import Dict, List, Optional, Union, FrozenSet
 from dataclasses import dataclass, field
 
 from ..logging_config import get_logger
-from .contour_partition import PartitionContour
-from .tri_mesh import TriMesh
-from .mesh_topology import MeshTopology
-from .steiner_handler import SteinerHandler
-from .area_calculator import AreaCalculator
-from .perimeter_calculator import PerimeterCalculator
+from ..partition.contour_partition import PartitionContour
+from ..mesh.tri_mesh import TriMesh
+from ..mesh.mesh_topology import MeshTopology
+from ..partition.steiner_handler import SteinerHandler
+from ..partition.area_calculator import AreaCalculator
+from ..partition.perimeter_calculator import PerimeterCalculator
 from .migration_types import (
     Type1Trigger, Type2Trigger, TriplePointHistory,
     DetectionResult, MigrationResult

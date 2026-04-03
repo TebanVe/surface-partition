@@ -23,15 +23,15 @@ from typing import Dict, Optional, Tuple, List, Set
 import time
 
 from ..logging_config import get_logger
-from .tri_mesh import TriMesh
-from .contour_partition import PartitionContour
-from .area_calculator import AreaCalculator
-from .perimeter_calculator import PerimeterCalculator
-from .steiner_handler import SteinerHandler
-from .partition_arrays import PartitionArrays
-from . import vectorized_perimeter
-from . import vectorized_area
-from . import vectorized_steiner
+from ..mesh.tri_mesh import TriMesh
+from ..partition.contour_partition import PartitionContour
+from ..partition.area_calculator import AreaCalculator
+from ..partition.perimeter_calculator import PerimeterCalculator
+from ..partition.steiner_handler import SteinerHandler
+from ..partition.partition_arrays import PartitionArrays
+from ..partition import vectorized_perimeter
+from ..partition import vectorized_area
+from ..partition import vectorized_steiner
 
 
 class IPOPTProblemAdapter:

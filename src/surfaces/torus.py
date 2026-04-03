@@ -2,7 +2,7 @@ import numpy as np
 from typing import Tuple
 
 from ..logging_config import get_logger
-from ..core.tri_mesh import TriMesh
+from ..mesh.tri_mesh import TriMesh
 
 
 class TorusMeshProvider:

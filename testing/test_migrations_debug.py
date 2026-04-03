@@ -35,17 +35,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples.data_loader import load_partition_from_refined_file
-from src.core.tri_mesh import TriMesh
-from src.core.mesh_topology import MeshTopology
-from src.core.steiner_handler import SteinerHandler
-from src.core.area_calculator import AreaCalculator
-from src.core.perimeter_calculator import PerimeterCalculator
-from src.core.perimeter_optimizer import PerimeterOptimizer
-from src.core.type2_migration_io import load_type2_migration_history
-from src.core import migration_utils
+from src.mesh.tri_mesh import TriMesh
+from src.mesh.mesh_topology import MeshTopology
+from src.partition.steiner_handler import SteinerHandler
+from src.partition.area_calculator import AreaCalculator
+from src.partition.perimeter_calculator import PerimeterCalculator
+from src.optimization.perimeter_optimizer import PerimeterOptimizer
+from src.migration.type2_migration_io import load_type2_migration_history
+from src.migration import migration_utils
 from src.logging_config import get_logger, setup_logging
-from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-from src.core.migration_types import TriplePointHistory
+from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.migration.migration_types import TriplePointHistory
 
 
 # ============================================================================
