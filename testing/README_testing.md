@@ -185,147 +185,6 @@ results/run_20251027_233612_surftorus_npart5_v1nt60-240_incr20_v2np48-192_incr16
 
 ---
 
-### Test 2: Migration and Continue Optimization (with Iterative Support)
-
-**File**: `test_migration_and_continue.py`
-
-**Status**: ✅ APPROVED (Iterative functionality added 2026-02-09)
-
-**Created**: 2026-02-04
-
-**Last Updated**: 2026-02-09 (Added iterative refinement capability)
-
-**Approved**: 2026-02-09
-
-**Objective**: 
-Test the migrate→optimize workflow starting from a refined partition file. This script can now operate in two modes:
-1. **Single-cycle mode** (default, `--max-iterations 1`): Apply migrations once, optimize, export
-2. **Iterative mode** (`--max-iterations > 1`): Repeatedly apply migrations and optimize until convergence or max iterations
-
-**New Features (2026-02-09)**:
-- **Iterative refinement support**: Can run multiple migrate→optimize cycles until convergence
-- **Smart iteration detection**: Automatically detects starting iteration number from input filename
-- **Sequential numbering**: If input is `iteration5`, outputs are `iteration6`, `iteration7`, etc.
-- **Convergence detection**: Stops when no more topology switches are detected
-- **Backward compatible**: Default `--max-iterations 1` preserves original single-cycle behavior
-
-**What it validates**:
-- Loading refined contours from HDF5 file (iteration files or first refined file)
-- Detection of topology switches (Type 1 and Type 2)
-- Application of migrations with proper indicator_functions updates
-- **Efficient calculator reuse** (pre-migration and post-migration phases)
-- Optimization convergence after migrations
-- Export in same HDF5 format as input (compatible with visualization scripts)
-- **Iterative workflow**: migrate → optimize → detect → [repeat until convergence]
-
-**Key differences from other scripts**:
-- **vs `refine_perimeter_iterative.py`**: Different workflow (MIGRATE first vs OPTIMIZE first), different starting point (iteration file vs base solution)
-- **Complementary roles**: 
-  - `refine_perimeter_iterative.py`: Start from BASE solution, optimize→migrate loop
-  - `test_migration_and_continue.py`: Start from ITERATION file, migrate→optimize loop
-
-**Usage**:
-```bash
-# Single cycle (backward compatible - default)
-python testing/test_migration_and_continue.py \
-    --solution results/run_xyz/*_refined_contours.h5 \
-    --migration-type both
-
-# Iterative refinement from iteration 1 (up to 10 cycles)
-python testing/test_migration_and_continue.py \
-    --solution results/run_xyz/*_iteration1_refined_contours.h5 \
-    --migration-type both \
-    --max-iterations 10
-
-# Resume from iteration 5 (continue for 5 more iterations)
-python testing/test_migration_and_continue.py \
-    --solution results/run_xyz/*_iteration5_refined_contours.h5 \
-    --migration-type both \
-    --max-iterations 5
-
-# Apply only Type 1 migrations
-python testing/test_migration_and_continue.py \
-    --solution results/run_xyz/*_refined_contours.h5 \
-    --migration-type type1
-
-# Apply only Type 2 migrations with custom output
-python testing/test_migration_and_continue.py \
-    --solution results/run_xyz/*_refined_contours.h5 \
-    --migration-type type2 \
-    --output results/run_xyz/*_custom_output.h5
-```
-
-**Command-line arguments**:
-- `--solution`: Path to refined contours HDF5 file (required)
-- `--migration-type`: Which migrations to apply: `type1`, `type2`, or `both` (default: `both`)
-- `--max-iterations`: Maximum refinement cycles (default: 1 for backward compatibility)
-- `--output`: Output path (default: auto-generated with correct iteration number)
-- `--max-opt-iter`: Maximum optimization iterations per cycle (default: 1000)
-- `--tolerance`: Optimization tolerance (default: 1e-7)
-- `--boundary-tol`: Boundary detection threshold (default: 1e-3)
-- `--method`: Optimization method: `SLSQP` or `trust-constr` (default: SLSQP)
-- `--log-level`: Logging verbosity (default: INFO)
-
-**Expected output**:
-The script performs these stages with detailed logging:
-1. **Load refined data**: Mesh, partition, indicator functions, λ parameters
-2. **Initial diagnostics**: Current perimeter, areas, VPs, triple points
-3. **Detect switches**: Identify Type 1 and Type 2 candidates
-4. **Apply migrations**: Execute selected migration types with per-migration logging
-5. **Rebuild calculators**: Recreate AreaCalculator, PerimeterCalculator, SteinerHandler
-6. **Run optimization**: One optimization iteration with convergence tracking
-7. **Export results**: Save to HDF5 with metadata
-8. **Post-optimization analysis**: Detect if new switches are needed
-
-**Success criteria**:
-```
-✓ Data loaded successfully
-✓ Switches detected
-✓ Migrations applied (> 0 successful)
-✓ Calculators rebuilt
-✓ Optimization converged
-✓ Results exported
-✓ Post-analysis completed
-TEST COMPLETED SUCCESSFULLY
-```
-
-**Failure handling**:
-- Script aborts with clear error messages if:
-  - Input file not found
-  - No switches detected
-  - No migrations applied
-  - Optimization fails to converge
-  - Export fails
-
-**Dependencies**:
-- `examples/data_loader.py` (load_partition_from_refined_file)
-- `src/core/tri_mesh.py`
-- `src/core/contour_partition.py`
-- `src/core/area_calculator.py`
-- `src/core/perimeter_calculator.py`
-- `src/core/steiner_handler.py`
-- `src/core/perimeter_optimizer.py`
-- `src/core/mesh_topology.py`
-- `src/core/topology_switcher.py`
-- `src/logging_config.py`
-
-**Notes**:
-- Output file format matches input format (visualization scripts can directly read it)
-- Log file created in `logs/` directory with timestamp
-- Default output location: same directory as input file
-- If no switches detected, script exits gracefully (partition already converged)
-- Maximum one complete cycle per execution
-
-**Integration**:
-After successful test, results can be visualized with:
-```bash
-python examples/visualize_type1_vertex_collapse.py \
-    --solution results/run_xyz/*_iteration2_refined_contours.h5 \
-    --region X --component-index Y --state before
-```
-
----
-
 ### Test 3: Iterative Perimeter Refinement with Automatic Migrations
 
 **File**: `refine_perimeter_iterative.py`
@@ -351,15 +210,11 @@ Implement a complete production-ready iterative refinement workflow that automat
 - Indicator function persistence across save/reload cycles
 - Complete convergence tracking across multiple iterations
 
-**Key differences from other scripts**:
-| Feature | `test_migration_and_continue.py` | `refine_perimeter_iterative.py` |
-|---------|----------------------------------|----------------------------------|
-| **Input** | Refined contours | Initial solution |
-| **Migrations** | New v2/v4 methods | New v2/v4 methods |
-| **Workflow** | Migrate → optimize (1 cycle) | Loop(optimize → detect → migrate) |
-| **Iterations** | Single cycle | Multiple until convergence |
-| **Output** | Single iteration file | Multiple iteration files + final |
-| **Purpose** | Testing/debugging | **Production workflow** |
+**Key features**:
+- Production-ready iterative workflow: Loop(optimize → detect → migrate)
+- Three-way entry point: base solution, checkpoint with pending migration, converged checkpoint
+- Supports IPOPT with exact Hessian, best-iterate tracking, and partial convergence
+- Checkpoint semantics with `pending_migration` flag for unambiguous resume
 
 **Usage**:
 ```bash
@@ -526,9 +381,8 @@ See `docs/REFINE_PERIMETER_ITERATIVE_PLAN.md` for complete implementation plan i
 - Testing checklist
 
 **Relation to other tests**:
-- Builds on efficiency patterns validated in Test 2 (`test_migration_and_continue.py`)
 - Uses component analysis architecture validated in Test 1 (`test_self_healing_selection.py`)
-- Serves as the production workflow that Test 2 prepares for
+- Serves as the production workflow for iterative perimeter refinement
 
 ---
 
@@ -552,7 +406,7 @@ component grouping in the subsequent Type 1 analysis.
 - Which components the watched VPs end up in after the post-Type2 Type 1 analysis
 - Whether watched VPs appear in each other's auxiliary components (spurious grouping)
 
-**Key differences from `test_migration_and_continue.py`**:
+**Key differences from `refine_perimeter_iterative.py`**:
 - **No optimization**: skips the optimize step entirely
 - **No export**: no HDF5 output written
 - **Per-migration VP tracking**: logs edge/λ/target state of watched VPs before and after *every* individual migration
@@ -597,76 +451,6 @@ python testing/test_migrations_debug.py \
 - `src/core/perimeter_optimizer.py`
 - `src/core/type2_migration_history.py`
 - `src/core/migration_utils.py`
-
----
-
----
-
-### Test 5: Vectorized Evaluation Numerical Equivalence
-
-**File**: `test_vectorized_evaluation.py`
-
-**Status**: ✅ APPROVED (2026-03-23)
-
-**Created**: 2026-03-05
-
-**Approved**: 2026-03-23
-
-**Objective**:
-Verify that every function in the vectorized evaluation modules (`vectorized_perimeter`,
-`vectorized_area`, `vectorized_steiner`) matches its original object-oriented counterpart
-to floating-point tolerance. Also validates the analytical and sparse-FD area Jacobians
-against the reference `AreaCalculator` implementation.
-
-**What it validates**:
-
-| # | Test | Tolerance |
-|---|------|-----------|
-| 1 | `compile_arrays()` round-trip (lambda values) | 1e-15 |
-| 2 | Vectorized perimeter vs `PerimeterCalculator` | 1e-12 |
-| 3 | Vectorized perimeter gradient | 1e-10 |
-| 4 | Vectorized cell areas | 1e-12 |
-| 5 | Area Jacobian (analytical default) | 1e-6 |
-| 5a | Sparse FD Jacobian vs `AreaCalculator` | 1e-12 (machine precision) |
-| 5b | Analytical Jacobian vs sparse FD | 1e-6 (FD truncation limit) |
-| 6 | Analytical Steiner points vs BFGS | 1e-6 |
-| 7 | Steiner perimeter + area contributions | 1e-6 |
-| 8 | Steiner perimeter gradient | 1e-4 |
-| 9 | Steiner area Jacobian | 1e-4 |
-| 10 | End-to-end optimizer: vectorized vs original (objective, gradient, constraints, Jacobian) | 1e-4 |
-| 11 | Pre-compile fallback (objective only) | 1e-12 |
-| 12 | 10-iteration SLSQP: vectorized vs original final objective | 5e-2 |
-
-**Usage**:
-```bash
-python testing/test_vectorized_evaluation.py
-```
-No arguments needed — constructs a synthetic 3-cell 9-vertex planar mesh internally.
-
-**Expected output**:
-```
-Results: 20/20 passed, 0/20 failed
-ALL TESTS PASSED
-```
-
-**Dependencies**:
-- `src/core/tri_mesh.py`
-- `src/core/contour_partition.py`
-- `src/core/area_calculator.py`
-- `src/core/perimeter_calculator.py`
-- `src/core/steiner_handler.py`
-- `src/core/perimeter_optimizer.py`
-- `src/core/vectorized_perimeter.py`
-- `src/core/vectorized_area.py`
-- `src/core/vectorized_steiner.py`
-
-**Notes**:
-- Fully self-contained — no external data files required
-- Should be run after any change to vectorized evaluation modules, area Jacobian,
-  or `compile_arrays()`
-- Tests 5a and 5b were added when the analytical area Jacobian was implemented
-  (2026-03-23) to validate it against both the reference FD implementation and the
-  sparse FD intermediate
 
 ---
 

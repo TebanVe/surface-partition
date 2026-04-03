@@ -222,7 +222,7 @@ def load_partition_from_refined_file(refined_path, verbose=False):
                 error_msg += (
                     f"\n\nThis iteration file was created before indicator functions were "
                     f"added to the export format.\n"
-                    f"Solution: Re-run test_migration_and_continue.py to generate a new "
+                    f"Solution: Re-run refine_perimeter_iterative.py to generate a new "
                     f"iteration file with updated indicator functions."
                 )
             else:

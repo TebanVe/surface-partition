@@ -194,9 +194,6 @@ python examples/optimization_analyzer.py --results-dir results --pattern "npart2
 ### Testing Components
 
 ```bash
-# Numerical equivalence tests for the vectorized evaluation pipeline (no arguments needed)
-python testing/test_vectorized_evaluation.py
-
 # Debug migrations step-by-step without optimization
 python testing/test_migrations_debug.py --solution results/run_xyz/*_iterationN_refined_contours.h5
 ```
