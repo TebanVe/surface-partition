@@ -48,7 +48,7 @@ from src.migration.migration_orchestrator import MigrationOrchestrator, Migratio
 from src.migration.migration_detector import detect_type1_triggers
 
 # Import data loading utility
-from examples.data_loader import load_partition_from_refined_file
+from src.pipeline.io import load_partition_from_refined_file
 
 
 # ============================================================================

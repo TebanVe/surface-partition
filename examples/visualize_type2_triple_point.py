@@ -47,7 +47,7 @@ import argparse as _argparse
 from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
 # Import data loading from the reference script
-from examples.data_loader import load_partition_from_refined_file
+from src.pipeline.io import load_partition_from_refined_file
 
 
 # ============================================================================

@@ -57,7 +57,7 @@ import h5py
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from examples.data_loader import load_partition_from_refined_file
+from src.pipeline.io import load_partition_from_refined_file
 from src.partition.find_contours import ContourAnalyzer
 from src.mesh.tri_mesh import TriMesh
 from src.partition.contour_partition import PartitionContour

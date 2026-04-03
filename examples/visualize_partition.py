@@ -45,13 +45,12 @@ from src.partition.steiner_handler import SteinerHandler
 from src.partition.area_calculator import AreaCalculator
 from src.partition.perimeter_calculator import PerimeterCalculator
 
-# Import working functions from existing script
-from examples.visualize_type2_triple_point import (
+from src.visualization.partition_helpers import (
     render_single_region_simple,
     add_steiner_visualization,
-    add_vp_visualization
+    add_vp_visualization,
 )
-from examples.data_loader import load_partition_from_refined_file, load_partition_from_base_file
+from src.pipeline.io import load_partition_from_refined_file, load_partition_from_base_file
 
 
 def _is_refined_file(path):

@@ -34,7 +34,7 @@ import numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from examples.data_loader import load_partition_from_refined_file
+from src.pipeline.io import load_partition_from_refined_file
 from src.mesh.tri_mesh import TriMesh
 from src.mesh.mesh_topology import MeshTopology
 from src.partition.steiner_handler import SteinerHandler
