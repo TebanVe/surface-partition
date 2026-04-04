@@ -104,12 +104,12 @@ order used during reconstruction from `indicator_functions`.
 Post-migration VP list order diverges from sorted-edge reconstruction order. Without
 edge-keyed loading, lambdas get applied to the wrong VPs. Fix: save `vp_edges`
 alongside `lambda_parameters` in the HDF5 file; load by edge key in
-`examples/data_loader.py::load_partition_from_refined_file`. **Confirmed working.**
+`scripts/data_loader.py::load_partition_from_refined_file`. **Confirmed working.**
 
 **Why deleted**:
 Diagnostic script requiring an external `--solution` file; not runnable as an
 automated regression test. Historical findings are preserved in this entry and in
-`examples/debug_archive/`. The underlying fix lives in `data_loader.py`.
+`scripts/debug_archive/`. The underlying fix lives in `data_loader.py`.
 
 ---
 
@@ -174,14 +174,14 @@ results/run_20251027_233612_surftorus_npart5_v1nt60-240_incr20_v2np48-192_incr16
 - `src/core/tri_mesh.py`
 - `src/core/contour_partition.py`
 - `src/core/mesh_topology.py`
-- ~~`examples/visualize_precise_region.py`~~ → replaced by `examples/data_loader.py::load_partition_from_refined_file`
+- ~~`scripts/visualize_precise_region.py`~~ → replaced by `scripts/data_loader.py::load_partition_from_refined_file`
 
 **Notes**:
 - Test uses deep copy of partition to compare states across iterations
 - Tracks VP movements to explain why auxiliaries break
 - Provides detailed logging for debugging
 
-⚠️ **Known issue (2026-03-24)**: Script imports `from examples.visualize_precise_region import load_partition_from_refined_file` which no longer exists. The function now lives in `examples/data_loader.py`. The import line must be updated before this test can be run.
+⚠️ **Known issue (2026-03-24)**: Script imports `from examples.visualize_precise_region import load_partition_from_refined_file` which no longer exists. The function now lives in `scripts/data_loader.py`. The import line must be updated before this test can be run.
 
 ---
 
@@ -303,7 +303,7 @@ Script exits immediately with detailed diagnostics if:
     ================================================================================
     Visualize this component to investigate:
     
-      python examples/visualize_type1_vertex_collapse.py \
+      python scripts/visualize_type1_vertex_collapse.py \
         --solution results/.../iteration2_refined_contours.h5 \
         --component-index 44 \
         --boundary-tol 0.01 \
@@ -349,17 +349,17 @@ Iteration N:
 All intermediate and final files can be visualized:
 ```bash
 # View any iteration state
-python examples/visualize_partition.py \
+python scripts/visualize_partition.py \
     --solution results/run_xyz/*_iteration2_refined_contours.h5 \
     --region 2 --show-steiner
 
 # View final converged state
-python examples/visualize_partition.py \
+python scripts/visualize_partition.py \
     --solution results/run_xyz/*_refined_contours.h5 \
     --region 2 --show-steiner
 
 # Debug specific component
-python examples/visualize_type1_vertex_collapse.py \
+python scripts/visualize_type1_vertex_collapse.py \
     --solution results/run_xyz/*_iteration3_refined_contours.h5 \
     --component-index 44 --state before
 ```
@@ -444,7 +444,7 @@ python testing/test_migrations_debug.py \
 6. `FINAL STATE OF WATCHED VPs`
 
 **Dependencies**:
-- `examples/data_loader.py`
+- `scripts/data_loader.py`
 - `src/core/topology_switcher.py`
 - `src/core/type1_component_analyzer.py`
 - `src/core/steiner_handler.py`

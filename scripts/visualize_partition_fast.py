@@ -18,11 +18,11 @@ The script scales to any number of cells; a progress line is printed per cell
 so long runs stay observable.
 
 Usage (base solution):
-    python examples/visualize_partition_fast.py \\
+    python scripts/visualize_partition_fast.py \\
         --solution path/to/solution.h5
 
 Usage (refined contours, highlight region 2):
-    python examples/visualize_partition_fast.py \\
+    python scripts/visualize_partition_fast.py \\
         --solution path/to/*_refined_contours.h5 \\
         --region 2 \\
         --show-steiner \\

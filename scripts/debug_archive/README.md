@@ -28,10 +28,10 @@ These scripts can still be run for reference or if similar issues arise:
 
 ```bash
 # Example: Run Phase 1 validation
-python examples/debug_archive/test_phase1_triangle_segments.py <solution.h5>
+python scripts/debug_archive/test_phase1_triangle_segments.py <solution.h5>
 
 # Example: Run Phase 2 validation
-python examples/debug_archive/test_phase2_perimeter_calculator.py
+python scripts/debug_archive/test_phase2_perimeter_calculator.py
 ```
 
 ## Historical Context

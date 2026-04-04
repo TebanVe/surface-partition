@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Unified Iterative Perimeter Refinement with Automatic Topology Migrations
+Iterative Perimeter Refinement with Automatic Topology Migrations
 
-Thin CLI wrapper that delegates to PipelineOrchestrator for all refinement logic.
+CLI wrapper that delegates to PipelineOrchestrator for all refinement logic.
 
 Usage:
     # Fresh run from base solution
-    python testing/refine_perimeter_iterative.py \
+    python scripts/refine_perimeter.py \
         --solution results/run_xyz/solution_level0.h5 \
         --max-iterations 10
 
     # Resume from iteration checkpoint (auto-detected)
-    python testing/refine_perimeter_iterative.py \
+    python scripts/refine_perimeter.py \
         --solution results/run_xyz/solution_level0_btol0.01_iteration3_refined_contours.h5 \
         --max-iterations 10
 
     # Save all intermediate checkpoints (enables mid-run resume)
-    python testing/refine_perimeter_iterative.py \
+    python scripts/refine_perimeter.py \
         --solution results/run_xyz/solution_level0.h5 \
         --max-iterations 20 --save-iterations
 """
@@ -37,22 +37,22 @@ from src.pipeline.io import load_partition_from_base_file, load_partition_from_r
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Unified iterative perimeter refinement with automatic topology migrations',
+        description='Iterative perimeter refinement with automatic topology migrations',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
   # Fresh run from base solution
-  python testing/refine_perimeter_iterative.py \\
+  python scripts/refine_perimeter.py \\
       --solution results/run_xyz/solution_level0.h5 \\
       --max-iterations 10
 
   # Resume from iteration checkpoint (auto-detected)
-  python testing/refine_perimeter_iterative.py \\
+  python scripts/refine_perimeter.py \\
       --solution results/run_xyz/solution_level0_btol0.01_iteration3_refined_contours.h5 \\
       --max-iterations 10
 
   # Save all intermediate checkpoints (enables mid-run resume)
-  python testing/refine_perimeter_iterative.py \\
+  python scripts/refine_perimeter.py \\
       --solution results/run_xyz/solution_level0.h5 \\
       --max-iterations 20 --save-iterations
         """
@@ -162,7 +162,7 @@ Example usage:
         logger.info("Debug mode enabled - verbose logging active")
 
     logger.info("=" * 80)
-    logger.info("Unified Iterative Perimeter Refinement with Automatic Migrations")
+    logger.info("Iterative Perimeter Refinement with Automatic Migrations")
     logger.info("=" * 80)
     logger.info(f"Input: {args.solution}")
     logger.info(f"Maximum iterations: {args.max_iterations}")
@@ -213,11 +213,11 @@ Example usage:
     if final_file:
         logger.info("")
         logger.info("To resume (if not converged):")
-        logger.info(f"  python testing/refine_perimeter_iterative.py --solution {final_file} "
+        logger.info(f"  python scripts/refine_perimeter.py --solution {final_file} "
                      f"--max-iterations {args.max_iterations}")
         logger.info("")
         logger.info("To visualize:")
-        logger.info(f"  python examples/visualize_partition.py --solution {final_file}")
+        logger.info(f"  python scripts/visualize_partition.py --solution {final_file}")
 
     return 0
 

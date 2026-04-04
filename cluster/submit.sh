@@ -2,9 +2,9 @@
 
 # Generic submission script for UPPMAX (Rackham) to run surface partition optimizations
 # Usage examples:
-#   bash scripts/submit.sh --input parameters/input.yaml
-#   bash scripts/submit.sh --input parameters/input.yaml --surface ring --time 24:00:00 --venv ringtest-3.9
-#   bash scripts/submit.sh --input parameters/input.yaml --solution-dir /proj/snic2020-15-36/private/RING/SOLUTIONS
+#   bash cluster/submit.sh --input parameters/input.yaml
+#   bash cluster/submit.sh --input parameters/input.yaml --surface ring --time 24:00:00 --venv ringtest-3.9
+#   bash cluster/submit.sh --input parameters/input.yaml --solution-dir /proj/snic2020-15-36/private/RING/SOLUTIONS
 
 set -euo pipefail
 
@@ -161,7 +161,7 @@ export PYTHONPATH="${REPO_ROOT}/src:\$PYTHONPATH"
 cd "${REPO_ROOT}"
 
 # Run orchestrator (surface-agnostic)
-python examples/find_surface_partition.py \
+python scripts/find_surface_partition.py \
 	--input "${INPUT_FILE_ABS}" \
 	--solution-dir "${SOLUTION_DIR_ABS}" \
 	--surface "${SURFACE}"

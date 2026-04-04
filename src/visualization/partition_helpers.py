@@ -1,7 +1,7 @@
 """
 Shared PyVista helper functions for partition visualization.
 
-Extracted from examples/visualize_type2_triple_point.py so that
+Extracted from scripts/visualize_type2_triple_point.py so that
 visualization scripts do not cross-import from each other.
 """
 

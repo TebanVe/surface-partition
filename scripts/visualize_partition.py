@@ -6,7 +6,7 @@ Simple visualization for viewing partition states without migration logic.
 Accepts both base solution .h5 files and refined_contours .h5 files.
 
 Usage (refined contours):
-    python examples/visualize_partition.py \
+    python scripts/visualize_partition.py \
         --solution path/to/*_refined_contours.h5 \
         --region 2 \
         --show-steiner \
@@ -14,7 +14,7 @@ Usage (refined contours):
         --steiner-size 0.0008
 
 Usage (base solution):
-    python examples/visualize_partition.py \
+    python scripts/visualize_partition.py \
         --solution path/to/solution.h5
 
 Author: Partition Visualization

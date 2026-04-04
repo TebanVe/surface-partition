@@ -6,7 +6,7 @@ This script tests whether variable points are correctly positioned on
 the initial partition boundaries, before any optimization is applied.
 
 Usage:
-    python examples/test_variable_points.py --solution results/run_xyz/solution.h5
+    python scripts/test_variable_points.py --solution results/run_xyz/solution.h5
 """
 
 import os

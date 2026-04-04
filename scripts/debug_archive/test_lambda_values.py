@@ -6,7 +6,7 @@ This script compares lambda values before and after perimeter refinement
 to verify that the optimization actually modifies the variable point positions.
 
 Usage:
-    python examples/test_lambda_values.py --solution results/run_xyz/solution.h5 --refined results/run_xyz/refined_contours.h5
+    python scripts/test_lambda_values.py --solution results/run_xyz/solution.h5 --refined results/run_xyz/refined_contours.h5
 """
 
 import os

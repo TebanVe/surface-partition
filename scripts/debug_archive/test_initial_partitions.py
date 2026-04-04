@@ -7,7 +7,7 @@ proper closed boundary loops for each partition cell, before any
 perimeter refinement is applied.
 
 Usage:
-    python examples/test_initial_partitions.py --solution results/run_xyz/solution.h5
+    python scripts/test_initial_partitions.py --solution results/run_xyz/solution.h5
 """
 
 import os

@@ -6,7 +6,7 @@ Clean, focused implementation for testing and debugging the new approach.
 Only includes necessary code - no legacy methods.
 
 Usage:
-    python examples/visualize_type1_vertex_collapse.py \\
+    python scripts/visualize_type1_vertex_collapse.py \\
         --solution <path>/*_refined_contours.h5 \\
         --region 2 \\
         --component-index 0 \\

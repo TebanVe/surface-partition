@@ -13,7 +13,7 @@ The script:
 5. Auto-saves PNGs when windows close
 
 Usage:
-    python examples/test_refined_contour_extraction.py \
+    python scripts/test_refined_contour_extraction.py \
         --original results/run_xyz/solution.h5 \
         --refined results/run_xyz/refined_contours.h5 \
         --output-dir diagnostics/phase1_visual \

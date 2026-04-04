@@ -6,7 +6,7 @@ Clean, focused implementation for testing and debugging Type 2 strategy.
 Only includes necessary code - shows BEFORE state for now.
 
 Usage:
-    python examples/visualize_type2_triple_point.py \
+    python scripts/visualize_type2_triple_point.py \
         --solution <path>/*_refined_contours.h5 \
         --region 2 \
         --triple-point-index 0 \

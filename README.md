@@ -108,13 +108,14 @@ RingTest/
 │   ├── logging_config.py         # Logging system
 │   ├── projection_iterative.py   # Constraint projection algorithms
 │   └── find_contours.py          # Contour extraction utilities (R2/R3)
-├── examples/                      # Example scripts and analysis tools
+├── scripts/                       # CLI entry points
 │   ├── find_surface_partition.py # Main optimization orchestrator
+│   ├── refine_perimeter.py      # Iterative perimeter refinement
 │   ├── optimization_analyzer.py  # Surface-agnostic result analysis
 │   └── visualize_partition.py    # Partition viewer (3D/PyVista, base or refined)
 ├── parameters/                    # Configuration files
 │   └── input.yaml                # Default input parameters
-├── scripts/                       # Utility scripts
+├── cluster/                       # Cluster job submission
 │   └── submit.sh                 # SLURM cluster submission script
 ├── logs/                         # Timestamped log files
 └── results/                      # Optimization results (gitignored)
@@ -126,16 +127,16 @@ RingTest/
 
 ```bash
 # Run optimization with default parameters
-python examples/find_surface_partition.py
+python scripts/find_surface_partition.py
 
 # Run with custom input file
-python examples/find_surface_partition.py --input parameters/input.yaml
+python scripts/find_surface_partition.py --input parameters/input.yaml
 
 # Specify output directory for solutions
-python examples/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_solutions
+python scripts/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_solutions
 
 # Use specific surface provider (e.g. torus)
-python examples/find_surface_partition.py --input parameters/input.yaml --surface torus
+python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
 ```
 
 ### Perimeter Refinement (NEW)
@@ -144,15 +145,15 @@ After obtaining a relaxed solution, refine the contours to get accurate perimete
 
 ```bash
 # Step 1: Run Γ-convergence optimization (Section 3)
-python examples/find_surface_partition.py --input parameters/input.yaml
+python scripts/find_surface_partition.py --input parameters/input.yaml
 
 # Step 2: Refine contours (Section 5)
-python testing/refine_perimeter_iterative.py \
+python scripts/refine_perimeter.py \
     --solution results/run_xyz/solution_level0.h5 \
     --max-iterations 10
 
 # Step 3: Visualize refined contours
-python examples/visualize_partition.py \
+python scripts/visualize_partition.py \
     --solution results/run_xyz/solution_level0.h5 \
     --show-steiner
 ```
@@ -179,10 +180,10 @@ n_phi_increment: 2
 
 ```bash
 # Analyze optimization results
-python examples/optimization_analyzer.py --results-dir results/run_20250101_120000_torus_npart2_lam0.0_seed42
+python scripts/optimization_analyzer.py --results-dir results/run_20250101_120000_torus_npart2_lam0.0_seed42
 
 # Analyze multiple runs matching pattern
-python examples/optimization_analyzer.py --results-dir results --pattern "npart2_lam0.0"
+python scripts/optimization_analyzer.py --results-dir results --pattern "npart2_lam0.0"
 ```
 
 ### Testing Components
@@ -202,7 +203,7 @@ The framework now supports a torus of revolution (R3):
 Usage:
 ```bash
 # Run optimization on a torus
-python examples/find_surface_partition.py --input parameters/input.yaml --surface torus
+python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
 ```
 
 YAML parameters (used when `--surface torus`):
@@ -221,7 +222,7 @@ Use `visualize_partition.py` to visualize partitions on any supported surface:
 
 ```bash
 # View base solution or refined contours (auto-detected)
-python examples/visualize_partition.py --solution <path/to/solution.h5>
+python scripts/visualize_partition.py --solution <path/to/solution.h5>
 
 # Optional flags
 --region 2             # highlight a specific cell
@@ -289,7 +290,7 @@ The project uses comprehensive configuration through `parameters/input.yaml`. Ke
 - **Configurable output** for memory efficiency
 - **Plateau detection** for intelligent refinement
 
-### Analysis Tools (`examples/optimization_analyzer.py`)
+### Analysis Tools (`scripts/optimization_analyzer.py`)
 - **Multi-level result analysis** with constraint evolution plots
 - **Memory-efficient** handling of large datasets
 - **Comprehensive visualization** of optimization metrics
