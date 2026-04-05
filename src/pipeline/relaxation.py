@@ -125,7 +125,8 @@ class RelaxationResult:
 
 def run_relaxation(provider, config: RelaxationConfig,
                    output_dir: str = None,
-                   logger=None) -> RelaxationResult:
+                   logger=None,
+                   warm_start_path: Optional[str] = None) -> RelaxationResult:
     """Run the full multi-level Γ-convergence relaxation pipeline.
 
     Args:
@@ -134,6 +135,11 @@ def run_relaxation(provider, config: RelaxationConfig,
         output_dir: Directory for results. If None, auto-generated with
             timestamp and config parameters.
         logger: Logger instance. If None, uses get_logger(__name__).
+        warm_start_path: Optional path to a prior solution HDF5 produced by
+            run_relaxation(). When provided, the run resumes from the level
+            after the last completed level stored in that file. The
+            config.refinement_levels must be greater than completed_levels
+            in the checkpoint.
 
     Returns:
         RelaxationResult with energy, solution path, metadata, etc.
@@ -170,13 +176,31 @@ def run_relaxation(provider, config: RelaxationConfig,
         levels_meta = []
         prev_vertices = None
         prev_x_opt = None
+        start_level = 0
+
+        if warm_start_path is not None:
+            ws = _load_warm_start(warm_start_path)
+            prev_vertices = ws['prev_vertices']
+            prev_x_opt = ws['prev_x_opt']
+            start_level = ws['completed_levels']
+            logger.info(
+                f"Warm start: resuming from level {start_level} "
+                f"using checkpoint {warm_start_path}"
+            )
+            if start_level >= config.refinement_levels:
+                raise ValueError(
+                    f"Warm-start checkpoint already has {start_level} completed "
+                    f"levels but config.refinement_levels="
+                    f"{config.refinement_levels}. Increase refinement_levels "
+                    f"to run additional levels beyond the checkpoint."
+                )
 
         logger.info(
             f"Starting relaxation with {config.refinement_levels} "
             f"refinement levels"
         )
 
-        for level in range(config.refinement_levels):
+        for level in range(start_level, config.refinement_levels):
             logger.info("=" * 80)
             logger.info(
                 f"Refinement Level {level+1}/{config.refinement_levels}"
@@ -241,7 +265,8 @@ def run_relaxation(provider, config: RelaxationConfig,
 
         metadata = _collect_metadata(
             config, provider, results, levels_meta, mesh,
-            timestamp, solution_path, logfile_path, initial_perimeter
+            timestamp, solution_path, logfile_path, initial_perimeter,
+            warm_start_path=warm_start_path,
         )
 
         with open(os.path.join(output_dir, 'metadata.yaml'), 'w') as f:
@@ -345,6 +370,33 @@ def compute_initial_perimeter(solution_path: str,
 # Private helpers
 # ---------------------------------------------------------------------------
 
+def _load_warm_start(solution_path: str) -> dict:
+    """Load resume state from a prior solution HDF5.
+
+    Returns dict with keys:
+        'prev_x_opt'        np.ndarray — optimized solution from last completed level
+        'prev_vertices'     np.ndarray — mesh vertices from last completed level
+        'completed_levels'  int        — number of levels already completed
+    Raises ValueError if the file is missing required datasets or attributes.
+    """
+    with h5py.File(solution_path, 'r') as f:
+        if 'x_opt' not in f or 'vertices' not in f:
+            raise ValueError(
+                f"Warm-start file {solution_path} is missing 'x_opt' or "
+                f"'vertices' datasets. Was it produced by run_relaxation()?"
+            )
+        if 'completed_levels' not in f.attrs:
+            raise ValueError(
+                f"Warm-start file {solution_path} has no 'completed_levels' "
+                f"attribute. Re-run the original relaxation to regenerate it."
+            )
+        return {
+            'prev_x_opt': np.array(f['x_opt']),
+            'prev_vertices': np.array(f['vertices']),
+            'completed_levels': int(f.attrs['completed_levels']),
+        }
+
+
 def _setup_level(provider, config, level, logger) -> dict:
     """Build mesh and PGD optimizer for one refinement level."""
     n1_init, n2_init = provider.get_resolution()
@@ -399,9 +451,9 @@ def _setup_level(provider, config, level, logger) -> dict:
 
 def _create_initial_condition(mesh, config, level,
                               prev_vertices, prev_x_opt) -> np.ndarray:
-    """Create initial condition (random for level 0, interpolated otherwise)."""
+    """Create initial condition (random when no prior solution, interpolated otherwise)."""
     N = len(mesh.v)
-    if level == 0:
+    if prev_vertices is None:
         return create_initial_condition_with_projection(
             N, config.n_partitions, mesh.v,
             seed=config.seed, method="iterative"
@@ -516,13 +568,15 @@ def _save_solution(mesh, x_opt, x0, config, provider,
         f.attrs['seed'] = int(config.seed)
         f.attrs['optimizer'] = 'PGD'
         f.attrs['use_analytic'] = bool(config.use_analytic)
+        f.attrs['completed_levels'] = len(levels_meta)
 
     return solution_path
 
 
 def _collect_metadata(config, provider, results, levels_meta, mesh,
                       timestamp, solution_path, logfile_path,
-                      initial_perimeter) -> dict:
+                      initial_perimeter,
+                      warm_start_path: Optional[str] = None) -> dict:
     """Assemble comprehensive metadata dictionary."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
@@ -600,5 +654,9 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
             'run_log': os.path.abspath(logfile_path),
             'solution_path': os.path.abspath(solution_path),
         },
+        'warm_start_path': (
+            os.path.abspath(warm_start_path)
+            if warm_start_path is not None else None
+        ),
     }
     return meta

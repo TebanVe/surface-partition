@@ -28,6 +28,10 @@ def main():
                         help='Directory to save solutions')
     parser.add_argument('--surface', type=str, default='torus',
                         help='Surface type (torus)')
+    parser.add_argument('--resume-from', type=str, default=None,
+                        help='Path to a prior solution HDF5 to warm-start from. '
+                             'config.refinement_levels must be greater than the '
+                             'completed_levels stored in that file.')
     args = parser.parse_args()
 
     setup_logging(log_level='INFO', log_to_console=True, log_to_file=False)
@@ -57,7 +61,10 @@ def main():
         raise ValueError(f"Unsupported surface type: {args.surface}")
 
     result = run_relaxation(
-        provider, config, output_dir=args.solution_dir, logger=logger
+        provider, config,
+        output_dir=args.solution_dir,
+        logger=logger,
+        warm_start_path=args.resume_from,
     )
 
     logger.info(f"Solution file saved: {result.solution_path}")
