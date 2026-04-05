@@ -13,9 +13,6 @@ class Config:
 		self.slsqp_eps = 1e-8
 		self.slsqp_disp = False
 		
-		# Optimizer selection
-		self.optimizer_type = 'pyslsqp'  # Options: 'pyslsqp' or 'pgd'
-		
 		# Choose constraint area source
 		# True: use discrete area (Σv) for constraints; False: use theoretical area
 		self.use_discrete_area_for_constraints = True
@@ -68,9 +65,6 @@ class Config:
 		# Logging parameters
 		self.log_frequency = 50
 		self.use_last_valid_iterate = True
-		
-		# PySLSQP parameters
-		self.pyslsqp_save_itr = 'major'
 		
 		# PGD-only: artifact size and logging controls
 		self.run_log_frequency = 100  # console/file logging cadence for PGD

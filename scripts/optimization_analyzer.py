@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.logging_config import get_logger
 from src.surfaces.torus import TorusMeshProvider
 
-def load_pyslsqp_internal_data(hdf5_file_path: str) -> Optional[Dict]:
+def load_internal_data(hdf5_file_path: str) -> Optional[Dict]:
 	"""
 	Load internal optimization data from HDF5 file and return arrays plus
 	iteration indices parsed from group names.
@@ -90,7 +90,7 @@ def load_pyslsqp_internal_data(hdf5_file_path: str) -> Optional[Dict]:
 		print(f"Error loading HDF5 file {hdf5_file_path}: {e}")
 		return None
 
-def parse_pyslsqp_summary_file(summary_file_path: str) -> Optional[Dict]:
+def parse_summary_file(summary_file_path: str) -> Optional[Dict]:
     """
     Parse PySLSQP summary file to extract optimization metrics.
     
@@ -140,7 +140,7 @@ def parse_pyslsqp_summary_file(summary_file_path: str) -> Optional[Dict]:
         print(f"Error parsing summary file {summary_file_path}: {e}")
         return None
 
-def load_pyslsqp_optimization_data(results: List[Dict], logger=None) -> Tuple[List[float], List[float], List[float], List[float], List[float], List[int]]:
+def load_optimization_data(results: List[Dict], logger=None) -> Tuple[List[float], List[float], List[float], List[float], List[float], List[int]]:
     """
     Load and aggregate optimization data from summary files across all refinement levels.
     Returns (energies, grad_norms, cnorms, feas, steps, level_boundaries).
@@ -162,7 +162,7 @@ def load_pyslsqp_optimization_data(results: List[Dict], logger=None) -> Tuple[Li
             if logger:
                 logger.info(f"Loading optimization data from {summary_file}")
             
-            data = parse_pyslsqp_summary_file(summary_file)
+            data = parse_summary_file(summary_file)
             if data:
                 # Extract data directly from summary file
                 level_energies = data['energies']
@@ -200,7 +200,7 @@ def load_pyslsqp_optimization_data(results: List[Dict], logger=None) -> Tuple[Li
     
     return all_energies, all_grad_norms, all_constraints, all_feas, all_steps, level_boundaries
 
-def extract_constraint_evolution_from_pyslsqp_data(results: List[Dict], n_partitions: int, 
+def extract_constraint_evolution(results: List[Dict], n_partitions: int, 
 													 logger=None, major_only: bool = False) -> Dict:
 	"""
 	Extract constraint evolution data and iteration indices.
@@ -217,7 +217,7 @@ def extract_constraint_evolution_from_pyslsqp_data(results: List[Dict], n_partit
 		internal_data_file = result.get('internal_data_file')
 		start_global = int(result.get('start_index_global', 0))
 		if internal_data_file and os.path.exists(internal_data_file):
-			data = load_pyslsqp_internal_data(internal_data_file)
+			data = load_internal_data(internal_data_file)
 			if data is None or 'x' not in data:
 				continue
 			v_level = result.get('v')
@@ -289,7 +289,7 @@ def extract_energy_components_across_levels(results: List[Dict], logger=None) ->
 		internal_data_file = result.get('internal_data_file')
 		start_global = int(result.get('start_index_global', 0))
 		if internal_data_file and os.path.exists(internal_data_file):
-			data = load_pyslsqp_internal_data(internal_data_file)
+			data = load_internal_data(internal_data_file)
 			if data is None or 'energy_total' not in data:
 				# No energy component data in this file
 				if logger:
@@ -327,7 +327,7 @@ def compute_unity_last_level(internal_data_file: str, n_partitions: int, major_o
     """
     if logger is None:
         logger = get_logger(__name__)
-    data = load_pyslsqp_internal_data(internal_data_file)
+    data = load_internal_data(internal_data_file)
     if not data or 'x' not in data:
         if logger:
             logger.warning(f"No 'x' data in {internal_data_file} for last-level unity computation")
@@ -437,7 +437,7 @@ def plot_refinement_optimization_metrics(energies: List[float], grad_norms: List
         if use_analytic is not None:
             title_parts.append(f"analytic_gradients={'yes' if use_analytic else 'no'}")
         if title_parts:
-            fig.suptitle(f"PySLSQP Optimization Metrics: {', '.join(title_parts)}", fontsize=14)
+            fig.suptitle(f"Optimization Metrics: {', '.join(title_parts)}", fontsize=14)
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -688,7 +688,7 @@ def plot_constraint_evolution(constraint_data: Dict, level_boundaries: List[int]
         if use_analytic is not None:
             title_parts.append(f"analytic_gradients={'yes' if use_analytic else 'no'}")
         if title_parts:
-            fig.suptitle(f"PySLSQP Constraint Evolution: {', '.join(title_parts)}", fontsize=16)
+            fig.suptitle(f"Constraint Evolution: {', '.join(title_parts)}", fontsize=16)
     
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(save_path)
@@ -830,7 +830,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
         if internal_data_file and os.path.exists(internal_data_file):
             results.append({'internal_data_file': internal_data_file, 'v': v_level, 'N_meta': int(lm.get('N', len(v_level))), 'start_index_global': start_global})
      
-    constraint_data = extract_constraint_evolution_from_pyslsqp_data(results, n_partitions, logger)
+    constraint_data = extract_constraint_evolution(results, n_partitions, logger)
     
     # Extract energy components across all levels
     energy_components = extract_energy_components_across_levels(results, logger)
@@ -842,7 +842,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     unity_last_iters_local = None
     if last_internal_file and os.path.exists(last_internal_file):
         unity_last_level = compute_unity_last_level(last_internal_file, n_partitions, major_only=False, logger=logger)
-        unity_last_iters_local = load_pyslsqp_internal_data(last_internal_file).get('iters')
+        unity_last_iters_local = load_internal_data(last_internal_file).get('iters')
     
     # Load optimization data from summary files listed in metadata
     summary_files = []
@@ -853,7 +853,7 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     if not summary_files:
         logger.error("No summary files found in metadata")
         return
-    energies, grad_norms, cnorms, feas_series, steps, level_boundaries = load_pyslsqp_optimization_data(
+    energies, grad_norms, cnorms, feas_series, steps, level_boundaries = load_optimization_data(
         [{'summary_file': f} for f in summary_files], logger
     )
     # Prefer summary-derived CNORM/FEAS series when available

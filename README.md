@@ -1,6 +1,6 @@
 # Surface Partition Optimization Framework
 
-This project implements a surface-agnostic framework for finding minimal-perimeter partitions on triangulated surfaces, based on the optimization method described in "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides both PySLSQP and Projected Gradient Descent optimizers with mesh refinement capabilities.
+This project implements a surface-agnostic framework for finding minimal-perimeter partitions on triangulated surfaces, based on the optimization method described in "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides a Projected Gradient Descent optimizer with mesh refinement capabilities.
 
 ## Mathematical Framework
 
@@ -33,10 +33,10 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 - **Surface Providers**: Modular system for different surface types (torus, sphere, etc.)
 - **P1 FEM Assembly**: Automatic mass and stiffness matrix computation for any triangulation
 
-### 🔧 **Dual Optimizer Support**
-- **PySLSQP**: Sequential least squares programming optimizer for constrained problems
-- **Projected Gradient Descent (PGD)**: Custom gradient descent with constraint projection
-- **Configurable Parameters**: Extensive configuration options for both optimizers
+### 🔧 **Projected Gradient Descent (PGD)**
+- **Custom gradient descent** with per-step projection onto partition and area constraints
+- **FEM-weighted penalty** for constant-phase regularization
+- **Configurable Parameters**: Extensive configuration options for step size, backtracking, and refinement triggers
 
 ### 📈 **Mesh Refinement System**
 - **Multi-level Optimization**: Progressive mesh refinement with solution interpolation
@@ -56,40 +56,16 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 
 ### Prerequisites
 
-**Important**: This project requires Python 3.9.7 specifically due to PySLSQP compatibility issues. Python 3.13+ causes compilation errors with PySLSQP.
+Requires Python >= 3.9.
 
-1. **Install pyenv and pyenv-virtualenv**:
-   ```bash
-   # macOS
-   brew install pyenv pyenv-virtualenv
-   
-   # Linux
-   curl https://pyenv.run | bash
-   ```
+```bash
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate
 
-2. **Set up Python Environment**:
-   ```bash
-   # Install Python 3.9.7
-   pyenv install 3.9.7
-   
-   # Create virtual environment
-   pyenv virtualenv 3.9.7 ringtest-3.9
-   
-   # Navigate to project directory
-   cd /path/to/RingTest
-   
-   # Activate environment (automatic via .python-version)
-   pyenv local ringtest-3.9
-   ```
-
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Troubleshooting
-
-**PySLSQP Installation Issues**: If you encounter compilation errors like `library 'ifcore' not found`, ensure you're using Python 3.9.7. The project includes a `.python-version` file that should automatically activate the correct environment.
+# Install dependencies
+pip install -r requirements.txt
+```
 
 ## Project Structure
 
@@ -98,7 +74,6 @@ RingTest/
 ├── src/                          # Core implementation
 │   ├── core/                     # Surface-agnostic core components
 │   │   ├── tri_mesh.py          # Universal triangle mesh class
-│   │   ├── pyslsqp_optimizer.py # PySLSQP optimization engine
 │   │   ├── pgd_optimizer.py     # Projected gradient descent optimizer
 │   │   └── interpolation.py     # Solution interpolation utilities
 │   ├── surfaces/                 # Surface-specific providers
@@ -159,13 +134,6 @@ python scripts/visualize_partition.py \
 ```
 
 For complete documentation, see `docs/PERIMETER_REFINEMENT.md`.
-
-### Optimizer Selection
-
-The optimizer is selected in the configuration file (`parameters/input.yaml`):
-```yaml
-optimizer_type: 'pyslsqp'  # or 'pgd'
-```
 
 ### Mesh Refinement
 
@@ -248,7 +216,6 @@ Flag descriptions (brief):
 The project uses comprehensive configuration through `parameters/input.yaml`. Key parameters include:
 
 ### Optimization Parameters
-- `optimizer_type`: Choose between 'pyslsqp' and 'pgd'
 - `n_partitions`: Number of equal-area partitions
 - `lambda_penalty`: Penalty parameter for constraint violations
 - `epsilon`: Interface width parameter (auto-computed from mesh)
@@ -278,12 +245,7 @@ The project uses comprehensive configuration through `parameters/input.yaml`. Ke
 - **Resolution management** with refinement support
 - **Metadata generation** for orchestrators and analysis tools
 
-### PySLSQP Optimizer (`src/core/pyslsqp_optimizer.py`)
-- **Constrained optimization** with analytic gradients and Jacobians
-- **Refinement triggers** based on convergence metrics
-- **Comprehensive logging** and performance monitoring
-
-### PGD Optimizer (`src/core/pgd_optimizer.py`)
+### PGD Optimizer (`src/optimization/pgd_optimizer.py`)
 - **Projected gradient descent** with constraint satisfaction
 - **FEM-weighted constant-phase penalty** using `v = 1^T M` and `W = Σ v` for mean/variance, consistent with FEM setting (`docs/starget/constant_phase_penalty_derivation.tex`)
 - **Penalty modes**: fixed target (paper) or adaptive target; gradients implemented per weighted formulas
@@ -322,7 +284,6 @@ Optimization runs produce:
 ## References
 
 - Bogosel, B., & Oudet, É. (Year). Partitions of Minimal Length on Manifolds. [Paper reference]
-- PySLSQP: [https://github.com/danielzuegner/pyslsqp](https://github.com/danielzuegner/pyslsqp)
 - Γ-convergence theory for surface partitioning problems
 
 ## Contributing

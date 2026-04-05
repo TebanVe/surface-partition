@@ -1,6 +1,6 @@
 from .perimeter_optimizer import PerimeterOptimizer
 from .pgd_optimizer import ProjectedGradientOptimizer
-from .pyslsqp_optimizer import PySLSQPOptimizer, RefinementTriggered
+from .exceptions import RefinementTriggered
 from .projection import (
     orthogonal_projection_iterative,
     orthogonal_projection_direct,
@@ -11,7 +11,6 @@ from .projection import (
 __all__ = [
     "PerimeterOptimizer",
     "ProjectedGradientOptimizer",
-    "PySLSQPOptimizer",
     "RefinementTriggered",
     "orthogonal_projection_iterative",
     "orthogonal_projection_direct",

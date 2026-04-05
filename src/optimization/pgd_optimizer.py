@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 
 from ..logging_config import get_logger
-from .pyslsqp_optimizer import RefinementTriggered
+from .exceptions import RefinementTriggered
 from .projection import orthogonal_projection_iterative
 
 

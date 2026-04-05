@@ -8,9 +8,6 @@ tol: 1e-6
 slsqp_eps: 1e-8
 slsqp_disp: false
 
-# Optimizer selection
-optimizer_type: pgd  # options: pyslsqp or pgd
-
 # Use discrete area (Σv) for constraints rather than theoretical area
 use_discrete_area_for_constraints: true
 
@@ -19,9 +16,9 @@ starget: 1.0
 c: 0.5
 rho: 0.5
 m: 10
-seed: 2234657
+seed: 13061502
 
-# PGD parameters (used when optimizer_type: pgd)
+# PGD parameters
 pgd_step0: 1.0
 pgd_armijo_c: 0.0001
 pgd_backtrack_rho: 0.5
@@ -72,9 +69,6 @@ refine_trigger_mode: full
 # PGD constant-phase penalty controls
 penalty_target_mode: fixed   # fixed (paper) or adaptive
 penalty_eps: 1.0e-8
-
-# PySLSQP parameters
-pyslsqp_save_itr: major
 
 # Torus surface parameters (used when --surface torus)
 n_theta: 80
