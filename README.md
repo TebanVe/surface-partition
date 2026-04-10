@@ -1,6 +1,6 @@
 # Surface Partition Optimization Framework
 
-This project implements a surface-agnostic framework for finding minimal-perimeter partitions on triangulated surfaces, based on the optimization method described in "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides a Projected Gradient Descent optimizer with mesh refinement capabilities.
+This project implements a framework for finding minimal-perimeter partitions on closed triangulated surfaces, based on the optimization method described in "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides a two-phase pipeline: Γ-convergence relaxation followed by direct perimeter refinement.
 
 ## Mathematical Framework
 
@@ -20,280 +20,247 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 
 ## Key Features
 
-### 🎯 **Perimeter Refinement** (NEW)
+### Perimeter Refinement (Phase 2)
 - **Section 5 Implementation**: Direct perimeter minimization on extracted contours
-- **Constrained Optimization**: Equal-area constraints with analytical gradients
+- **Constrained Optimization**: Equal-area constraints with analytical gradients (SLSQP, trust-constr, or IPOPT)
 - **Steiner Trees**: Optimal handling of triple points (3 regions meet)
-- **Topology Management**: Variable points on mesh edges with automatic detection
-- **Accurate Perimeter Values**: Match paper benchmarks (Tables 1 & 2)
-- See `docs/PERIMETER_REFINEMENT.md` for details
+- **Topology Migrations**: Type 1 (vertex collapse) and Type 2 (triple-point) automatic detection and execution
+- **Vectorized Kernels**: Fast perimeter/area/Steiner evaluation paths
 
-### 🚀 **Surface-Agnostic Design**
+### Surface-Agnostic Design
 - **TriMesh**: Universal triangle mesh class supporting both 2D and 3D surfaces
-- **Surface Providers**: Modular system for different surface types (torus, sphere, etc.)
+- **Surface Providers**: Modular system for different surface types (currently: torus)
 - **P1 FEM Assembly**: Automatic mass and stiffness matrix computation for any triangulation
 
-### 🔧 **Projected Gradient Descent (PGD)**
+### Projected Gradient Descent (PGD) — Phase 1
 - **Custom gradient descent** with per-step projection onto partition and area constraints
-- **FEM-weighted penalty** for constant-phase regularization
-- **Configurable Parameters**: Extensive configuration options for step size, backtracking, and refinement triggers
+- **FEM-weighted penalty** for constant-phase regularization (fixed or adaptive target mode)
+- **Armijo backtracking** line search
+- **Mesh refinement triggers**: Plateau detection on energy, gradient norm, and feasibility
 
-### 📈 **Mesh Refinement System**
-- **Multi-level Optimization**: Progressive mesh refinement with solution interpolation
+### Mesh Refinement System
+- **Multi-level Optimization**: Progressive mesh refinement with nearest-neighbor solution interpolation
 - **Automatic Refinement**: Smart triggers based on convergence metrics and plateaus
-- **Memory Efficient**: Optimized for handling large meshes across refinement levels
+- **Warm-start Resume**: Continue from a prior solution HDF5 at a higher refinement level
 
-### 📊 **Enhanced Analysis Tools**
-- **Optimization Analyzer**: Comprehensive result analysis with constraint evolution plots
-- **Visualization Suite**: Advanced plotting and mesh visualization capabilities
-
-### 💾 **Robust Data Management**
-- **HDF5 Output**: Efficient storage of optimization iterates and solutions
-- **Configurable Logging**: Flexible logging with performance monitoring
-- **Metadata Tracking**: Comprehensive run metadata and configuration persistence
+### Analysis & Visualization
+- **Optimization Analyzer**: Multi-level result analysis with energy component and constraint evolution plots
+- **Partition Viewer**: 3D visualization via PyVista (base or refined solutions)
+- **HDF5 Output**: Efficient storage of optimization iterates, solutions, and refined contour checkpoints
 
 ## Installation
 
-### Prerequisites
-
-Requires Python >= 3.9.
+Requires Python >= 3.9. The project uses pyenv for environment management.
 
 ```bash
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate
+# Activate the pyenv virtualenv (see .python-version)
+pyenv activate ringtest-3.9
 
-# Install dependencies
-pip install -r requirements.txt
+# Install core dependencies
+pip install -e .
+
+# Or with optional extras:
+pip install -e ".[viz]"       # core + PyVista (3D visualization)
+pip install -e ".[ipopt]"     # core + IPOPT solver
+pip install -e ".[all]"       # core + PyVista + IPOPT
 ```
 
 ## Project Structure
 
 ```
-RingTest/
-├── src/                          # Core implementation
-│   ├── core/                     # Surface-agnostic core components
-│   │   ├── tri_mesh.py          # Universal triangle mesh class
-│   │   ├── pgd_optimizer.py     # Projected gradient descent optimizer
-│   │   └── interpolation.py     # Solution interpolation utilities
-│   ├── surfaces/                 # Surface-specific providers
-│   │   └── torus.py             # Torus of revolution (R3) provider
-│   ├── config.py                 # Configuration management
-│   ├── plot_utils.py             # 2D visualization utilities (Matplotlib)
-│   ├── logging_config.py         # Logging system
-│   ├── projection_iterative.py   # Constraint projection algorithms
-│   └── find_contours.py          # Contour extraction utilities (R2/R3)
-├── scripts/                       # CLI entry points
-│   ├── find_surface_partition.py # Main optimization orchestrator
-│   ├── refine_perimeter.py      # Iterative perimeter refinement
-│   ├── optimization_analyzer.py  # Surface-agnostic result analysis
-│   └── visualize_partition.py    # Partition viewer (3D/PyVista, base or refined)
-├── parameters/                    # Configuration files
-│   └── input.yaml                # Default input parameters
-├── cluster/                       # Cluster job submission
-│   └── submit.sh                 # SLURM cluster submission script
-├── logs/                         # Timestamped log files
-└── results/                      # Optimization results (gitignored)
+surface-partition/
+├── src/                              # Core library
+│   ├── mesh/                         # Mesh and FEM
+│   │   ├── tri_mesh.py              # TriMesh class (vertices, faces, M, K, v)
+│   │   ├── mesh_topology.py         # Edge/triangle adjacency for migrations
+│   │   └── interpolation.py         # Nearest-neighbor interpolation between levels
+│   ├── surfaces/                     # Surface providers
+│   │   └── torus.py                 # TorusMeshProvider (R3 torus of revolution)
+│   ├── optimization/                 # Optimizers
+│   │   ├── pgd_optimizer.py         # Projected gradient descent (Phase 1)
+│   │   ├── perimeter_optimizer.py   # Constrained perimeter minimization (Phase 2)
+│   │   ├── projection.py           # Iterative constraint projection
+│   │   └── exceptions.py           # RefinementTriggered exception
+│   ├── partition/                    # Contour extraction and partition data
+│   │   ├── find_contours.py         # ContourAnalyzer: HDF5 → indicators → boundary topology
+│   │   ├── contour_partition.py     # PartitionContour, VariablePoint, TriangleSegment
+│   │   ├── perimeter_calculator.py  # Per-segment perimeter with analytical gradients
+│   │   ├── area_calculator.py       # Per-cell FEM area with analytical gradients
+│   │   ├── steiner_handler.py       # Steiner/triple-point perimeter + area contributions
+│   │   ├── partition_arrays.py      # PartitionArrays: sparse Jacobian/Hessian structure
+│   │   ├── vectorized_perimeter.py  # Fast vectorized perimeter evaluation
+│   │   ├── vectorized_area.py       # Fast vectorized area evaluation
+│   │   └── vectorized_steiner.py    # Fast vectorized Steiner evaluation
+│   ├── migration/                    # Topology migration subsystem
+│   │   ├── migration_orchestrator.py # Top-level detect → execute loop
+│   │   ├── migration_detector.py    # Type 1 + Type 2 trigger detection
+│   │   ├── migration_executor.py    # Execute migrations on partition state
+│   │   ├── migration_types.py       # DetectionResult, MigrationResult dataclasses
+│   │   ├── migration_utils.py       # Shared helpers
+│   │   ├── type1_component_analyzer.py  # Connected-component analysis for Type 1
+│   │   ├── type2_migration_io.py    # Type 2 snapshot save/restore
+│   │   ├── type2_migration_history.py   # Type 2 rollback history
+│   │   └── one_ring_rebuilder.py    # One-ring mesh rebuilding after migration
+│   ├── pipeline/                     # Workflow orchestration
+│   │   ├── relaxation.py           # run_relaxation(): multi-level PGD pipeline
+│   │   ├── pipeline_orchestrator.py # PipelineOrchestrator: iterative refinement loop
+│   │   └── io.py                   # HDF5 loaders (base + refined files)
+│   ├── visualization/               # Plotting helpers
+│   │   ├── plot_utils.py           # Matplotlib utilities
+│   │   └── partition_helpers.py    # Partition-specific viz helpers
+│   ├── config.py                    # Legacy Config class
+│   └── logging_config.py           # Logging setup with performance decorators
+├── scripts/                          # CLI entry points
+│   ├── find_surface_partition.py    # Phase 1: Γ-convergence relaxation
+│   ├── refine_perimeter.py         # Phase 2: iterative perimeter refinement
+│   ├── optimization_analyzer.py     # Result analysis and plotting
+│   ├── visualize_partition.py       # Original partition viewer — debugging (PyVista)
+│   ├── visualize_partition_fast.py  # Fast partition viewer — production (PyVista, vectorized)
+│   ├── visualize_type1_vertex_collapse.py  # Type 1 migration viewer — debugging
+│   ├── visualize_type2_triple_point.py     # Type 2 migration viewer — debugging
+│   └── debug_archive/              # Archived diagnostic scripts
+├── testing/                          # Test scripts and debug tools
+│   ├── README_testing.md           # Test registry documentation
+│   └── test_migrations_debug.py    # Migration debug CLI
+├── parameters/                       # Configuration
+│   └── input.yaml                  # Default run parameters
+├── cluster/                          # HPC job submission
+│   └── submit.sh                   # SLURM script for UPPMAX (Rackham)
+├── pyproject.toml                   # Package config, Black, pytest
+└── requirements.txt                 # Core dependencies
 ```
 
 ## Usage
 
-### Basic Surface Partition Optimization
+### Phase 1: Γ-Convergence Relaxation
 
 ```bash
-# Run optimization with default parameters
-python scripts/find_surface_partition.py
-
-# Run with custom input file
-python scripts/find_surface_partition.py --input parameters/input.yaml
-
-# Specify output directory for solutions
-python scripts/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_solutions
-
-# Use specific surface provider (e.g. torus)
+# Run with default parameters on the torus
 python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
+
+# Custom output directory
+python scripts/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_run
+
+# Warm-start from a prior solution (must increase refinement_levels in YAML)
+python scripts/find_surface_partition.py --input parameters/input.yaml --resume-from results/prior/solution.h5
 ```
 
-### Perimeter Refinement (NEW)
+### Phase 2: Perimeter Refinement
 
 After obtaining a relaxed solution, refine the contours to get accurate perimeter values:
 
 ```bash
-# Step 1: Run Γ-convergence optimization (Section 3)
-python scripts/find_surface_partition.py --input parameters/input.yaml
-
-# Step 2: Refine contours (Section 5)
+# Fresh run from base solution
 python scripts/refine_perimeter.py \
-    --solution results/run_xyz/solution_level0.h5 \
+    --solution results/run_xyz/solution.h5 \
     --max-iterations 10
 
-# Step 3: Visualize refined contours
-python scripts/visualize_partition.py \
-    --solution results/run_xyz/solution_level0.h5 \
-    --show-steiner
-```
+# Resume from checkpoint (auto-detected)
+python scripts/refine_perimeter.py \
+    --solution results/run_xyz/solution_btol0.001_iteration3_refined_contours.h5 \
+    --max-iterations 10
 
-For complete documentation, see `docs/PERIMETER_REFINEMENT.md`.
+# With IPOPT solver and exact Hessian
+python scripts/refine_perimeter.py \
+    --solution results/run_xyz/solution.h5 \
+    --max-iterations 10 --method ipopt --exact-hessian
 
-### Mesh Refinement
-
-Refinement is configured in the YAML file:
-```yaml
-refinement_levels: 3
-n_theta_increment: 2
-n_phi_increment: 2
+# Save all intermediate checkpoints
+python scripts/refine_perimeter.py \
+    --solution results/run_xyz/solution.h5 \
+    --max-iterations 20 --save-iterations
 ```
 
 ### Analysis and Visualization
 
 ```bash
 # Analyze optimization results
-python scripts/optimization_analyzer.py --results-dir results/run_20250101_120000_torus_npart2_lam0.0_seed42
+python scripts/optimization_analyzer.py --results-dir results/run_20250101_120000_surftorus_npart2_...
 
-# Analyze multiple runs matching pattern
-python scripts/optimization_analyzer.py --results-dir results --pattern "npart2_lam0.0"
+# Visualize partition — fast renderer (vectorized, scales to fine meshes)
+python scripts/visualize_partition_fast.py --solution results/run_xyz/*_refined_contours.h5 --show-steiner
+
+# Visualize partition — original renderer (slower on fine meshes, useful for debugging)
+python scripts/visualize_partition.py --solution results/run_xyz/solution.h5
+
+# Visualize Type 1 migration (vertex collapse) — debugging tool
+python scripts/visualize_type1_vertex_collapse.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --region 2 --state before --show-vps --show-steiner
+
+# Visualize Type 2 migration (triple-point) — debugging tool
+python scripts/visualize_type2_triple_point.py \
+    --solution results/run_xyz/*_refined_contours.h5 \
+    --region 2 --state before --show-vps --show-steiner
+
+# Debug migrations step-by-step
+python testing/test_migrations_debug.py --solution results/run_xyz/*_refined_contours.h5
 ```
 
-### Testing Components
+All visualization scripts require PyVista. The fast renderer (`visualize_partition_fast.py`) uses vectorized NumPy indexing for interior triangles and is the recommended choice for fine meshes. The original renderer and the two migration viewers (`visualize_type1_vertex_collapse.py`, `visualize_type2_triple_point.py`) are slower but invaluable for testing and debugging topology switches at small scales.
 
-```bash
-# Debug migrations step-by-step without optimization
-python testing/test_migrations_debug.py --solution results/run_xyz/*_iterationN_refined_contours.h5
+### Visualization Flags
+
+```
+--region N             Highlight a specific cell
+--show-steiner         Show Steiner points and void triangles
+--show-vps             Show all variable points
+--use-initial          Visualize x0 instead of x_opt (base solutions only)
+--opacity 0.8          Cell color opacity
+--save <path>          Save image to file (otherwise interactive window)
+--no-fill / --no-mesh  Toggle filled partitions or mesh overlay (2D)
+--color-partition       Light per-face region colors with strong contour lines (3D)
 ```
 
-### Torus Surface Support
+### Torus Configuration
 
-The framework now supports a torus of revolution (R3):
-- Provider: `TorusMeshProvider` (`src/surfaces/torus.py`)
-- Resolution labels: `nt` (major), `np` (minor)
-- Theoretical area: `4π² R r`
+Torus-specific YAML parameters (used when `--surface torus`):
 
-Usage:
-```bash
-# Run optimization on a torus
-python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
-```
-
-YAML parameters (used when `--surface torus`):
 ```yaml
-n_theta: 32        # samples along major circle
-n_phi: 24          # samples along tube circle
-R: 1.0             # major radius
-r: 0.3             # minor radius
-n_theta_increment: 0
-n_phi_increment: 0
+n_theta: 80          # samples along major circle
+n_phi: 66            # samples along tube circle
+R: 1.0               # major radius
+r: 0.6               # minor radius
+n_theta_increment: 62 # resolution increase per refinement level (major)
+n_phi_increment: 58   # resolution increase per refinement level (minor)
 ```
-
-### Surface Visualization (3D)
-
-Use `visualize_partition.py` to visualize partitions on any supported surface:
-
-```bash
-# View base solution or refined contours (auto-detected)
-python scripts/visualize_partition.py --solution <path/to/solution.h5>
-
-# Optional flags
---region 2             # highlight a specific cell
---show-steiner         # show Steiner points and void triangles
---show-vps             # show all variable points
---use-initial          # visualize x0 instead of x_opt (base solution only)
---opacity 0.8          # cell color opacity
-```
-
-Notes:
-- Requires `pyvista` for 3D rendering.
-- The script automatically infers 2D vs 3D from the solution's vertex dimension.
-
-Flag descriptions (brief):
-- `--use-initial`: visualize the initial condition `x0` instead of `x_opt` (auto-saved 3D screenshots add `_initial` suffix).
-- `--save <path>`: write the image to file. If omitted, shows an interactive window.
-- `--no-fill` / `--no-mesh` (2D): toggle filled partitions or mesh overlay.
-- `--show-normals` (3D): overlay triangle normals; `--normal-scale` controls arrow length.
-- `--color-partition` (3D): light per-face region colors (approximate) with strong-colored contour lines.
 
 ## Configuration
 
-The project uses comprehensive configuration through `parameters/input.yaml`. Key parameters include:
+The project is configured through `parameters/input.yaml`. Key parameter groups:
 
-### Optimization Parameters
+### Optimization
 - `n_partitions`: Number of equal-area partitions
-- `lambda_penalty`: Penalty parameter for constraint violations
-- `epsilon`: Interface width parameter (auto-computed from mesh)
+- `lambda_penalty`: Constant-phase penalty weight
+- `max_iter`: Maximum PGD iterations per refinement level
+- `seed`: Random seed for initial conditions
 
-### Refinement Control
-- `enable_refinement_triggers`: Enable/disable early refinement
-- `refine_gnorm_patience`, `refine_feas_patience`: Plateau detection parameters
-- `refine_trigger_mode`: Refinement trigger strategy ('full' or 'energy')
+### PGD Tuning
+- `pgd_step0`, `pgd_armijo_c`, `pgd_backtrack_rho`: Step size and backtracking
+- `penalty_target_mode`: `fixed` (paper default) or `adaptive`
+- `penalty_eps`: Stabilizer for penalty target denominators
 
-### PGD-Specific Settings
-- `h5_save_stride`: HDF5 output frequency
-- `h5_save_vars`: Variables to save in HDF5 files
-- `run_log_frequency`: Console logging frequency
-- `penalty_target_mode`: Constant‑phase penalty target; `fixed` (paper, uses μ_target=1/n) or `adaptive` (uses current μ)
-- `penalty_eps`: Small stabilizer added to target denominators
+### Mesh Refinement
+- `refinement_levels`: Number of multi-level refinement steps
+- `enable_refinement_triggers`: Enable/disable automatic early refinement
+- `refine_gnorm_patience`, `refine_feas_patience`: Plateau detection windows
+- `refine_trigger_mode`: `full` (energy + gradient + feasibility) or `energy` only
 
-## Core Components
+### HDF5 Output Control
+- `h5_save_stride`: Save every N-th iteration
+- `h5_save_vars`: Variables to save (`x`, `constraints`)
+- `run_log_frequency`: Console logging interval
 
-### TriMesh (`src/core/tri_mesh.py`)
-- **Universal mesh class** supporting 2D and 3D surfaces
-- **P1 FEM assembly** with automatic mass and stiffness matrix computation
-- **Memory efficient** sparse matrix operations
-- **Mesh statistics** and quality metrics
+## Cluster Support
 
-### Surface Providers (`src/surfaces/`)
-- **Modular design** for different surface types
-- **Resolution management** with refinement support
-- **Metadata generation** for orchestrators and analysis tools
+The SLURM submission script targets UPPMAX (Rackham) but can be adapted:
 
-### PGD Optimizer (`src/optimization/pgd_optimizer.py`)
-- **Projected gradient descent** with constraint satisfaction
-- **FEM-weighted constant-phase penalty** using `v = 1^T M` and `W = Σ v` for mean/variance, consistent with FEM setting (`docs/starget/constant_phase_penalty_derivation.tex`)
-- **Penalty modes**: fixed target (paper) or adaptive target; gradients implemented per weighted formulas
-- **Configurable output** for memory efficiency
-- **Plateau detection** for intelligent refinement
-
-### Analysis Tools (`scripts/optimization_analyzer.py`)
-- **Multi-level result analysis** with constraint evolution plots
-- **Memory-efficient** handling of large datasets
-- **Comprehensive visualization** of optimization metrics
-
-## Advanced Features
-
-### Mesh Refinement System
-The framework automatically refines meshes when optimization plateaus, interpolating solutions between levels for improved accuracy.
-
-### Memory Optimization
-- **Sparse matrix operations** throughout the pipeline
-- **Configurable HDF5 output** to control file sizes
-- **Explicit memory management** during multi-level refinement
-
-### Cluster Support
-- **SLURM submission script** for UPPMAX (Rackham) cluster
-- **Generic design** for other cluster systems
-- **Automatic job naming** based on configuration
-
-## Results and Output
-
-Optimization runs produce:
-- **HDF5 files** with solution iterates and metadata
-- **Summary files** with convergence metrics
-- **Visualization plots** showing optimization progress
-- **Comprehensive logs** with performance metrics
-- **Metadata files** for result analysis and reproduction
+```bash
+bash cluster/submit.sh --input parameters/input.yaml --surface torus
+bash cluster/submit.sh --input parameters/input.yaml --time 24:00:00 --solution-dir /proj/.../SOLUTIONS
+```
 
 ## References
 
-- Bogosel, B., & Oudet, É. (Year). Partitions of Minimal Length on Manifolds. [Paper reference]
+- Bogosel, B., & Oudet, É. "Partitions of Minimal Length on Manifolds"
 - Γ-convergence theory for surface partitioning problems
-
-## Contributing
-
-This project uses a modular, surface-agnostic architecture. To add support for new surfaces:
-1. Create a new provider class in `src/surfaces/`
-2. Implement the required interface methods
-3. Add configuration options as needed
-4. Test with the existing analysis tools
-
-## License
-
-[Add your license information here] 
