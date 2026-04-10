@@ -3,13 +3,132 @@ Utility functions for loading partition data from solution files.
 
 This module provides loaders for both base solution files and refined contours
 files, used by visualization scripts to construct mesh and partition objects.
+
+It also provides layout-detection helpers that support both the structured
+run directory layout (solution/, traces/, refinement/{campaign}/, ...) and
+the legacy flat layout where all artifacts share a single directory.
 """
 
 import os
+import re
 import h5py
 from ..partition.find_contours import ContourAnalyzer
 from ..mesh.tri_mesh import TriMesh
 from ..partition.contour_partition import PartitionContour
+
+
+# ---------------------------------------------------------------------------
+# Layout detection
+# ---------------------------------------------------------------------------
+
+def detect_run_layout(file_path):
+    """Detect the run directory and layout type for a solution or checkpoint path.
+
+    Returns:
+        (layout, run_dir) where layout is 'structured' or 'flat'.
+        For structured layout, run_dir is the root of the run directory
+        (parent of solution/, refinement/, etc.).
+        For flat layout, run_dir is the immediate parent directory.
+    """
+    abs_path = os.path.abspath(file_path)
+    parent = os.path.dirname(abs_path)
+    parent_name = os.path.basename(parent)
+
+    if parent_name == 'solution':
+        return 'structured', os.path.dirname(parent)
+
+    grandparent = os.path.dirname(parent)
+    grandparent_name = os.path.basename(grandparent)
+    if grandparent_name == 'refinement':
+        return 'structured', os.path.dirname(grandparent)
+
+    return 'flat', parent
+
+
+def find_base_solution_path(refined_path, verbose=False):
+    """Find the base solution HDF5 corresponding to a refined checkpoint.
+
+    Search order:
+        1. ``base_solution_path`` attribute stored inside the HDF5 file
+           (resolved relative to the refined file's directory).
+        2. Structured layout: look for a ``.h5`` file in ``{run_dir}/solution/``.
+        3. Legacy filename-based derivation (strip suffixes from the refined
+           filename).
+
+    Returns:
+        Absolute path to the base solution file.
+
+    Raises:
+        FileNotFoundError: if no base solution can be located.
+    """
+    abs_refined = os.path.abspath(refined_path)
+
+    # --- 1. HDF5 attribute ---------------------------------------------------
+    try:
+        with h5py.File(abs_refined, 'r') as f:
+            stored = f.attrs.get('base_solution_path')
+            if stored is not None:
+                stored = str(stored)
+                if not os.path.isabs(stored):
+                    stored = os.path.join(os.path.dirname(abs_refined), stored)
+                stored = os.path.normpath(stored)
+                if os.path.exists(stored):
+                    if verbose:
+                        print(f"  Base solution (from HDF5 attr): {stored}")
+                    return stored
+    except Exception:
+        pass
+
+    # --- 2. Structured layout -------------------------------------------------
+    layout, run_dir = detect_run_layout(abs_refined)
+    if layout == 'structured':
+        solution_dir = os.path.join(run_dir, 'solution')
+        if os.path.isdir(solution_dir):
+            candidates = [
+                f for f in os.listdir(solution_dir)
+                if f.endswith('.h5') and not f.endswith('_refined_contours.h5')
+            ]
+            if len(candidates) == 1:
+                base = os.path.join(solution_dir, candidates[0])
+                if verbose:
+                    print(f"  Base solution (structured layout): {base}")
+                return base
+            if len(candidates) > 1:
+                candidates.sort()
+                base = os.path.join(solution_dir, candidates[-1])
+                if verbose:
+                    print(f"  Base solution (structured, latest of {len(candidates)}): {base}")
+                return base
+
+    # --- 3. Legacy filename derivation ----------------------------------------
+    base_solution_path = abs_refined.replace('_refined_contours.h5', '.h5')
+
+    if not os.path.exists(base_solution_path):
+        if 'iteration' in base_solution_path:
+            original_base = re.sub(r'_iteration\d+\.h5$', '.h5', base_solution_path)
+            original_base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', original_base)
+            for candidate in (original_base_no_btol, original_base):
+                if os.path.exists(candidate):
+                    if verbose:
+                        print(f"  Base solution (legacy fallback): {candidate}")
+                    return candidate
+        else:
+            base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', base_solution_path)
+            if os.path.exists(base_no_btol):
+                if verbose:
+                    print(f"  Base solution (legacy, no btol): {base_no_btol}")
+                return base_no_btol
+
+    if os.path.exists(base_solution_path):
+        if verbose:
+            print(f"  Base solution: {base_solution_path}")
+        return base_solution_path
+
+    raise FileNotFoundError(
+        f"Could not locate base solution for: {refined_path}\n"
+        f"  Tried HDF5 attribute, structured layout ({run_dir}/solution/), "
+        f"and legacy filename derivation."
+    )
 
 
 def load_partition_from_base_file(base_path, use_initial=False, verbose=False):
@@ -76,68 +195,11 @@ def load_partition_from_refined_file(refined_path, verbose=False):
     Returns:
         tuple: (mesh, partition) ready for visualization
     """
-    import re
-    
     if verbose:
         print(f"Loading from refined contours file...")
         print(f"  Refined: {refined_path}")
     
-    # Derive base solution path
-    # Remove _refined_contours suffix
-    base_solution_path = refined_path.replace('_refined_contours.h5', '.h5')
-    
-    # If iteration file and base doesn't exist, fall back to original
-    if not os.path.exists(base_solution_path):
-        if 'iteration' in base_solution_path:
-            # Try removing _iterationN suffix
-            original_base = re.sub(r'_iteration\d+\.h5$', '.h5', base_solution_path)
-            
-            # Also try removing _btol* pattern (boundary tolerance may be in refined filename but not in base)
-            if not os.path.exists(original_base):
-                # Match _btol followed by a number (with optional decimal/scientific notation)
-                # but stop before the .h5 extension
-                original_base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', original_base)
-                if os.path.exists(original_base_no_btol):
-                    if verbose:
-                        print(f"  Base solution (with iteration & btol): {base_solution_path} (not found)")
-                        print(f"  Base solution (with btol): {original_base} (not found)")
-                        print(f"  Using original base (no btol): {original_base_no_btol}")
-                    base_solution_path = original_base_no_btol
-                elif os.path.exists(original_base):
-                    if verbose:
-                        print(f"  Base solution (iteration-specific): {base_solution_path} (not found)")
-                        print(f"  Using original base: {original_base}")
-                    base_solution_path = original_base
-                else:
-                    raise FileNotFoundError(
-                        f"Neither iteration nor original base solution file found:\n"
-                        f"  Tried: {base_solution_path}\n"
-                        f"  Tried: {original_base}\n"
-                        f"  Tried: {original_base_no_btol}"
-                    )
-            else:
-                if verbose:
-                    print(f"  Base solution (iteration-specific): {base_solution_path} (not found)")
-                    print(f"  Using original base: {original_base}")
-                base_solution_path = original_base
-        else:
-            # Not an iteration file, but might still have btol in the name
-            base_no_btol = re.sub(r'_btol[\d.e+-]+(?=\.h5)', '', base_solution_path)
-            if os.path.exists(base_no_btol):
-                if verbose:
-                    print(f"  Base solution (with btol): {base_solution_path} (not found)")
-                    print(f"  Using base (no btol): {base_no_btol}")
-                base_solution_path = base_no_btol
-            else:
-                raise FileNotFoundError(
-                    f"Base solution file not found:\n"
-                    f"  Tried: {base_solution_path}\n"
-                    f"  Tried: {base_no_btol}\n"
-                    f"The refined_contours.h5 file needs the corresponding base solution file."
-                )
-    else:
-        if verbose:
-            print(f"  Base solution: {base_solution_path}")
+    base_solution_path = find_base_solution_path(refined_path, verbose=verbose)
     
     # Check if refined file has indicator functions (post-migration iteration files)
     has_stored_indicators = False

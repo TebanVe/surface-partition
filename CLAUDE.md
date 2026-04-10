@@ -13,7 +13,7 @@ The only surface currently implemented is the **torus** (`TorusMeshProvider`). T
 
 ```bash
 # Setup (uses pyenv — see .python-version for the environment name)
-pyenv activate ringtest-3.9   # or whichever pyenv virtualenv is configured
+pyenv activate ringtest-3.9   # or: pyenv activate surface-partition
 pip install -e .               # core only
 pip install -e ".[all]"        # or: core + PyVista + IPOPT
 
@@ -50,19 +50,104 @@ The `scripts/debug_archive/` directory contains archived diagnostic scripts.
 
 ```
 src/
-├── mesh/               # TriMesh, FEM assembly, topology, interpolation
-├── surfaces/           # Surface providers (torus.py)
-├── optimization/       # PGD optimizer (Phase 1), perimeter optimizer (Phase 2)
-├── partition/          # Contour extraction, PartitionContour, calculators, vectorized kernels
-├── migration/          # Topology migration detection and execution
-├── pipeline/           # Workflow orchestration (relaxation, refinement, I/O)
-├── visualization/      # Matplotlib plotting helpers
-├── config.py           # Legacy Config class (mostly superseded by RelaxationConfig)
-└── logging_config.py   # Logging with @log_performance decorator
-scripts/                # CLI entry points
-parameters/input.yaml   # Default run configuration
-cluster/submit.sh       # SLURM submission for UPPMAX
+├── mesh/
+│   ├── tri_mesh.py               # TriMesh: vertices, faces, P1 FEM mass (M) and stiffness (K) matrices, lumped mass (v)
+│   ├── mesh_topology.py          # MeshTopology: edge-triangle adjacency for migration subsystem
+│   └── interpolation.py          # Nearest-neighbor interpolation between refinement levels
+├── surfaces/
+│   └── torus.py                  # TorusMeshProvider: structured torus mesh from (n_theta, n_phi, R, r)
+├── optimization/
+│   ├── pgd_optimizer.py          # ProjectedGradientOptimizer: Phase 1 PGD with Γ-convergence energy
+│   ├── perimeter_optimizer.py    # PerimeterOptimizer + IPOPTProblemAdapter: Phase 2 constrained minimization
+│   ├── projection.py             # Iterative constraint projection (sum-to-one, equal areas)
+│   └── exceptions.py             # RefinementTriggered exception
+├── partition/
+│   ├── find_contours.py          # ContourAnalyzer: HDF5 → indicator functions → boundary topology
+│   ├── contour_partition.py      # PartitionContour, VariablePoint, TriangleSegment
+│   ├── perimeter_calculator.py   # Per-segment perimeter with analytical gradients
+│   ├── area_calculator.py        # Per-cell FEM area with analytical gradients
+│   ├── steiner_handler.py        # Steiner/triple-point perimeter + area contributions
+│   ├── partition_arrays.py       # PartitionArrays: sparse Jacobian/Hessian sparsity for IPOPT
+│   ├── vectorized_perimeter.py   # Fast vectorized perimeter evaluation
+│   ├── vectorized_area.py        # Fast vectorized area evaluation
+│   └── vectorized_steiner.py     # Fast vectorized Steiner evaluation
+├── migration/
+│   ├── migration_orchestrator.py # MigrationOrchestrator: top-level detect → execute loop
+│   ├── migration_detector.py     # Type 1 + Type 2 trigger detection
+│   ├── migration_executor.py     # Execute migrations on partition state
+│   ├── migration_types.py        # DetectionResult, MigrationResult, MigrationConfig dataclasses
+│   ├── migration_utils.py        # Shared helpers (edge utilities, geometry)
+│   ├── type1_component_analyzer.py  # Connected-component analysis for Type 1 vertex collapse
+│   ├── type2_migration_io.py     # Type 2 snapshot save/restore
+│   ├── type2_migration_history.py   # Type 2 rollback history tracking
+│   └── one_ring_rebuilder.py     # One-ring mesh topology rebuilding after Type 1 migration
+├── pipeline/
+│   ├── relaxation.py             # run_relaxation(): multi-level PGD pipeline (Phase 1)
+│   ├── pipeline_orchestrator.py  # PipelineOrchestrator, RefinementConfig, derive_output_paths (Phase 2)
+│   └── io.py                     # HDF5 loaders, detect_run_layout(), find_base_solution_path()
+├── visualization/
+│   ├── plot_utils.py             # Matplotlib utilities
+│   └── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+├── config.py                     # Legacy Config class (mostly superseded by RelaxationConfig)
+└── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
+scripts/
+├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
+├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
+├── optimization_analyzer.py      # Result analysis and plotting
+├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized)
+├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
+├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
+├── visualize_type2_triple_point.py     # Type 2 migration debugging viewer
+└── debug_archive/                # Archived diagnostic scripts
+testing/
+├── README_testing.md             # Test registry documentation
+└── test_migrations_debug.py      # Migration debug CLI
+parameters/input.yaml             # Default run configuration
+cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
 ```
+
+### Run Output Layout (Structured)
+
+Each Phase 1 run creates a structured directory under `results/`:
+
+```
+results/run_{timestamp}_surf{surface}_npart{N}_v1..._v2..._lam{λ}_seed{S}/
+├── solution/
+│   ├── surface_part{N}_surf{surface}_v1..._v2..._lam{λ}_seed{S}_{timestamp}.h5
+│   └── metadata.yaml
+├── traces/
+│   ├── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_summary.out
+│   └── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_internal_data.hdf5
+├── refinement/
+│   ├── slsqp_btol0.001/
+│   │   ├── iteration_001_20260410_120523.h5
+│   │   ├── refinement.yaml
+│   │   └── refinement.log
+│   └── ipopt_btol0.001_lbfgs20_hess/
+│       ├── iteration_001_20260410_131042.h5
+│       ├── iteration_002_20260410_131215.h5
+│       ├── refinement.yaml
+│       └── refinement.log
+├── analysis/
+│   ├── refinement_optimization_metrics.png
+│   ├── constraint_evolution.png
+│   └── energy_components.png
+└── logs/
+    └── relaxation.log
+```
+
+Each refinement campaign directory under `refinement/` is named by its
+differentiating parameters via `build_campaign_name()`:
+- Base: `{method}_btol{boundary_tol}`
+- IPOPT extras (non-default only): `_lbfgs{N}`, `_hess`, `_bestiter`, `_partial`
+- Distance (non-default only): `_midpoint` or `_dist{value}`
+
+Each campaign contains a `refinement.yaml` config snapshot for reproducibility
+and a `refinement.log` with full Phase 2 logs.
+
+Layout detection (`detect_run_layout()` in `src/pipeline/io.py`) supports
+both this structured layout and the legacy flat layout for backward
+compatibility with older result directories.
 
 ### Key Classes and Their Roles
 
@@ -84,18 +169,19 @@ cluster/submit.sh       # SLURM submission for UPPMAX
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` factory. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config (max_iterations, method, tolerances, etc.). |
-| `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. |
+| `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
 ### Data Flow
 
-1. **Phase 1:** `find_surface_partition.py` → `run_relaxation()` → builds `TorusMeshProvider` → for each refinement level: `_setup_level()` → `ProjectedGradientOptimizer.optimize()` → saves solution HDF5 with `x_opt`, `x0`, `vertices`, `faces`.
+1. **Phase 1:** `find_surface_partition.py` → `run_relaxation()` → builds `TorusMeshProvider` → for each refinement level: `_setup_level()` → `ProjectedGradientOptimizer.optimize()` → saves solution HDF5 to `solution/`, PGD traces to `traces/`, log to `logs/relaxation.log`.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 
 3. **Phase 2:** `refine_perimeter.py` → `PipelineOrchestrator.run_refinement_loop()`:
+   - Creates campaign directory under `refinement/{method}_btol{tol}/` with `refinement.yaml` config snapshot.
    - **Optimize:** `PerimeterOptimizer.optimize()` adjusts λ values.
    - **Detect:** `MigrationOrchestrator.detect_all_triggers()` finds VPs near vertices (Type 1) or triple-point geometry changes (Type 2).
-   - **Export:** Saves checkpoint HDF5 with `lambda_parameters`, `vp_edges`, `indicator_functions`, `pending_migration` flag.
+   - **Export:** Saves checkpoint HDF5 with `lambda_parameters`, `vp_edges`, `indicator_functions`, `pending_migration` flag, and `base_solution_path`.
    - **Migrate:** `MigrationOrchestrator.execute_migrations()` applies topology changes.
    - Loop until no migrations needed (converged) or max iterations reached.
 
@@ -105,10 +191,11 @@ cluster/submit.sh       # SLURM submission for UPPMAX
 - Datasets: `x_opt`, `x0`, `vertices`, `faces`
 - Attrs: `n_partitions`, `surface`, `completed_levels`, `lambda_penalty`, `seed`
 
-**Refined contours** (Phase 2 checkpoints):
+**Refined contours** (Phase 2 checkpoints — `iteration_NNN_YYYYMMDD_HHMMSS.h5`):
 - Datasets: `lambda_parameters`, `vp_edges`, `indicator_functions`
-- Attrs: `n_variable_points`, `n_cells`, `final_perimeter`, `iteration_number`, `pending_migration`
+- Attrs: `n_variable_points`, `n_cells`, `final_perimeter`, `iteration_number`, `timestamp`, `pending_migration`, `base_solution_path` (relative path to the Phase 1 solution)
 - Group `optimization_info/`: `initial_perimeter`, `perimeter_reduction`, `percent_reduction`, `constraint_violations`
+- Filename encodes only the iteration number and the checkpoint's own creation time; all experiment context (surface, mesh, optimizer, tolerances) is captured by the parent run and campaign directories.
 
 ### The λ Convention (Critical)
 

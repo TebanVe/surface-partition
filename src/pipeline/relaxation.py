@@ -162,7 +162,13 @@ def run_relaxation(provider, config: RelaxationConfig,
         )
     os.makedirs(output_dir, exist_ok=True)
 
-    logfile_path = os.path.join(output_dir, 'run.log')
+    solution_dir = os.path.join(output_dir, 'solution')
+    traces_dir = os.path.join(output_dir, 'traces')
+    logs_dir = os.path.join(output_dir, 'logs')
+    for d in (solution_dir, traces_dir, logs_dir):
+        os.makedirs(d, exist_ok=True)
+
+    logfile_path = os.path.join(logs_dir, 'relaxation.log')
     root_logger = logging.getLogger()
     file_handler = logging.FileHandler(logfile_path)
     file_handler.setLevel(logging.DEBUG)
@@ -216,7 +222,7 @@ def run_relaxation(provider, config: RelaxationConfig,
 
             level_result = _optimize_level(
                 level_ctx['optimizer'], config, x0, level,
-                provider, output_dir, logger
+                provider, traces_dir, logger
             )
             level_result['epsilon'] = level_ctx['epsilon']
 
@@ -256,7 +262,7 @@ def run_relaxation(provider, config: RelaxationConfig,
         final = results[-1]
         solution_path = _save_solution(
             mesh, final['x_opt'], x0, config, provider,
-            levels_meta, timestamp, output_dir
+            levels_meta, timestamp, solution_dir
         )
 
         initial_perimeter = compute_initial_perimeter(
@@ -269,7 +275,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             warm_start_path=warm_start_path,
         )
 
-        with open(os.path.join(output_dir, 'metadata.yaml'), 'w') as f:
+        with open(os.path.join(solution_dir, 'metadata.yaml'), 'w') as f:
             yaml.dump(metadata, f)
 
         logger.info("Refinement Summary:")
@@ -473,7 +479,7 @@ def _create_initial_condition(mesh, config, level,
 
 
 def _optimize_level(optimizer, config, x0, level,
-                    provider, output_dir, logger) -> dict:
+                    provider, traces_dir, logger) -> dict:
     """Run PGD optimizer for one level. Handles RefinementTriggered."""
     label1, label2 = provider.resolution_labels()
     n1, n2 = provider.get_resolution()
@@ -488,7 +494,7 @@ def _optimize_level(optimizer, config, x0, level,
             backtrack_rho=float(config.pgd_backtrack_rho),
             projection_max_iter=int(config.pgd_projection_max_iter),
             projection_tol=float(config.pgd_projection_tol),
-            results_dir=output_dir,
+            results_dir=traces_dir,
             run_name=(
                 f"pgd_part{config.n_partitions}"
                 f"_v1{label1}{n1}_v2{label2}{n2}_level{level}"
@@ -533,14 +539,14 @@ def _optimize_level(optimizer, config, x0, level,
 
 
 def _save_solution(mesh, x_opt, x0, config, provider,
-                   levels_meta, timestamp, output_dir) -> str:
+                   levels_meta, timestamp, solution_dir) -> str:
     """Write final solution HDF5 file. Returns path."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
     v1_info, v2_info = provider.resolution_summary(config.refinement_levels)
 
     solution_path = os.path.join(
-        output_dir,
+        solution_dir,
         f"surface_part{config.n_partitions}_surf{surface}"
         f"_v1{label1}{v1_info}_v2{label2}{v2_info}"
         f"_lam{config.lambda_penalty}_seed{config.seed}_{timestamp}.h5"

@@ -157,7 +157,7 @@ python scripts/refine_perimeter.py \
 
 # Resume from checkpoint (auto-detected)
 python scripts/refine_perimeter.py \
-    --solution results/run_xyz/solution_btol0.001_iteration3_refined_contours.h5 \
+    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_003_20260410_120523.h5 \
     --max-iterations 10
 
 # With IPOPT solver and exact Hessian
@@ -178,23 +178,23 @@ python scripts/refine_perimeter.py \
 python scripts/optimization_analyzer.py --results-dir results/run_20250101_120000_surftorus_npart2_...
 
 # Visualize partition — fast renderer (vectorized, scales to fine meshes)
-python scripts/visualize_partition_fast.py --solution results/run_xyz/*_refined_contours.h5 --show-steiner
+python scripts/visualize_partition_fast.py --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 --show-steiner
 
 # Visualize partition — original renderer (slower on fine meshes, useful for debugging)
-python scripts/visualize_partition.py --solution results/run_xyz/solution.h5
+python scripts/visualize_partition.py --solution results/run_xyz/solution/surface_....h5
 
 # Visualize Type 1 migration (vertex collapse) — debugging tool
 python scripts/visualize_type1_vertex_collapse.py \
-    --solution results/run_xyz/*_refined_contours.h5 \
+    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 \
     --region 2 --state before --show-vps --show-steiner
 
 # Visualize Type 2 migration (triple-point) — debugging tool
 python scripts/visualize_type2_triple_point.py \
-    --solution results/run_xyz/*_refined_contours.h5 \
+    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 \
     --region 2 --state before --show-vps --show-steiner
 
 # Debug migrations step-by-step
-python testing/test_migrations_debug.py --solution results/run_xyz/*_refined_contours.h5
+python testing/test_migrations_debug.py --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5
 ```
 
 All visualization scripts require PyVista. The fast renderer (`visualize_partition_fast.py`) uses vectorized NumPy indexing for interior triangles and is the recommended choice for fine meshes. The original renderer and the two migration viewers (`visualize_type1_vertex_collapse.py`, `visualize_type2_triple_point.py`) are slower but invaluable for testing and debugging topology switches at small scales.

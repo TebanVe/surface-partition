@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.logging_config import get_logger, setup_logging
 from src.pipeline.pipeline_orchestrator import (
     PipelineOrchestrator, RefinementConfig, detect_file_type, derive_output_paths,
+    build_campaign_name,
 )
 from src.pipeline.io import load_partition_from_base_file, load_partition_from_refined_file
 
@@ -194,8 +195,23 @@ Example usage:
         logger.info("Input file is a converged result (pending_migration=False). Nothing to do.")
         return 0
 
-    _final_output, base_output = derive_output_paths(
-        args.solution, file_type, output_override=args.output)
+    campaign_dir = derive_output_paths(
+        args.solution, file_type, config=config, output_override=args.output)
+
+    if campaign_dir:
+        os.makedirs(campaign_dir, exist_ok=True)
+
+    campaign_log_path = os.path.join(campaign_dir, 'refinement.log')
+    import logging as _logging
+    _root = _logging.getLogger()
+    _fmt = _logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S')
+    _fh = _logging.FileHandler(campaign_log_path)
+    _fh.setLevel(_logging.DEBUG)
+    _fh.setFormatter(_fmt)
+    _root.addHandler(_fh)
+    logger.info(f"Logging to: {campaign_log_path}")
 
     if file_type == 'base':
         mesh, partition = load_partition_from_base_file(args.solution, verbose=True)
@@ -203,7 +219,7 @@ Example usage:
         mesh, partition = load_partition_from_refined_file(args.solution, verbose=True)
 
     orch = PipelineOrchestrator(mesh, partition, config, logger=logger)
-    result = orch.run_refinement_loop(args.solution, base_output_path=base_output)
+    result = orch.run_refinement_loop(args.solution, output_dir=campaign_dir)
 
     if result.get('error'):
         logger.error(f"Refinement ended with error: {result['error']}")

@@ -30,6 +30,7 @@ import sys
 import re
 import argparse
 import numpy as np
+import h5py
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -195,9 +196,18 @@ def main():
         except Exception as e:
             logger.warning(f"Could not load migration history: {e}")
 
-    # Detect current iteration from filename for history bookkeeping
-    iter_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', args.solution)
-    starting_iteration = int(iter_match.group(1)) if iter_match else 1
+    # Detect current iteration from HDF5 attrs, then filename fallback
+    starting_iteration = None
+    try:
+        with h5py.File(args.solution, 'r') as f:
+            val = f.attrs.get('iteration_number')
+            if val is not None:
+                starting_iteration = int(val)
+    except Exception:
+        pass
+    if starting_iteration is None:
+        iter_match = re.search(r'iteration[_]?(\d+)', os.path.basename(args.solution))
+        starting_iteration = int(iter_match.group(1)) if iter_match else 1
     current_iteration = starting_iteration + 1
     logger.info(f"Detected start iteration: {starting_iteration}, "
                 f"treating as iteration {current_iteration}")

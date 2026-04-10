@@ -5,7 +5,7 @@ from typing import Optional
 
 def setup_logging(log_level: str = 'INFO', 
                   log_dir: str = 'logs',
-                  log_to_file: bool = True,
+                  log_to_file: bool = False,
                   log_to_console: bool = True,
                   include_timestamp: bool = True) -> logging.Logger:
     """

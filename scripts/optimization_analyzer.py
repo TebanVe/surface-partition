@@ -757,21 +757,34 @@ def plot_energy_components(component_data: Dict, level_boundaries: List[int],
 def analyze_optimization_run(results_dir: str, output_dir: str = None):
     """
     Analyze an optimization run by loading data and generating plots.
+
+    Supports both structured layouts (solution/ + traces/ + analysis/)
+    and the legacy flat layout where all artifacts share the run directory.
     """
     import sys
     import os
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     
     logger = get_logger(__name__)
-    
+
+    # Detect layout: structured (solution/ + traces/) vs flat
+    structured = os.path.isdir(os.path.join(results_dir, 'solution'))
+
     if output_dir is None:
-        output_dir = results_dir
+        if structured:
+            output_dir = os.path.join(results_dir, 'analysis')
+        else:
+            output_dir = results_dir
+    os.makedirs(output_dir, exist_ok=True)
     
     logger.info(f"Analyzing optimization run in: {results_dir}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Layout: {'structured' if structured else 'flat'}")
     
-    # Load metadata
-    metadata_file = os.path.join(results_dir, 'metadata.yaml')
+    # Load metadata — try structured path first, then flat
+    metadata_file = os.path.join(results_dir, 'solution', 'metadata.yaml') if structured else None
+    if metadata_file is None or not os.path.exists(metadata_file):
+        metadata_file = os.path.join(results_dir, 'metadata.yaml')
     if not os.path.exists(metadata_file):
         logger.error(f"Metadata file not found: {metadata_file}")
         return
@@ -827,6 +840,9 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
         v_level = mesh_level.v
         internal_data_file = lm.get('files', {}).get('internal_data')
         start_global = int(lm.get('iters', {}).get('start_index_global', 0))
+        if internal_data_file and not os.path.exists(internal_data_file) and structured:
+            basename = os.path.basename(internal_data_file)
+            internal_data_file = os.path.join(results_dir, 'traces', basename)
         if internal_data_file and os.path.exists(internal_data_file):
             results.append({'internal_data_file': internal_data_file, 'v': v_level, 'N_meta': int(lm.get('N', len(v_level))), 'start_index_global': start_global})
      
@@ -838,6 +854,8 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     # Compute last-level unity violations and iteration offset for plotting
     last_level_meta = levels_meta_sorted[-1]
     last_internal_file = last_level_meta.get('files', {}).get('internal_data')
+    if last_internal_file and not os.path.exists(last_internal_file) and structured:
+        last_internal_file = os.path.join(results_dir, 'traces', os.path.basename(last_internal_file))
     unity_last_level = None
     unity_last_iters_local = None
     if last_internal_file and os.path.exists(last_internal_file):
@@ -848,6 +866,8 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     summary_files = []
     for lm in levels_meta_sorted:
         sfile = lm.get('files', {}).get('summary')
+        if sfile and not os.path.exists(sfile) and structured:
+            sfile = os.path.join(results_dir, 'traces', os.path.basename(sfile))
         if sfile and os.path.exists(sfile):
             summary_files.append(sfile)
     if not summary_files:

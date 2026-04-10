@@ -16,7 +16,7 @@ starget: 1.0
 c: 0.5
 rho: 0.5
 m: 10
-seed: 13061502
+seed: 13001502
 
 # PGD parameters
 pgd_step0: 1.0

@@ -9,8 +9,10 @@ chains them with automatic file-type detection and resume support.
 import os
 import re
 import time
+import dataclasses
 import numpy as np
 import h5py
+import yaml
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
@@ -24,7 +26,11 @@ from ..partition.steiner_handler import SteinerHandler
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
 from ..migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 from ..migration.migration_types import DetectionResult, MigrationResult
-from .io import load_partition_from_base_file, load_partition_from_refined_file
+from .io import (
+    load_partition_from_base_file,
+    load_partition_from_refined_file,
+    detect_run_layout,
+)
 
 
 def detect_file_type(path):
@@ -42,44 +48,87 @@ def detect_file_type(path):
         return 'checkpoint_pending' if pending else 'checkpoint_converged'
 
 
-def derive_output_paths(solution_path, file_type, output_override=None):
-    """Derive (final_output_path, base_output_path) from the solution filename.
+def build_campaign_name(config):
+    """Construct a campaign directory name from a RefinementConfig.
 
-    For base files: base_path = solution.replace('.h5', '')
-    For checkpoint files: strip _iterationN_refined_contours.h5 and _btolX.XXX suffixes.
+    Encodes the method and boundary tolerance as the base, plus optional
+    IPOPT-specific suffixes for non-default settings.
+
+    Examples:
+        slsqp_btol0.001
+        ipopt_btol0.001_lbfgs20_hess
+        trust-constr_btol0.01_midpoint
+    """
+    parts = [config.method.lower(), f"btol{config.boundary_tol}"]
+
+    if config.method.lower() == 'ipopt':
+        if config.lbfgs_memory != 6:
+            parts.append(f"lbfgs{config.lbfgs_memory}")
+        if config.exact_hessian:
+            parts.append("hess")
+        if config.best_iterate:
+            parts.append("bestiter")
+        if config.allow_partial_convergence:
+            parts.append("partial")
+
+    if config.distance_preservation != 'preserve':
+        if config.distance_preservation == 'midpoint':
+            parts.append("midpoint")
+        else:
+            parts.append(f"dist{config.distance_preservation}")
+
+    return "_".join(parts)
+
+
+def derive_output_paths(solution_path, file_type, config=None, output_override=None):
+    """Derive the output directory for checkpoint files.
+
+    Supports both the structured layout (solution/ + refinement/{campaign}/)
+    and the legacy flat layout.
+
+    When *config* is provided and the layout is structured, output paths
+    are placed under ``refinement/{campaign_name}/`` inside the run directory.
 
     Args:
         solution_path: Path to the input HDF5 file.
         file_type: One of 'base', 'checkpoint_pending', 'checkpoint_converged'.
-        output_override: If provided, use this as the final output path.
+        config: Optional RefinementConfig; required for structured-layout
+            base files to determine the campaign directory name.
+        output_override: If provided, use this directory as the output.
 
     Returns:
-        (final_output_path, base_output_path) where base_output_path has no extension.
+        output_dir: The directory where checkpoint files should be written.
     """
     if output_override is not None:
-        final_output = output_override
-    elif file_type == 'base':
-        base_path = solution_path.replace('.h5', '')
-        final_output = f"{base_path}_refined_contours.h5"
-    else:
-        base_path = solution_path
-        iteration_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', solution_path)
-        btol_match = re.search(r'_btol([\d.]+(?:e-?\d+)?)', solution_path)
+        return os.path.dirname(output_override) or '.'
 
-        if iteration_match:
-            iter_num = iteration_match.group(1)
-            base_path = base_path.replace(
-                f'_iteration{iter_num}_refined_contours.h5', '')
-        else:
-            base_path = base_path.replace('_refined_contours.h5', '').replace('.h5', '')
+    layout, run_dir = detect_run_layout(solution_path)
 
-        if btol_match:
-            base_path = base_path.replace(f'_btol{btol_match.group(1)}', '')
+    if layout == 'structured' and file_type == 'base' and config is not None:
+        campaign_name = build_campaign_name(config)
+        return os.path.join(run_dir, 'refinement', campaign_name)
 
-        final_output = f"{base_path}_refined_contours.h5"
+    if layout == 'structured' and file_type in ('checkpoint_pending', 'checkpoint_converged'):
+        return os.path.dirname(os.path.abspath(solution_path))
 
-    base_output = final_output.replace('_refined_contours.h5', '').replace('.h5', '')
-    return final_output, base_output
+    # Legacy flat layout — put checkpoints next to the solution file
+    return os.path.dirname(os.path.abspath(solution_path))
+
+
+def _read_iteration_number(checkpoint_path):
+    """Read iteration_number from an HDF5 checkpoint's attributes.
+
+    Falls back to filename regex for old-style filenames, then to 1.
+    """
+    try:
+        with h5py.File(checkpoint_path, 'r') as f:
+            val = f.attrs.get('iteration_number')
+            if val is not None:
+                return int(val)
+    except Exception:
+        pass
+    m = re.search(r'iteration[_]?(\d+)', os.path.basename(checkpoint_path))
+    return int(m.group(1)) if m else 1
 
 
 def _check_indicator_vp_consistency(partition, mesh, logger):
@@ -258,19 +307,24 @@ class PipelineOrchestrator:
         self._migration_orchestrator = None
         return mig_result
 
-    def export_checkpoint(self, iteration_number, base_output_path,
-                          opt_info, pending_migration=True) -> str:
+    def export_checkpoint(self, iteration_number, output_dir,
+                          opt_info, pending_migration=True,
+                          base_solution_path=None) -> str:
         """Export partition state to HDF5 checkpoint.
 
         Includes pre-write consistency check and post-write roundtrip
         perimeter verification. Returns the path to the exported file.
-        """
-        boundary_tol = self.config.boundary_tol
 
-        if boundary_tol is not None:
-            output_path = f"{base_output_path}_btol{boundary_tol}_iteration{iteration_number}_refined_contours.h5"
-        else:
-            output_path = f"{base_output_path}_iteration{iteration_number}_refined_contours.h5"
+        Args:
+            output_dir: Directory in which the checkpoint file is created.
+                For structured layouts this is the campaign directory.
+            base_solution_path: If provided, stored as a relative path
+                in the HDF5 attrs so loaders can find the base solution
+                without filename-based heuristics.
+        """
+        ckpt_ts = time.strftime('%Y%m%d_%H%M%S')
+        output_path = os.path.join(
+            output_dir, f"iteration_{iteration_number:03d}_{ckpt_ts}.h5")
 
         self.logger.info("")
         self.logger.info("=" * 80)
@@ -305,6 +359,14 @@ class PipelineOrchestrator:
             f.attrs['iteration_number'] = iteration_number
             f.attrs['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
             f.attrs['pending_migration'] = bool(pending_migration)
+
+            if base_solution_path is not None:
+                try:
+                    rel = os.path.relpath(
+                        base_solution_path, os.path.dirname(output_path))
+                except ValueError:
+                    rel = os.path.abspath(base_solution_path)
+                f.attrs['base_solution_path'] = rel
 
             opt_grp = f.create_group('optimization_info')
             opt_grp.attrs['initial_perimeter'] = opt_info['initial_perimeter']
@@ -356,7 +418,7 @@ class PipelineOrchestrator:
 
     # ── Convenience loop ──────────────────────────────────────────────
 
-    def run_refinement_loop(self, solution_path, base_output_path=None) -> dict:
+    def run_refinement_loop(self, solution_path, output_dir=None) -> dict:
         """Full iterative refinement loop with auto-detection and resume.
 
         This method:
@@ -392,8 +454,7 @@ class PipelineOrchestrator:
             self.logger.info("=" * 80)
 
             mesh, partition = load_partition_from_refined_file(solution_path, verbose=True)
-            iteration_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', solution_path)
-            starting_iteration = int(iteration_match.group(1)) if iteration_match else 1
+            starting_iteration = _read_iteration_number(solution_path)
             enter_at = 'migrate'
             self.logger.info(f"Will resume from iteration {starting_iteration} (migrate first, then optimize)")
 
@@ -401,17 +462,30 @@ class PipelineOrchestrator:
         self.partition = partition
         self.target_area = float(mesh.M.sum()) / partition.n_cells
 
-        if base_output_path is None:
-            _final_output, base_output_path = derive_output_paths(solution_path, file_type)
+        if output_dir is None:
+            output_dir = derive_output_paths(
+                solution_path, file_type, config=self.config)
 
-        output_dir = os.path.dirname(base_output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
+
+        self._write_refinement_yaml(output_dir, solution_path)
+
+        abs_solution = os.path.abspath(solution_path)
+        if file_type == 'base':
+            base_solution_for_export = abs_solution
+        else:
+            try:
+                from .io import find_base_solution_path
+                base_solution_for_export = find_base_solution_path(solution_path)
+            except FileNotFoundError:
+                base_solution_for_export = None
 
         self.logger.info(f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} triangles")
         self.logger.info(f"Partition: {partition.n_cells} cells, {len(partition.variable_points)} VPs")
         self.logger.info(f"Total mesh area: {float(mesh.M.sum()):.6f}")
         self.logger.info(f"Target area per cell: {self.target_area:.6f}")
+        self.logger.info(f"Output directory: {output_dir}")
 
         self.logger.info("")
         self.logger.info("=" * 80)
@@ -495,8 +569,9 @@ class PipelineOrchestrator:
                     self.logger.error("Exporting current state and stopping")
 
                     failure_file = self.export_checkpoint(
-                        iteration_number, base_output_path, opt_info,
-                        pending_migration=True)
+                        iteration_number, output_dir, opt_info,
+                        pending_migration=True,
+                        base_solution_path=base_solution_for_export)
                     self.logger.info(f"State saved to: {failure_file}")
                     return {'converged': False, 'error': 'Optimization failed',
                             'last_file': failure_file}
@@ -530,8 +605,9 @@ class PipelineOrchestrator:
                 self.logger.info("-" * 80)
 
                 iteration_file = self.export_checkpoint(
-                    iteration_number, base_output_path, opt_info,
-                    pending_migration=pending_migration)
+                    iteration_number, output_dir, opt_info,
+                    pending_migration=pending_migration,
+                    base_solution_path=base_solution_for_export)
                 iteration_files.append(iteration_file)
 
             # ── CHECK CONVERGENCE ──
@@ -644,3 +720,20 @@ class PipelineOrchestrator:
             'final_perimeter': final_perimeter,
             'iteration_files': iteration_files,
         }
+
+    # ── Private helpers ───────────────────────────────────────────────
+
+    def _write_refinement_yaml(self, campaign_dir, solution_path):
+        """Write a refinement.yaml config snapshot into the campaign directory."""
+        yaml_path = os.path.join(campaign_dir, 'refinement.yaml')
+        if os.path.exists(yaml_path):
+            return
+
+        cfg = self.config
+        snapshot = dataclasses.asdict(cfg)
+        snapshot['base_solution'] = os.path.abspath(solution_path)
+        snapshot['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        snapshot['campaign_name'] = build_campaign_name(cfg)
+
+        with open(yaml_path, 'w') as f:
+            yaml.dump(snapshot, f, default_flow_style=False, sort_keys=False)
