@@ -30,39 +30,23 @@ import sys
 import re
 import argparse
 import numpy as np
+import h5py
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'examples'))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Pre-parse --use-legacy to determine which modules to load
-# Skip pre-parse when --help is passed so the main parser can show full help
-if '--help' in sys.argv or '-h' in sys.argv:
-    USE_LEGACY = False
-else:
-    _pre_parser = argparse.ArgumentParser()
-    _pre_parser.add_argument('--use-legacy', action='store_true',
-                             help='Use legacy TopologySwitcher')
-    _pre_args, _ = _pre_parser.parse_known_args()
-    USE_LEGACY = _pre_args.use_legacy
-
-from examples.data_loader import load_partition_from_refined_file
-from src.core.tri_mesh import TriMesh
-from src.core.mesh_topology import MeshTopology
-from src.core.steiner_handler import SteinerHandler
-from src.core.area_calculator import AreaCalculator
-from src.core.perimeter_calculator import PerimeterCalculator
-from src.core.perimeter_optimizer import PerimeterOptimizer
-from src.core.type2_migration_io import load_type2_migration_history
-from src.core import migration_utils
+from src.pipeline.io import load_partition_from_refined_file
+from src.mesh.tri_mesh import TriMesh
+from src.mesh.mesh_topology import MeshTopology
+from src.partition.steiner_handler import SteinerHandler
+from src.partition.area_calculator import AreaCalculator
+from src.partition.perimeter_calculator import PerimeterCalculator
+from src.optimization.perimeter_optimizer import PerimeterOptimizer
+from src.migration.type2_migration_io import load_type2_migration_history
+from src.migration import migration_utils
 from src.logging_config import get_logger, setup_logging
-
-if USE_LEGACY:
-    from src.core.topology_switcher_legacy import TopologySwitcher
-    from src.core.type1_component_analyzer import Type1ComponentAnalyzer
-    from src.core.type2_migration_history import Type2MigrationHistory
-else:
-    from src.core.migration_orchestrator import MigrationOrchestrator, MigrationConfig
-    from src.core.migration_types import TriplePointHistory
+from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
+from src.migration.migration_types import TriplePointHistory
 
 
 # ============================================================================
@@ -212,9 +196,18 @@ def main():
         except Exception as e:
             logger.warning(f"Could not load migration history: {e}")
 
-    # Detect current iteration from filename for history bookkeeping
-    iter_match = re.search(r'_iteration(\d+)_refined_contours\.h5$', args.solution)
-    starting_iteration = int(iter_match.group(1)) if iter_match else 1
+    # Detect current iteration from HDF5 attrs, then filename fallback
+    starting_iteration = None
+    try:
+        with h5py.File(args.solution, 'r') as f:
+            val = f.attrs.get('iteration_number')
+            if val is not None:
+                starting_iteration = int(val)
+    except Exception:
+        pass
+    if starting_iteration is None:
+        iter_match = re.search(r'iteration[_]?(\d+)', os.path.basename(args.solution))
+        starting_iteration = int(iter_match.group(1)) if iter_match else 1
     current_iteration = starting_iteration + 1
     logger.info(f"Detected start iteration: {starting_iteration}, "
                 f"treating as iteration {current_iteration}")
@@ -363,7 +356,7 @@ def main():
 
             import logging as _logging
             # Suppress verbose sub-logger output during analysis (unless debug mode)
-            _sw_log = _logging.getLogger('src.core.topology_switcher')
+            _sw_log = _logging.getLogger('src.migration.migration_orchestrator')
             _orig_sw = _sw_log.level
             if not args.debug:
                 _sw_log.setLevel(_logging.WARNING)

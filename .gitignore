@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # Virtual environments
 .env
@@ -37,11 +38,11 @@ visualizations/
 # Specific files to ignore
 gradient_descend_with_projection.py
 manifold_partition.md
-examples/generate_optimization_report.py
-examples/test_fem_validation.py
-examples/test_interpolation_methods.py
-examples/test_area_optimization.py
-examples/test_stage0_component_analysis.py
+scripts/generate_optimization_report.py
+scripts/test_fem_validation.py
+scripts/test_interpolation_methods.py
+scripts/test_area_optimization.py
+scripts/test_stage0_component_analysis.py
 src/core/interpolation_improved.py 
 docs/
 auxiliary/

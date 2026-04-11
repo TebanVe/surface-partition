@@ -1,22 +1,16 @@
 import numpy as np
 from typing import Tuple
 
-try:
-	from ..logging_config import get_logger
-	from ..core.tri_mesh import TriMesh
-except Exception:
-	import sys, os
-	sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-	from logging_config import get_logger  # type: ignore
-	from core.tri_mesh import TriMesh  # type: ignore
+from ..logging_config import get_logger
+from ..mesh.tri_mesh import TriMesh
+from .base import SurfaceProvider
 
 
-class TorusMeshProvider:
+class TorusMeshProvider(SurfaceProvider):
 	"""
 	Surface provider for a torus of revolution embedded in R3.
 	Builds a TriMesh from torus parameters and provides naming metadata
-	for orchestrators. The interface mirrors RingMeshProvider so the
-	orchestrator can remain surface-agnostic.
+	for orchestrators.
 	"""
 
 	def __init__(self, n_theta: int, n_phi: int, R: float, r: float,
@@ -28,16 +22,11 @@ class TorusMeshProvider:
 		# Geometry parameters
 		self.R = float(R)
 		self.r = float(r)
-		# Store initial and increment values for refinement summary
+		# Store initial and increment values for refinement
 		self.init_n_theta = int(n_theta)
 		self.init_n_phi = int(n_phi)
 		self.incr_n_theta = int(n_theta_increment)
 		self.incr_n_phi = int(n_phi_increment)
-		# Aliases to match orchestrator's current attribute names (compat layer)
-		self.init_n_radial = self.init_n_theta
-		self.init_n_angular = self.init_n_phi
-		self.incr_n_radial = self.incr_n_theta
-		self.incr_n_angular = self.incr_n_phi
 
 	# Surface identity and resolution labels
 	def surface_name(self) -> str:
@@ -53,6 +42,12 @@ class TorusMeshProvider:
 	def set_resolution(self, n1: int, n2: int) -> None:
 		self.n_theta = int(n1)
 		self.n_phi = int(n2)
+
+	def get_initial_resolution(self) -> Tuple[int, int]:
+		return (self.init_n_theta, self.init_n_phi)
+
+	def get_resolution_increment(self) -> Tuple[int, int]:
+		return (self.incr_n_theta, self.incr_n_phi)
 
 	def resolution_summary(self, refinement_levels: int) -> Tuple[str, str]:
 		if refinement_levels > 1:
