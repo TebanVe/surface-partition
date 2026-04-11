@@ -356,8 +356,8 @@ def plot_refinement_optimization_metrics(energies: List[float], grad_norms: List
                                        level_boundaries: List[int], 
                                        save_path: str = 'refinement_optimization_metrics.png',
                                        n_partitions: Optional[int] = None, 
-                                       n_radial_info: Optional[str] = None,
-                                       n_angular_info: Optional[str] = None,
+                                       resolution_v1_info: Optional[str] = None,
+                                       resolution_v2_info: Optional[str] = None,
                                        lambda_penalty: Optional[float] = None,
                                        seed: Optional[int] = None,
                                        use_analytic: Optional[bool] = None,
@@ -373,8 +373,8 @@ def plot_refinement_optimization_metrics(energies: List[float], grad_norms: List
         level_boundaries: List of level boundary indices
         save_path: Path to save the plot
         n_partitions: Number of partitions
-        n_radial_info: Radial mesh info
-        n_angular_info: Angular mesh info
+        resolution_v1_info: First resolution dimension info
+        resolution_v2_info: Second resolution dimension info
         lambda_penalty: Lambda penalty value
         seed: Random seed
         use_analytic: Whether analytic gradients were used
@@ -426,10 +426,10 @@ def plot_refinement_optimization_metrics(energies: List[float], grad_norms: List
         title_parts = []
         if n_partitions:
             title_parts.append(f"n_partitions={n_partitions}")
-        if n_radial_info:
-            title_parts.append(f"n_radial={n_radial_info}")
-        if n_angular_info:
-            title_parts.append(f"n_angular={n_angular_info}")
+        if resolution_v1_info:
+            title_parts.append(f"v1={resolution_v1_info}")
+        if resolution_v2_info:
+            title_parts.append(f"v2={resolution_v2_info}")
         if lambda_penalty is not None:
             title_parts.append(f"lambda={lambda_penalty}")
         if seed:
@@ -448,8 +448,8 @@ def plot_refinement_optimization_metrics(energies: List[float], grad_norms: List
 def plot_constraint_evolution(constraint_data: Dict, level_boundaries: List[int],
                             save_path: str = 'constraint_evolution.png',
                             n_partitions: Optional[int] = None,
-                            n_radial_info: Optional[str] = None,
-                            n_angular_info: Optional[str] = None,
+                            resolution_v1_info: Optional[str] = None,
+                            resolution_v2_info: Optional[str] = None,
                             lambda_penalty: Optional[float] = None,
                             seed: Optional[int] = None,
                             use_analytic: Optional[bool] = None,
@@ -468,8 +468,8 @@ def plot_constraint_evolution(constraint_data: Dict, level_boundaries: List[int]
         level_boundaries: List of level boundary indices
         save_path: Path to save the plot
         n_partitions: Number of partitions
-        n_radial_info: Radial mesh info
-        n_angular_info: Angular mesh info
+        resolution_v1_info: First resolution dimension info
+        resolution_v2_info: Second resolution dimension info
         lambda_penalty: Lambda penalty value
         seed: Random seed
         use_analytic: Whether analytic gradients were used
@@ -677,10 +677,10 @@ def plot_constraint_evolution(constraint_data: Dict, level_boundaries: List[int]
         title_parts = []
         if n_partitions:
             title_parts.append(f"n_partitions={n_partitions}")
-        if n_radial_info:
-            title_parts.append(f"n_radial={n_radial_info}")
-        if n_angular_info:
-            title_parts.append(f"n_angular={n_angular_info}")
+        if resolution_v1_info:
+            title_parts.append(f"v1={resolution_v1_info}")
+        if resolution_v2_info:
+            title_parts.append(f"v2={resolution_v2_info}")
         if lambda_penalty is not None:
             title_parts.append(f"lambda={lambda_penalty}")
         if seed:
@@ -912,8 +912,8 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
         constraint_data, level_boundaries,
         save_path=os.path.join(output_dir, 'constraint_evolution.png'),
         n_partitions=n_partitions,
-        n_radial_info=var1_val,
-        n_angular_info=var2_val,
+        resolution_v1_info=var1_val,
+        resolution_v2_info=var2_val,
         lambda_penalty=metadata.get('input_parameters', {}).get('lambda_penalty'),
         seed=metadata.get('input_parameters', {}).get('seed'),
         use_analytic=metadata.get('input_parameters', {}).get('use_analytic'),

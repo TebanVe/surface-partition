@@ -18,10 +18,12 @@ pip install -e .               # core only
 pip install -e ".[all]"        # or: core + PyVista + IPOPT
 
 # Phase 1: Γ-convergence relaxation
-python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
-python scripts/refine_perimeter.py --solution <path_to_solution.h5> --max-iterations 10
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
+# Or with CLI overrides:
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --max-iterations 10 --method ipopt
 
 # Visualization (all require pyvista)
 # Production viewer — vectorized, handles fine meshes efficiently:
@@ -88,7 +90,6 @@ src/
 ├── visualization/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   └── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
-├── config.py                     # Legacy Config class (mostly superseded by RelaxationConfig)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
@@ -102,7 +103,9 @@ scripts/
 testing/
 ├── README_testing.md             # Test registry documentation
 └── test_migrations_debug.py      # Migration debug CLI
-parameters/input.yaml             # Default run configuration
+parameters/
+├── torus_10part.yaml             # Example experiment config (torus, 10 partitions)
+└── ...                           # One YAML per experiment
 cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
 ```
 
@@ -112,9 +115,10 @@ Each Phase 1 run creates a structured directory under `results/`:
 
 ```
 results/run_{timestamp}_surf{surface}_npart{N}_v1..._v2..._lam{λ}_seed{S}/
+├── experiment.yaml               # Verbatim copy of the input config (reproduction recipe)
 ├── solution/
 │   ├── surface_part{N}_surf{surface}_v1..._v2..._lam{λ}_seed{S}_{timestamp}.h5
-│   └── metadata.yaml
+│   └── metadata.yaml             # Derived runtime results (mesh stats, timings, file paths)
 ├── traces/
 │   ├── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_summary.out
 │   └── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_internal_data.hdf5
@@ -167,17 +171,17 @@ compatibility with older result directories.
 | `SteinerHandler` | `src/partition/steiner_handler.py` | Manages Steiner/triple-point perimeter and area contributions for triangles where 3+ cells meet. |
 | `PartitionArrays` | `src/partition/partition_arrays.py` | Pre-computes sparse Jacobian/Hessian sparsity structure for IPOPT. |
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
-| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` factory. |
-| `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config (max_iterations, method, tolerances, etc.). |
+| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. |
+| `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
 ### Data Flow
 
-1. **Phase 1:** `find_surface_partition.py` → `run_relaxation()` → builds `TorusMeshProvider` → for each refinement level: `_setup_level()` → `ProjectedGradientOptimizer.optimize()` → saves solution HDF5 to `solution/`, PGD traces to `traces/`, log to `logs/relaxation.log`.
+1. **Phase 1:** `find_surface_partition.py --config <experiment.yaml>` → reads `relaxation` + `surface` sections → `run_relaxation()` → builds provider → PGD loop → saves solution to `solution/`, traces to `traces/`, log to `logs/relaxation.log`, copies config to `experiment.yaml` at run root.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 
-3. **Phase 2:** `refine_perimeter.py` → `PipelineOrchestrator.run_refinement_loop()`:
+3. **Phase 2:** `refine_perimeter.py --solution <base.h5> --config <experiment.yaml>` → reads `refinement` section (CLI flags override) → `PipelineOrchestrator.run_refinement_loop()`:
    - Creates campaign directory under `refinement/{method}_btol{tol}/` with `refinement.yaml` config snapshot.
    - **Optimize:** `PerimeterOptimizer.optimize()` adjusts λ values.
    - **Detect:** `MigrationOrchestrator.detect_all_triggers()` finds VPs near vertices (Type 1) or triple-point geometry changes (Type 2).
@@ -247,7 +251,7 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 - **No automated tests.** `testing/` contains only manual CLI diagnostics. `pytest` will find `test_migrations_debug.py` but collect zero test functions.
 - **`docs/` is gitignored.** README references to `docs/PERIMETER_REFINEMENT.md` will be broken for fresh clones.
 - **PyVista is not in requirements.** It must be installed separately for 3D visualization scripts.
-- **`src/config.py`** is a legacy Config class, mostly superseded by `RelaxationConfig` and `RefinementConfig` dataclasses. It still exists but is not used by the main pipeline.
+- **Experiment YAML format:** Both scripts accept sectioned YAML (`experiment`/`relaxation`/`surface`/`refinement` keys) and legacy flat YAML (all keys at top level). `from_yaml_dict()` on both config dataclasses handles both formats.
 - **`cluster/submit.sh`** defaults surface to `ring` in the YAML fallback, but only `torus` is implemented.
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.

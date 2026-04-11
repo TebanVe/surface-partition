@@ -2,9 +2,9 @@
 
 # Generic submission script for UPPMAX (Rackham) to run surface partition optimizations
 # Usage examples:
-#   bash cluster/submit.sh --input parameters/input.yaml
-#   bash cluster/submit.sh --input parameters/input.yaml --surface ring --time 24:00:00 --venv ringtest-3.9
-#   bash cluster/submit.sh --input parameters/input.yaml --solution-dir /proj/snic2020-15-36/private/RING/SOLUTIONS
+#   bash cluster/submit.sh --config parameters/torus_10part.yaml
+#   bash cluster/submit.sh --config parameters/torus_10part.yaml --surface torus --time 24:00:00
+#   bash cluster/submit.sh --config parameters/torus_10part.yaml --solution-dir /proj/snic2020-15-36/private/SOLUTIONS
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ PROJECT_BASE="/proj/${PROJECT_FOLDER}"
 # -------------------------------
 # Defaults
 # -------------------------------
-INPUT_FILE="parameters/input.yaml"
+INPUT_FILE="parameters/torus_10part.yaml"
 OUTPUT_DIR="results"
 SOLUTION_DIR="${PROJECT_BASE}/private/LINKED_LST_MANIFOLD/OPTIM_SOLUTIONS"
 TIME_LIMIT="12:00:00"
@@ -30,7 +30,7 @@ SURFACE_ARG=""               # Optional override for surface (falls back to YAML
 # -------------------------------
 while [[ $# -gt 0 ]]; do
 	case $1 in
-		--input)
+		--config|--input)
 			INPUT_FILE="$2"; shift 2;;
 		--output)
 			OUTPUT_DIR="$2"; shift 2;;
@@ -82,7 +82,7 @@ SURFACE_YAML="$(extract_yaml surface "$INPUT_FILE_ABS")"
 if [[ -n "$SURFACE_ARG" ]]; then
 	SURFACE="$SURFACE_ARG"
 else
-	SURFACE="${SURFACE_YAML:-ring}"
+	SURFACE="${SURFACE_YAML:-torus}"
 fi
 
 # Common parameters
@@ -91,18 +91,12 @@ LAMBDA="$(extract_yaml lambda_penalty "$INPUT_FILE_ABS")"; LAMBDA=${LAMBDA:-0.0}
 SEED="$(extract_yaml seed "$INPUT_FILE_ABS")"; SEED=${SEED:-42}
 REF_LEVELS="$(extract_yaml refinement_levels "$INPUT_FILE_ABS")"; REF_LEVELS=${REF_LEVELS:-1}
 
-# Ring-style keys (nr/na)
-NR="$(extract_yaml n_radial "$INPUT_FILE_ABS")"; NA="$(extract_yaml n_angular "$INPUT_FILE_ABS")"
-NR_INC="$(extract_yaml n_radial_increment "$INPUT_FILE_ABS")"; NA_INC="$(extract_yaml n_angular_increment "$INPUT_FILE_ABS")"
-
-# Torus-style keys (nt/np)
+# Surface resolution keys (nt/np for torus; future surfaces use v1/v2 fallback)
 NT="$(extract_yaml n_theta "$INPUT_FILE_ABS")"; NP="$(extract_yaml n_phi "$INPUT_FILE_ABS")"
 NT_INC="$(extract_yaml n_theta_increment "$INPUT_FILE_ABS")"; NP_INC="$(extract_yaml n_phi_increment "$INPUT_FILE_ABS")"
 
 # Choose labels and values based on available keys
-if [[ -n "$NR" && -n "$NA" ]]; then
-	V1_LABEL="nr"; V2_LABEL="na"; V1="$NR"; V2="$NA"; V1_INC="${NR_INC:-0}"; V2_INC="${NA_INC:-0}"
-elif [[ -n "$NT" && -n "$NP" ]]; then
+if [[ -n "$NT" && -n "$NP" ]]; then
 	V1_LABEL="nt"; V2_LABEL="np"; V1="$NT"; V2="$NP"; V1_INC="${NT_INC:-0}"; V2_INC="${NP_INC:-0}"
 else
 	# Fallback labels
@@ -168,7 +162,7 @@ cd "${REPO_ROOT}"
 
 # Run orchestrator (surface-agnostic)
 python scripts/find_surface_partition.py \
-	--input "${INPUT_FILE_ABS}" \
+	--config "${INPUT_FILE_ABS}" \
 	--solution-dir "${SOLUTION_DIR_ABS}" \
 	--surface "${SURFACE}"
 EOF

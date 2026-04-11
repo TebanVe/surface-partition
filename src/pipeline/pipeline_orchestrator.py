@@ -172,6 +172,20 @@ def _check_indicator_vp_consistency(partition, mesh, logger):
         return True
 
 
+def _coerce(value, type_hint):
+    """Coerce a YAML-loaded value to the expected dataclass field type.
+
+    Handles cases like ``1e-7`` being parsed as str instead of float.
+    """
+    if type_hint == 'float' or type_hint is float:
+        return float(value)
+    if type_hint == 'int' or type_hint is int:
+        return int(value)
+    if type_hint == 'bool' or type_hint is bool:
+        return bool(value)
+    return value
+
+
 @dataclass
 class RefinementConfig:
     """Configuration for the iterative refinement pipeline."""
@@ -187,6 +201,23 @@ class RefinementConfig:
     use_vectorized: bool = True
     save_iterations: bool = False
     distance_preservation: str = 'preserve'
+
+    @classmethod
+    def from_yaml_dict(cls, params: dict) -> 'RefinementConfig':
+        """Construct from a YAML-loaded parameter dict.
+
+        Accepts both the sectioned format (looks for a ``refinement`` key)
+        and a flat dict of refinement fields. Unknown keys are ignored.
+        Type coercion is applied based on the dataclass field types so
+        that values like ``1e-7`` (parsed as str by PyYAML) become float.
+        """
+        section = params.get('refinement', params)
+        field_map = {f.name: f for f in dataclasses.fields(cls)}
+        filtered = {}
+        for k, v in section.items():
+            if k in field_map and v is not None:
+                filtered[k] = _coerce(v, field_map[k].type)
+        return cls(**filtered)
 
 
 class PipelineOrchestrator:

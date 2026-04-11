@@ -75,16 +75,26 @@ class RelaxationConfig:
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
-        """Construct from a YAML-loaded parameter dict (e.g. from input.yaml).
+        """Construct from a YAML-loaded parameter dict.
 
-        Ignores keys not present in the dataclass. Performs type coercion
-        matching the behavior of Config.__init__().
+        Accepts both the sectioned format (looks for a ``relaxation`` key)
+        and the legacy flat format where all keys live at the top level.
+        Unknown keys are silently ignored. Type coercion is applied so
+        that values like ``1e-8`` (parsed as str by PyYAML) become float.
         """
         import dataclasses
-        field_names = {f.name for f in dataclasses.fields(cls)}
+        section = params.get('relaxation', params)
+        field_map = {f.name: f for f in dataclasses.fields(cls)}
         filtered = {}
-        for k, v in params.items():
-            if k in field_names and v is not None:
+        for k, v in section.items():
+            if k in field_map and v is not None:
+                ft = field_map[k].type
+                if ft == 'float' or ft is float:
+                    v = float(v)
+                elif ft == 'int' or ft is int:
+                    v = int(v)
+                elif ft == 'bool' or ft is bool:
+                    v = bool(v)
                 filtered[k] = v
         return cls(**filtered)
 
@@ -405,11 +415,10 @@ def _load_warm_start(solution_path: str) -> dict:
 
 def _setup_level(provider, config, level, logger) -> dict:
     """Build mesh and PGD optimizer for one refinement level."""
-    n1_init, n2_init = provider.get_resolution()
-    n1 = (getattr(provider, 'init_n_radial', n1_init)
-          + level * getattr(provider, 'incr_n_radial', 0))
-    n2 = (getattr(provider, 'init_n_angular', n2_init)
-          + level * getattr(provider, 'incr_n_angular', 0))
+    n1, n2 = provider.get_initial_resolution()
+    dn1, dn2 = provider.get_resolution_increment()
+    n1 = n1 + level * dn1
+    n2 = n2 + level * dn2
     provider.set_resolution(n1, n2)
 
     mesh = provider.build()
@@ -599,16 +608,10 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
             and callable(provider.theoretical_total_area)):
         theoretical_total_area = float(provider.theoretical_total_area())
 
-    if surface == 'ring':
-        surface_params = {
-            'r_inner': float(getattr(provider, 'r_inner', 0.5)),
-            'r_outer': float(getattr(provider, 'r_outer', 1.0)),
-        }
-    else:
-        surface_params = {
-            'R': float(getattr(provider, 'R', 1.0)),
-            'r': float(getattr(provider, 'r', 0.3)),
-        }
+    surface_params = {}
+    for attr in ('R', 'r', 'a', 'b', 'c'):
+        if hasattr(provider, attr):
+            surface_params[attr] = float(getattr(provider, attr))
 
     meta = {
         'input_parameters': {

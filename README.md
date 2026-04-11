@@ -108,7 +108,6 @@ surface-partition/
 │   ├── visualization/               # Plotting helpers
 │   │   ├── plot_utils.py           # Matplotlib utilities
 │   │   └── partition_helpers.py    # Partition-specific viz helpers
-│   ├── config.py                    # Legacy Config class
 │   └── logging_config.py           # Logging setup with performance decorators
 ├── scripts/                          # CLI entry points
 │   ├── find_surface_partition.py    # Phase 1: Γ-convergence relaxation
@@ -122,8 +121,8 @@ surface-partition/
 ├── testing/                          # Test scripts and debug tools
 │   ├── README_testing.md           # Test registry documentation
 │   └── test_migrations_debug.py    # Migration debug CLI
-├── parameters/                       # Configuration
-│   └── input.yaml                  # Default run parameters
+├── parameters/                       # Experiment configuration files
+│   └── torus_10part.yaml           # Example: 10-partition torus experiment
 ├── cluster/                          # HPC job submission
 │   └── submit.sh                   # SLURM script for UPPMAX (Rackham)
 ├── pyproject.toml                   # Package config, Black, pytest
@@ -135,14 +134,14 @@ surface-partition/
 ### Phase 1: Γ-Convergence Relaxation
 
 ```bash
-# Run with default parameters on the torus
-python scripts/find_surface_partition.py --input parameters/input.yaml --surface torus
+# Run from experiment config
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
 
 # Custom output directory
-python scripts/find_surface_partition.py --input parameters/input.yaml --solution-dir results/my_run
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --solution-dir results/my_run
 
 # Warm-start from a prior solution (must increase refinement_levels in YAML)
-python scripts/find_surface_partition.py --input parameters/input.yaml --resume-from results/prior/solution.h5
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --resume-from results/prior/solution.h5
 ```
 
 ### Phase 2: Perimeter Refinement
@@ -150,25 +149,25 @@ python scripts/find_surface_partition.py --input parameters/input.yaml --resume-
 After obtaining a relaxed solution, refine the contours to get accurate perimeter values:
 
 ```bash
-# Fresh run from base solution
+# Fresh run from experiment config (reads refinement: section)
 python scripts/refine_perimeter.py \
-    --solution results/run_xyz/solution.h5 \
-    --max-iterations 10
+    --solution results/run_xyz/solution/surface_....h5 \
+    --config parameters/torus_10part.yaml
+
+# CLI-only (--max-iterations required if not in --config)
+python scripts/refine_perimeter.py \
+    --solution results/run_xyz/solution/surface_....h5 \
+    --max-iterations 10 --method ipopt --exact-hessian
 
 # Resume from checkpoint (auto-detected)
 python scripts/refine_perimeter.py \
     --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_003_20260410_120523.h5 \
-    --max-iterations 10
-
-# With IPOPT solver and exact Hessian
-python scripts/refine_perimeter.py \
-    --solution results/run_xyz/solution.h5 \
-    --max-iterations 10 --method ipopt --exact-hessian
+    --config parameters/torus_10part.yaml
 
 # Save all intermediate checkpoints
 python scripts/refine_perimeter.py \
-    --solution results/run_xyz/solution.h5 \
-    --max-iterations 20 --save-iterations
+    --solution results/run_xyz/solution/surface_....h5 \
+    --config parameters/torus_10part.yaml --save-iterations
 ```
 
 ### Analysis and Visualization
@@ -227,37 +226,25 @@ n_phi_increment: 58   # resolution increase per refinement level (minor)
 
 ## Configuration
 
-The project is configured through `parameters/input.yaml`. Key parameter groups:
+Each experiment is defined by a single YAML file (e.g. `parameters/torus_10part.yaml`) with four sections:
 
-### Optimization
-- `n_partitions`: Number of equal-area partitions
-- `lambda_penalty`: Constant-phase penalty weight
-- `max_iter`: Maximum PGD iterations per refinement level
-- `seed`: Random seed for initial conditions
+- **`experiment`**: name and surface type
+- **`relaxation`**: Phase 1 PGD parameters (`n_partitions`, `lambda_penalty`, `seed`, convergence thresholds, etc.)
+- **`surface`**: geometry parameters keyed by surface name (e.g. `torus: {n_theta, n_phi, R, r}`)
+- **`refinement`**: Phase 2 parameters (`method`, `max_iterations`, `boundary_tol`, IPOPT options, etc.)
 
-### PGD Tuning
-- `pgd_step0`, `pgd_armijo_c`, `pgd_backtrack_rho`: Step size and backtracking
-- `penalty_target_mode`: `fixed` (paper default) or `adaptive`
-- `penalty_eps`: Stabilizer for penalty target denominators
+Both scripts accept `--config <experiment.yaml>`. CLI flags override YAML values.
+A verbatim copy of the config is saved as `experiment.yaml` in the run directory for reproducibility.
 
-### Mesh Refinement
-- `refinement_levels`: Number of multi-level refinement steps
-- `enable_refinement_triggers`: Enable/disable automatic early refinement
-- `refine_gnorm_patience`, `refine_feas_patience`: Plateau detection windows
-- `refine_trigger_mode`: `full` (energy + gradient + feasibility) or `energy` only
-
-### HDF5 Output Control
-- `h5_save_stride`: Save every N-th iteration
-- `h5_save_vars`: Variables to save (`x`, `constraints`)
-- `run_log_frequency`: Console logging interval
+Legacy flat YAML files (all keys at the top level) are still supported for backward compatibility.
 
 ## Cluster Support
 
 The SLURM submission script targets UPPMAX (Rackham) but can be adapted:
 
 ```bash
-bash cluster/submit.sh --input parameters/input.yaml --surface torus
-bash cluster/submit.sh --input parameters/input.yaml --time 24:00:00 --solution-dir /proj/.../SOLUTIONS
+bash cluster/submit.sh --config parameters/torus_10part.yaml --surface torus
+bash cluster/submit.sh --config parameters/torus_10part.yaml --time 24:00:00 --solution-dir /proj/.../SOLUTIONS
 ```
 
 ## References
