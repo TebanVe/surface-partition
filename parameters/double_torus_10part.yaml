@@ -1,16 +1,17 @@
-# Experiment: 10-partition torus of revolution
+# Experiment: 4-partition double torus (Bogosel & Oudet 2017, Figure 3)
+# Implicit surface: (x(x-1)^2(x-2) + y^2)^2 + z^2 - c = 0
 # This file defines a complete experiment configuration for both phases.
 
 experiment:
-  name: torus-10-partitions
-  surface: torus                      # "torus", "ellipsoid", "double_torus", "banchoff_chmutov"
+  name: double-torus-10-partitions
+  surface: double_torus
 
 # Phase 1: Γ-convergence relaxation via Projected Gradient Descent
 relaxation:
   n_partitions: 10
-  lambda_penalty: 3.25
-  seed: 13001502
-  max_iter: 25000
+  lambda_penalty: 5.0
+  seed: 42
+  max_iter: 15000
   refinement_levels: 2                # number of multi-level mesh refinement steps
   use_analytic: true
   use_discrete_area_for_constraints: true
@@ -45,25 +46,27 @@ relaxation:
   h5_always_save_first_last: true
 
 # Surface geometry (keyed by surface name)
+# Mesh is generated via marching cubes on the implicit function.
+# z-grid resolution scales proportionally with x during refinement.
 surface:
-  torus:
-    n_theta: 80                       # samples along major circle (base level)
-    n_phi: 66                         # samples along minor (tube) circle (base level)
-    R: 1.0                            # major radius
-    r: 0.6                            # minor (tube) radius
-    n_theta_increment: 62             # added per refinement level
-    n_phi_increment: 58               # added per refinement level
+  double_torus:
+    n_grid_x: 100                     # x-axis grid points (base level)
+    n_grid_y: 80                      # y-axis grid points (base level)
+    n_grid_z: 40                      # z-axis grid points (base level)
+    c: 0.03                           # implicit function constant (tube thickness)
+    n_grid_x_increment: 30            # added per refinement level
+    n_grid_y_increment: 20            # added per refinement level
 
 # Phase 2: iterative perimeter refinement
 refinement:
   method: ipopt                       # "ipopt", "SLSQP", or "trust-constr"
-  max_iterations: 2                  # topology iteration cycles (optimize → migrate)
+  max_iterations: 2                   # topology iteration cycles (optimize → migrate)
   max_opt_iter: 1000                  # optimizer iterations per topology
-  tolerance: 1.0e-7                    # optimizer convergence tolerance
+  tolerance: 1.0e-7                   # optimizer convergence tolerance
   boundary_tol: 0.001                 # λ threshold triggering Type 1 migration
   lbfgs_memory: 30                    # L-BFGS history size (ipopt only; default 6, try 20-50)
   exact_hessian: false                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
-  best_iterate: false                 # track best feasible iterate (ipopt only)
+  best_iterate: true                  # track best feasible iterate (ipopt only)
   allow_partial_convergence: true     # continue to migration even if optimizer hits max_opt_iter
-  save_iterations: true              # true: checkpoint after every topology iteration
+  save_iterations: true               # true: checkpoint after every topology iteration
   distance_preservation: preserve     # "preserve", "midpoint", or a float 0.0-1.0

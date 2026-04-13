@@ -7,7 +7,7 @@
 1. **Phase 1 (Relaxation):** Γ-convergence energy minimization via Projected Gradient Descent (PGD) on nodal density functions, with multi-level mesh refinement.
 2. **Phase 2 (Refinement):** Direct constrained perimeter minimization on extracted contour variable points, with automatic topology migrations (Type 1 and Type 2).
 
-The only surface currently implemented is the **torus** (`TorusMeshProvider`). The architecture is designed for adding new surfaces by implementing a provider class.
+Surfaces currently implemented: **torus** (`TorusMeshProvider`), **ellipsoid** (`EllipsoidMeshProvider`), **double torus** (`DoubleTorusMeshProvider`), and **Banchoff-Chmutov order 4** (`BanchoffChmutovMeshProvider`).
 
 ## Build & Run
 
@@ -15,10 +15,13 @@ The only surface currently implemented is the **torus** (`TorusMeshProvider`). T
 # Setup (uses pyenv — see .python-version for the environment name)
 pyenv activate ringtest-3.9   # or: pyenv activate surface-partition
 pip install -e .               # core only
-pip install -e ".[all]"        # or: core + PyVista + IPOPT
+pip install -e ".[all]"        # or: core + PyVista + IPOPT + scikit-image
 
 # Phase 1: Γ-convergence relaxation
 python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
+python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
+python scripts/find_surface_partition.py --config parameters/double_torus_4part.yaml      # requires .[implicit]
+python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_4part.yaml  # requires .[implicit]
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
@@ -57,7 +60,12 @@ src/
 │   ├── mesh_topology.py          # MeshTopology: edge-triangle adjacency for migration subsystem
 │   └── interpolation.py          # Nearest-neighbor interpolation between refinement levels
 ├── surfaces/
-│   └── torus.py                  # TorusMeshProvider: structured torus mesh from (n_theta, n_phi, R, r)
+│   ├── base.py                   # SurfaceProvider ABC: interface for all surface providers
+│   ├── torus.py                  # TorusMeshProvider: structured torus mesh from (n_theta, n_phi, R, r)
+│   ├── ellipsoid.py              # EllipsoidMeshProvider: parametric spherical-coord mesh
+│   ├── implicit.py               # ImplicitSurfaceProvider: marching-cubes base class
+│   ├── double_torus.py           # DoubleTorusMeshProvider: Bogosel & Oudet Figure 3
+│   └── banchoff_chmutov.py       # BanchoffChmutovMeshProvider: Bogosel & Oudet Figure 4
 ├── optimization/
 │   ├── pgd_optimizer.py          # ProjectedGradientOptimizer: Phase 1 PGD with Γ-convergence energy
 │   ├── perimeter_optimizer.py    # PerimeterOptimizer + IPOPTProblemAdapter: Phase 2 constrained minimization
@@ -104,8 +112,10 @@ testing/
 ├── README_testing.md             # Test registry documentation
 └── test_migrations_debug.py      # Migration debug CLI
 parameters/
-├── torus_10part.yaml             # Example experiment config (torus, 10 partitions)
-└── ...                           # One YAML per experiment
+├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
+├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
+├── double_torus_4part.yaml       # Double torus, 4 partitions (implicit / marching cubes)
+└── banchoff_chmutov_4part.yaml   # Banchoff-Chmutov order 4, 4 partitions (implicit / marching cubes)
 cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
 ```
 
@@ -160,6 +170,10 @@ compatibility with older result directories.
 | `TriMesh` | `src/mesh/tri_mesh.py` | Triangle mesh with P1 FEM mass (M) and stiffness (K) matrices. Properties: `.M`, `.K`, `.v` (lumped mass = row-sum of M). Supports R2 and R3. |
 | `MeshTopology` | `src/mesh/mesh_topology.py` | Edge-triangle adjacency structures needed by migration subsystem. |
 | `TorusMeshProvider` | `src/surfaces/torus.py` | Builds structured torus TriMesh from (n_theta, n_phi, R, r). Supports refinement increments. |
+| `EllipsoidMeshProvider` | `src/surfaces/ellipsoid.py` | Parametric ellipsoid via spherical-coord grid with polar cap triangles. |
+| `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
+| `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
+| `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
 | `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·(u²(1-u)²)^T·M·(u²(1-u)²) + penalty. Constraints: partition sum-to-one, equal areas. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
@@ -227,16 +241,27 @@ Variable points sit on mesh edges. Position: `x = λ * vertices[edge[0]] + (1-λ
 
 ### Adding a New Surface Provider
 
-Create `src/surfaces/my_surface.py` with a class implementing:
+**Parametric surfaces:** Subclass `SurfaceProvider` (in `src/surfaces/base.py`) and implement:
 - `surface_name() → str`
 - `resolution_labels() → Tuple[str, str]`
 - `get_resolution() → Tuple[int, int]`
 - `set_resolution(n1, n2)`
+- `get_initial_resolution() → Tuple[int, int]`
+- `get_resolution_increment() → Tuple[int, int]`
 - `resolution_summary(refinement_levels) → Tuple[str, str]`
 - `build() → TriMesh`
-- `theoretical_total_area() → float` (optional)
+- `theoretical_total_area() → Optional[float]` (return `None` if no closed form)
 
-Then add a branch in `scripts/find_surface_partition.py` for the new `--surface` value.
+See `EllipsoidMeshProvider` for a parametric example with polar cap handling.
+
+**Implicit surfaces (zero level sets):** Subclass `ImplicitSurfaceProvider` (in `src/surfaces/implicit.py`) and implement only:
+- `surface_name() → str`
+- `implicit_function(x, y, z)` — vectorized function, surface is where `f = 0`
+- `bounding_box()` — returns `((xmin,xmax), (ymin,ymax), (zmin,zmax))`
+
+The base class handles marching cubes meshing, resolution tracking, and refinement scaling. Override `build()` if post-processing is needed (e.g., `BanchoffChmutovMeshProvider` filters to the largest connected component).
+
+Then: add the provider to `src/surfaces/__init__.py`, add a branch in `scripts/find_surface_partition.py`, and create a YAML config under `parameters/`.
 
 ### Modifying the PGD Energy
 
@@ -252,7 +277,7 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 - **`docs/` is gitignored.** README references to `docs/PERIMETER_REFINEMENT.md` will be broken for fresh clones.
 - **PyVista is not in requirements.** It must be installed separately for 3D visualization scripts.
 - **Experiment YAML format:** Both scripts accept sectioned YAML (`experiment`/`relaxation`/`surface`/`refinement` keys) and legacy flat YAML (all keys at top level). `from_yaml_dict()` on both config dataclasses handles both formats.
-- **`cluster/submit.sh`** defaults surface to `ring` in the YAML fallback, but only `torus` is implemented.
+- **`cluster/submit.sh`** defaults surface to `ring` in the YAML fallback; always pass `--config` with a valid experiment YAML to select the desired surface.
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
 
@@ -262,5 +287,6 @@ Core (`pip install -e .`): `numpy`, `scipy`, `pyyaml`, `matplotlib`, `h5py`, `tq
 Optional groups (defined in `pyproject.toml`):
 - `pip install -e ".[ipopt]"` — adds `cyipopt` (IPOPT solver for Phase 2)
 - `pip install -e ".[viz]"` — adds `pyvista` (3D visualization)
+- `pip install -e ".[implicit]"` — adds `scikit-image` (marching cubes for implicit surfaces)
 - `pip install -e ".[all]"` — all optional deps
 - `pip install -e ".[dev]"` — adds `pytest`, `black`, `flake8`

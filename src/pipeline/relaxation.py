@@ -434,8 +434,8 @@ def _setup_level(provider, config, level, logger) -> dict:
         total_area = float(np.sum(mesh.v))
     else:
         theoretical = getattr(provider, 'theoretical_total_area', None)
-        total_area = (provider.theoretical_total_area()
-                      if callable(theoretical) else float(np.sum(mesh.v)))
+        val = provider.theoretical_total_area() if callable(theoretical) else None
+        total_area = float(val) if val is not None else float(np.sum(mesh.v))
 
     optimizer = ProjectedGradientOptimizer(
         K=mesh.K, M=mesh.M, v=mesh.v,
@@ -606,7 +606,9 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
     theoretical_total_area = None
     if (hasattr(provider, 'theoretical_total_area')
             and callable(provider.theoretical_total_area)):
-        theoretical_total_area = float(provider.theoretical_total_area())
+        val = provider.theoretical_total_area()
+        if val is not None:
+            theoretical_total_area = float(val)
 
     surface_params = {}
     for attr in ('R', 'r', 'a', 'b', 'c'):

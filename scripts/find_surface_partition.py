@@ -76,6 +76,43 @@ def main():
             n_theta_increment=int(sp.get('n_theta_increment', 0)),
             n_phi_increment=int(sp.get('n_phi_increment', 0)),
         )
+
+    elif surface_name == 'ellipsoid':
+        from src.surfaces.ellipsoid import EllipsoidMeshProvider
+        sp = _resolve_surface_params(params, 'ellipsoid')
+        provider = EllipsoidMeshProvider(
+            int(sp.get('n_theta', 32)),
+            int(sp.get('n_phi', 64)),
+            float(sp.get('a', 1.0)),
+            float(sp.get('b', 1.0)),
+            float(sp.get('c', 0.7)),
+            n_theta_increment=int(sp.get('n_theta_increment', 0)),
+            n_phi_increment=int(sp.get('n_phi_increment', 0)),
+        )
+
+    elif surface_name == 'double_torus':
+        from src.surfaces.double_torus import DoubleTorusMeshProvider
+        sp = _resolve_surface_params(params, 'double_torus')
+        provider = DoubleTorusMeshProvider(
+            int(sp.get('n_grid_x', 100)),
+            int(sp.get('n_grid_y', 100)),
+            int(sp.get('n_grid_z', 100)),
+            c=float(sp.get('c', 0.03)),
+            n_grid_x_increment=int(sp.get('n_grid_x_increment', 0)),
+            n_grid_y_increment=int(sp.get('n_grid_y_increment', 0)),
+        )
+
+    elif surface_name == 'banchoff_chmutov':
+        from src.surfaces.banchoff_chmutov import BanchoffChmutovMeshProvider
+        sp = _resolve_surface_params(params, 'banchoff_chmutov')
+        provider = BanchoffChmutovMeshProvider(
+            int(sp.get('n_grid_x', 100)),
+            int(sp.get('n_grid_y', 100)),
+            int(sp.get('n_grid_z', 100)),
+            n_grid_x_increment=int(sp.get('n_grid_x_increment', 0)),
+            n_grid_y_increment=int(sp.get('n_grid_y_increment', 0)),
+        )
+
     else:
         raise ValueError(f"Unsupported surface type: {surface_name}")
 
