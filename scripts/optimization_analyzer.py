@@ -19,7 +19,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.logging_config import get_logger
-from src.surfaces.torus import TorusMeshProvider
 
 def load_internal_data(hdf5_file_path: str) -> Optional[Dict]:
 	"""
@@ -754,6 +753,58 @@ def plot_energy_components(component_data: Dict, level_boundaries: List[int],
     if logger:
         logger.info(f"Saved energy components plot to: {save_path}")
 
+def _build_provider(surface_name, surface_params, v1_init, v2_init,
+                    results_dir, logger):
+    """Build a surface provider from metadata for mesh reconstruction.
+
+    For implicit surfaces, reads n_grid_z from experiment.yaml in the run
+    directory (needed to set the correct z-grid ratio for multi-level runs).
+    """
+    if surface_name == 'torus':
+        from src.surfaces.torus import TorusMeshProvider
+        return TorusMeshProvider(
+            v1_init, v2_init,
+            float(surface_params.get('R', 1.0)),
+            float(surface_params.get('r', 0.3)),
+        )
+
+    if surface_name == 'ellipsoid':
+        from src.surfaces.ellipsoid import EllipsoidMeshProvider
+        return EllipsoidMeshProvider(
+            v1_init, v2_init,
+            float(surface_params.get('a', 1.0)),
+            float(surface_params.get('b', 1.0)),
+            float(surface_params.get('c', 1.0)),
+        )
+
+    if surface_name in ('double_torus', 'banchoff_chmutov'):
+        n_grid_z = v1_init
+        exp_yaml = os.path.join(results_dir, 'experiment.yaml')
+        if not os.path.exists(exp_yaml):
+            exp_yaml = os.path.join(os.path.dirname(results_dir.rstrip('/')),
+                                    'experiment.yaml')
+        if os.path.exists(exp_yaml):
+            with open(exp_yaml, 'r') as f:
+                exp_config = yaml.safe_load(f) or {}
+            surf_section = exp_config.get('surface', {}).get(surface_name, {})
+            n_grid_z = int(surf_section.get('n_grid_z', v1_init))
+
+        if surface_name == 'double_torus':
+            from src.surfaces.double_torus import DoubleTorusMeshProvider
+            return DoubleTorusMeshProvider(
+                v1_init, v2_init, n_grid_z,
+                c=float(surface_params.get('c', 0.03)),
+            )
+        else:
+            from src.surfaces.banchoff_chmutov import BanchoffChmutovMeshProvider
+            return BanchoffChmutovMeshProvider(
+                v1_init, v2_init, n_grid_z,
+            )
+
+    logger.error(f"Unsupported surface in metadata: {surface_name}")
+    return None
+
+
 def analyze_optimization_run(results_dir: str, output_dir: str = None):
     """
     Analyze an optimization run by loading data and generating plots.
@@ -813,15 +864,13 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
     results = []
     theoretical_total_area = metadata.get('theoretical_total_area')
     
-    if surface_name == 'torus':
-        R = float(surface_params.get('R', 1.0))
-        r = float(surface_params.get('r', 0.3))
-        first_level = levels_meta_sorted[0]
-        v1_init = int(first_level.get(label1, 16))
-        v2_init = int(first_level.get(label2, 12))
-        provider = TorusMeshProvider(v1_init, v2_init, R, r)
-    else:
-        logger.error(f"Unsupported surface in metadata: {surface_name}")
+    first_level = levels_meta_sorted[0]
+    v1_init = int(first_level.get(label1, 16))
+    v2_init = int(first_level.get(label2, 12))
+    provider = _build_provider(
+        surface_name, surface_params, v1_init, v2_init, results_dir, logger
+    )
+    if provider is None:
         return
 
     if theoretical_total_area is None and hasattr(provider, 'theoretical_total_area'):

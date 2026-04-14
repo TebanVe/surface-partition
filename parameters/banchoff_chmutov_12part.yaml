@@ -1,4 +1,4 @@
-# Experiment: 4-partition Banchoff-Chmutov order 4 (Bogosel & Oudet 2017, Figure 4)
+# Experiment: 12-partition Banchoff-Chmutov order 4 (Bogosel & Oudet 2017, Figure 4)
 # Implicit surface: T4(x) + T4(y) + T4(z) = 0  where T4(X) = 8X^4 - 8X^2 + 1
 # This file defines a complete experiment configuration for both phases.
 
@@ -8,10 +8,10 @@ experiment:
 
 # Phase 1: Γ-convergence relaxation via Projected Gradient Descent
 relaxation:
-  n_partitions: 4
-  lambda_penalty: 3.0
-  seed: 42
-  max_iter: 15000
+  n_partitions: 12
+  lambda_penalty: 14.5
+  seed: 62
+  max_iter: 25000
   refinement_levels: 2                # number of multi-level mesh refinement steps
   use_analytic: true
   use_discrete_area_for_constraints: true
@@ -51,9 +51,9 @@ relaxation:
 # z-grid resolution scales proportionally with x during refinement.
 surface:
   banchoff_chmutov:
-    n_grid_x: 100                     # x-axis grid points (base level)
-    n_grid_y: 100                     # y-axis grid points (base level)
-    n_grid_z: 100                     # z-axis grid points (base level)
+    n_grid_x: 60                     # x-axis grid points (base level)
+    n_grid_y: 40                     # y-axis grid points (base level)
+    n_grid_z: 20                     # z-axis grid points (base level)
     n_grid_x_increment: 30            # added per refinement level
     n_grid_y_increment: 30            # added per refinement level
 

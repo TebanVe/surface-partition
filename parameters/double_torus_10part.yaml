@@ -1,4 +1,4 @@
-# Experiment: 4-partition double torus (Bogosel & Oudet 2017, Figure 3)
+# Experiment: 10-partition double torus (Bogosel & Oudet 2017, Figure 3)
 # Implicit surface: (x(x-1)^2(x-2) + y^2)^2 + z^2 - c = 0
 # This file defines a complete experiment configuration for both phases.
 
@@ -9,8 +9,8 @@ experiment:
 # Phase 1: Γ-convergence relaxation via Projected Gradient Descent
 relaxation:
   n_partitions: 10
-  lambda_penalty: 5.0
-  seed: 42
+  lambda_penalty: 3.0
+  seed: 42131313
   max_iter: 15000
   refinement_levels: 2                # number of multi-level mesh refinement steps
   use_analytic: true
@@ -50,12 +50,12 @@ relaxation:
 # z-grid resolution scales proportionally with x during refinement.
 surface:
   double_torus:
-    n_grid_x: 100                     # x-axis grid points (base level)
-    n_grid_y: 80                      # y-axis grid points (base level)
-    n_grid_z: 40                      # z-axis grid points (base level)
+    n_grid_x: 80                     # x-axis grid points (base level)
+    n_grid_y: 60                      # y-axis grid points (base level)
+    n_grid_z: 30                      # z-axis grid points (base level)
     c: 0.03                           # implicit function constant (tube thickness)
-    n_grid_x_increment: 30            # added per refinement level
-    n_grid_y_increment: 20            # added per refinement level
+    n_grid_x_increment: 40            # added per refinement level
+    n_grid_y_increment: 30            # added per refinement level
 
 # Phase 2: iterative perimeter refinement
 refinement:
