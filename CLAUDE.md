@@ -133,7 +133,11 @@ sweep/                              # Parameter sweep tool (independent from cor
 └── parameters/
     ├── sweep_torus_lambda.yaml       # Sweep: lambda × seed for torus (grid strategy)
     └── sweep_double_torus_lambda.yaml  # Sweep: lambda × resolution for double torus (grouped grid)
-cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
+cluster/
+├── pelle_config.sh              # Shared Pelle configuration (project, venv, SLURM defaults)
+├── submit_relaxation.sh         # Submit Phase 1 job to Pelle
+├── submit_refinement.sh         # Submit Phase 2 job to Pelle
+└── submit_sweep.sh              # Submit parameter sweep to Pelle (one job per combination)
 ```
 
 ### Run Output Layout (Structured)
@@ -353,13 +357,50 @@ Sweep specs support two combination strategies:
 
 Parameters that must scale together (e.g., `n_grid_x` and `n_grid_y`) are placed in a named group — the group's parameters are zipped internally, then the group participates in the cross-strategy as a unit.
 
+### Running on Pelle (UPPMAX Cluster)
+
+**First-time setup:**
+1. Edit `cluster/pelle_config.sh` — set `PROJECT_ID`, `PROJECT_BASE`, and verify `PYTHON_MODULE`
+2. Create venv on Pelle: see setup instructions in `pelle_config.sh`
+
+**Single relaxation job:**
+```bash
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --time 24:00:00 --cpus 8
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --resume-from results/run_.../solution/surface_....h5
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --dry-run
+```
+
+**Single refinement job:**
+```bash
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml --method ipopt --exact-hessian
+```
+
+**Parameter sweep (submits one job per combination):**
+```bash
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml --dry-run
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml --auto-collect
+```
+
+**Collect results after sweep jobs finish:**
+```bash
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect
+```
+
+**Analyze sweep results:**
+```bash
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+```
+
 ## Gotchas and Known Issues
 
 - **No automated tests.** `testing/` contains only manual CLI diagnostics. `pytest` will find `test_migrations_debug.py` but collect zero test functions.
 - **`docs/` is gitignored.** README references to `docs/PERIMETER_REFINEMENT.md` will be broken for fresh clones.
 - **PyVista is not in requirements.** It must be installed separately for 3D visualization scripts.
 - **Experiment YAML format:** Both scripts accept sectioned YAML (`experiment`/`relaxation`/`surface`/`refinement` keys) and legacy flat YAML (all keys at top level). `from_yaml_dict()` on both config dataclasses handles both formats.
-- **`cluster/submit.sh`** defaults surface to `ring` in the YAML fallback; always pass `--config` with a valid experiment YAML to select the desired surface.
+- **Cluster scripts** target UPPMAX Pelle. Edit `cluster/pelle_config.sh` to set your project ID and paths before first use. Verify the Python module version with `module spider python` on Pelle.
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
 
