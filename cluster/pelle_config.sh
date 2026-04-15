@@ -4,18 +4,22 @@
 #
 # FIRST-TIME SETUP ON PELLE:
 #   1. Edit PROJECT_ID and PROJECT_BASE below to match your UPPMAX allocation
-#   2. Clone the repo:  git clone <url> /proj/uppmax2025-2-XXX/surface-partition
+#   2. Clone the repo:  git clone <url> ~/surface-partition
 #   3. Create venv:
 #        module load Python/3.11.5-GCCcore-13.2.0
 #        python -m venv ${HOME}/venvs/surface-partition
 #        source ${HOME}/venvs/surface-partition/bin/activate
-#        cd /proj/uppmax2025-2-XXX/surface-partition && pip install -e ".[all]"
+#        cd ~/surface-partition && pip install -e ".[all]"
 #   4. Verify:  python -c "import numpy, scipy, h5py; print('OK')"
+#
+# Directory conventions on UPPMAX:
+#   ~/                  — Code, repos, scripts (small, backed up, 32 GB quota)
+#   /proj/<allocation>/ — Large data: results, HDF5 solutions (large quota, not backed up)
 
 # --- Project Configuration (USER MUST EDIT) ---
 PROJECT_ID="uppmax2025-2-XXX"
 PROJECT_BASE="/proj/uppmax2025-2-XXX"
-REPO_DIR="${PROJECT_BASE}/surface-partition"
+REPO_DIR="${HOME}/surface-partition"
 
 # --- Python Environment ---
 PYTHON_MODULE="Python/3.11.5-GCCcore-13.2.0"

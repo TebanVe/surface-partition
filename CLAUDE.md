@@ -360,8 +360,11 @@ Parameters that must scale together (e.g., `n_grid_x` and `n_grid_y`) are placed
 ### Running on Pelle (UPPMAX Cluster)
 
 **First-time setup:**
-1. Edit `cluster/pelle_config.sh` — set `PROJECT_ID`, `PROJECT_BASE`, and verify `PYTHON_MODULE`
-2. Create venv on Pelle: see setup instructions in `pelle_config.sh`
+1. Clone the repo to `$HOME`: `git clone <url> ~/surface-partition`
+2. Edit `cluster/pelle_config.sh` — set `PROJECT_ID`, `PROJECT_BASE`, and verify `PYTHON_MODULE`
+3. Create venv on Pelle: see setup instructions in `pelle_config.sh`
+
+Code and scripts live in `$HOME` (small, backed up). Large output data (results, HDF5) goes under `/proj/<allocation>/`.
 
 **Single relaxation job:**
 ```bash
