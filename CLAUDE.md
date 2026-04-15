@@ -39,6 +39,16 @@ python scripts/visualize_type2_triple_point.py --solution <path_to_refined.h5> -
 
 # Analysis
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
+
+# Parameter sweeps (sweep/ directory — independent from core scripts)
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml                      # local-sequential
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode local-parallel --workers 4
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode generate-only  # configs only
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect        # scan & index
+
+# Sweep analysis (reads experiment_index.yaml)
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/ --metric final_energy
 ```
 
 ## Testing
@@ -97,12 +107,13 @@ src/
 │   └── io.py                     # HDF5 loaders, detect_run_layout(), find_base_solution_path()
 ├── visualization/
 │   ├── plot_utils.py             # Matplotlib utilities
-│   └── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+│   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+│   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
-├── optimization_analyzer.py      # Result analysis and plotting
+├── optimization_analyzer.py      # Per-run analysis and plotting
 ├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
 ├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
@@ -116,6 +127,12 @@ parameters/
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
 ├── double_torus_4part.yaml       # Double torus, 4 partitions (implicit / marching cubes)
 └── banchoff_chmutov_4part.yaml   # Banchoff-Chmutov order 4, 4 partitions (implicit / marching cubes)
+sweep/                              # Parameter sweep tool (independent from core pipeline)
+├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
+├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
+└── parameters/
+    ├── sweep_torus_lambda.yaml       # Sweep: lambda × seed for torus (grid strategy)
+    └── sweep_double_torus_lambda.yaml  # Sweep: lambda × resolution for double torus (grouped grid)
 cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
 ```
 
@@ -162,6 +179,39 @@ and a `refinement.log` with full Phase 2 logs.
 Layout detection (`detect_run_layout()` in `src/pipeline/io.py`) supports
 both this structured layout and the legacy flat layout for backward
 compatibility with older result directories.
+
+### Experiment Directory Layout (Parameter Sweeps)
+
+When using `parameter_sweep.py`, runs are grouped by experiment identity
+(`{surface}_npart{N}`) rather than by sweep invocation:
+
+```
+results/torus_npart10/
+├── experiment_index.yaml                      # auto-maintained index of all runs
+├── run_20260413_120100_..._lam0.5_seed42/     # from sweep "lambda-coarse"
+│   ├── experiment.yaml
+│   ├── solution/
+│   ├── traces/
+│   ├── analysis/                              # auto-generated plots + screenshots
+│   └── logs/
+├── run_20260413_120200_..._lam1.0_seed42/
+│   └── ...
+├── sweeps/                                    # provenance: which sweeps ran here
+│   ├── 20260413_120000_lambda-coarse.yaml     # copy of sweep spec
+│   ├── 20260413_120000_lambda-coarse_summary.csv
+│   └── 20260413_120000_lambda-coarse_run001.yaml  # per-run generated configs
+└── analysis/                                  # experiment-wide analysis plots
+    ├── heatmap_perimeter.png
+    ├── line_perimeter.png
+    ├── convergence_overlay.png
+    └── sensitivity_perimeter.png
+```
+
+`experiment_index.yaml` is the central index listing every run with its
+parameters, status, and key metrics (perimeter, final_energy, initial_N,
+final_N, converged, total_iterations). Perimeter is the primary comparison
+metric because it is resolution-independent (unlike energy, which is
+ε-dependent).
 
 ### Key Classes and Their Roles
 
@@ -270,6 +320,38 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 ### Modifying Perimeter Optimization
 
 `PerimeterOptimizer` delegates to `PerimeterCalculator`, `AreaCalculator`, and `SteinerHandler` (or their vectorized counterparts). To change the objective or constraints, modify these calculators. The `PartitionArrays` class pre-computes sparsity patterns for IPOPT.
+
+### Running a Parameter Sweep
+
+1. Create a sweep YAML spec (see `sweep/parameters/sweep_torus_lambda.yaml` for examples).
+2. Generate configs and run:
+   ```bash
+   # Preview what will run
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode generate-only
+
+   # Execute sequentially
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml
+
+   # Execute in parallel (4 workers)
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode local-parallel --workers 4
+
+   # Resume an interrupted sweep (skips completed runs)
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --resume
+   ```
+3. After runs complete, `experiment_index.yaml` is updated automatically. To rescan manually:
+   ```bash
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect
+   ```
+4. Generate experiment-wide analysis plots:
+   ```bash
+   python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+   ```
+
+Sweep specs support two combination strategies:
+- `strategy: grid` — Cartesian product of all parameter lists
+- `strategy: paired` — zip together (all lists must have equal length)
+
+Parameters that must scale together (e.g., `n_grid_x` and `n_grid_y`) are placed in a named group — the group's parameters are zipped internally, then the group participates in the cross-strategy as a unit.
 
 ## Gotchas and Known Issues
 
