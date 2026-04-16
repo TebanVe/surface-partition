@@ -778,7 +778,8 @@ def _build_provider(surface_name, surface_params, v1_init, v2_init,
         )
 
     if surface_name in ('double_torus', 'banchoff_chmutov'):
-        n_grid_z = v1_init
+        base_ngx, base_ngy, base_ngz = v1_init, v2_init, v1_init
+        incr_x, incr_y = 0, 0
         exp_yaml = os.path.join(results_dir, 'experiment.yaml')
         if not os.path.exists(exp_yaml):
             exp_yaml = os.path.join(os.path.dirname(results_dir.rstrip('/')),
@@ -787,18 +788,26 @@ def _build_provider(surface_name, surface_params, v1_init, v2_init,
             with open(exp_yaml, 'r') as f:
                 exp_config = yaml.safe_load(f) or {}
             surf_section = exp_config.get('surface', {}).get(surface_name, {})
-            n_grid_z = int(surf_section.get('n_grid_z', v1_init))
+            base_ngx = int(surf_section.get('n_grid_x', v1_init))
+            base_ngy = int(surf_section.get('n_grid_y', v2_init))
+            base_ngz = int(surf_section.get('n_grid_z', v1_init))
+            incr_x = int(surf_section.get('n_grid_x_increment', 0))
+            incr_y = int(surf_section.get('n_grid_y_increment', 0))
 
         if surface_name == 'double_torus':
             from src.surfaces.double_torus import DoubleTorusMeshProvider
             return DoubleTorusMeshProvider(
-                v1_init, v2_init, n_grid_z,
+                base_ngx, base_ngy, base_ngz,
                 c=float(surface_params.get('c', 0.03)),
+                n_grid_x_increment=incr_x,
+                n_grid_y_increment=incr_y,
             )
         else:
             from src.surfaces.banchoff_chmutov import BanchoffChmutovMeshProvider
             return BanchoffChmutovMeshProvider(
-                v1_init, v2_init, n_grid_z,
+                base_ngx, base_ngy, base_ngz,
+                n_grid_x_increment=incr_x,
+                n_grid_y_increment=incr_y,
             )
 
     logger.error(f"Unsupported surface in metadata: {surface_name}")
@@ -884,16 +893,27 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
         v1_eff = int(lm.get(label1, lm.get('v1', v1_init)))
         v2_eff = int(lm.get(label2, lm.get('v2', v2_init)))
         provider.set_resolution(v1_eff, v2_eff)
+        ngz_stored = lm.get('ngz')
+        if ngz_stored is not None and hasattr(provider, 'n_grid_z'):
+            provider.n_grid_z = int(ngz_stored)
         mesh_level = provider.build()
         mesh_level.compute_matrices()
         v_level = mesh_level.v
+        N_meta = int(lm.get('N', 0))
+        if N_meta > 0 and len(v_level) != N_meta:
+            logger.warning(
+                f"Level {lm.get('level')}: rebuilt mesh has {len(v_level)} "
+                f"vertices but metadata records N={N_meta}. "
+                f"Skipping constraint data for this level."
+            )
+            continue
         internal_data_file = lm.get('files', {}).get('internal_data')
         start_global = int(lm.get('iters', {}).get('start_index_global', 0))
         if internal_data_file and not os.path.exists(internal_data_file) and structured:
             basename = os.path.basename(internal_data_file)
             internal_data_file = os.path.join(results_dir, 'traces', basename)
         if internal_data_file and os.path.exists(internal_data_file):
-            results.append({'internal_data_file': internal_data_file, 'v': v_level, 'N_meta': int(lm.get('N', len(v_level))), 'start_index_global': start_global})
+            results.append({'internal_data_file': internal_data_file, 'v': v_level, 'N_meta': N_meta, 'start_index_global': start_global})
      
     constraint_data = extract_constraint_evolution(results, n_partitions, logger)
     

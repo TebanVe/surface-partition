@@ -237,7 +237,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             level_result['epsilon'] = level_ctx['epsilon']
 
             results.append(level_result)
-            levels_meta.append({
+            level_info = {
                 'level': level,
                 label1: int(provider.get_resolution()[0]),
                 label2: int(provider.get_resolution()[1]),
@@ -248,7 +248,10 @@ def run_relaxation(provider, config: RelaxationConfig,
                 'iters': {
                     'num_iterations': int(level_result['iterations'])
                 },
-            })
+            }
+            if hasattr(provider, 'n_grid_z'):
+                level_info['ngz'] = int(provider.n_grid_z)
+            levels_meta.append(level_info)
 
             logger.info(f"Results for level {level+1}:")
             logger.info(f"  Energy: {level_result['energy']:.6e}")
@@ -294,13 +297,14 @@ def run_relaxation(provider, config: RelaxationConfig,
             " Level    Mesh Size       Energy Iterations   Time (s)"
         )
         logger.info("-" * 80)
-        for i, res in enumerate(results, start=1):
-            lv = levels_meta[i - 1]
+        for i, res in enumerate(results):
+            lv = levels_meta[i]
+            level_num = int(lv.get('level', i)) + 1
             mesh_size = (
                 f"{int(lv.get(label1, 0))}x{int(lv.get(label2, 0))}"
             )
             logger.info(
-                f"{i:6d} {mesh_size:>11s} {res['energy']:12.6e} "
+                f"{level_num:6d} {mesh_size:>11s} {res['energy']:12.6e} "
                 f"{res['iterations']:10d} {res['elapsed']:10.2f}"
             )
         if initial_perimeter is not None:

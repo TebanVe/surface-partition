@@ -11,7 +11,7 @@ relaxation:
   lambda_penalty: 3.25
   seed: 13001502
   max_iter: 25000
-  refinement_levels: 7                # number of multi-level mesh refinement steps
+  refinement_levels: 5                # number of multi-level mesh refinement steps
   use_analytic: true
   use_discrete_area_for_constraints: true
 
