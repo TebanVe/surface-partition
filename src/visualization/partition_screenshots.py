@@ -53,19 +53,9 @@ def render_partition_screenshots(
         logger.debug("PyVista not installed — skipping partition screenshots")
         return []
 
-    # Skip rendering in environments where OpenGL is unavailable (headless
-    # servers, sandboxes) to avoid a potential segfault from VTK.
-    import os as _os
-
-    if _os.environ.get("DISPLAY") == "" or (
-        sys.platform == "linux" and "DISPLAY" not in _os.environ
-    ):
-        logger.debug(
-            "No DISPLAY set — skipping offscreen screenshots to avoid segfault"
-        )
-        return []
-
     # Quick sanity check: verify VTK can create an offscreen context.
+    # Note: no DISPLAY guard here — VTK's software renderer handles headless
+    # environments (e.g. SLURM nodes with Mesa) without a display.
     try:
         _test = pv.Plotter(off_screen=True, window_size=(64, 64))
         _test.close()

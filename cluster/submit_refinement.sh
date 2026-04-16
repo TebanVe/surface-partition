@@ -77,7 +77,8 @@ JOB_NAME="refine_${SURFACE}_npart${N_PARTITIONS}"
 JOB_NAME="${JOB_NAME:0:128}"
 
 # --- Build Python command ---
-PYTHON_CMD="python scripts/refine_perimeter.py --solution ${SOLUTION_ABS} --config ${CONFIG_ABS}"
+# Use absolute path for the script so it works regardless of working directory
+PYTHON_CMD="python ${REPO_DIR}/scripts/refine_perimeter.py --solution ${SOLUTION_ABS} --config ${CONFIG_ABS}"
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     PYTHON_CMD+=" ${EXTRA_ARGS[*]}"
 fi
@@ -98,7 +99,10 @@ read -r -d '' SLURM_SCRIPT << SLURM_EOF || true
 
 source ${SCRIPT_DIR}/pelle_config.sh
 activate_env
-cd ${REPO_DIR}
+# cd to PROJECT_BASE so the default relative output "results/run_..."
+# resolves to PROJECT_BASE/results/run_... instead of the home directory
+mkdir -p ${PROJECT_BASE}
+cd ${PROJECT_BASE}
 
 export OMP_NUM_THREADS=\${SLURM_CPUS_PER_TASK}
 export MKL_NUM_THREADS=\${SLURM_CPUS_PER_TASK}
