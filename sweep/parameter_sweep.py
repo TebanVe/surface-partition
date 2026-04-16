@@ -176,6 +176,8 @@ def run_post_analysis(run_dir: str) -> None:
 
     # 1. Optimization metrics (matplotlib — always available)
     try:
+        import matplotlib
+        matplotlib.use("agg")
         from scripts.optimization_analyzer import analyze_optimization_run
 
         analyze_optimization_run(run_dir)
