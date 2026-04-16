@@ -51,7 +51,7 @@ activate_env() {
 }
 
 abspath() {
-    python3 -c "import os,sys; p=sys.argv[1]; print(p if os.path.isabs(p) else os.path.join(os.getcwd(),p))" "$1"
+    if [[ "$1" = /* ]]; then echo "$1"; else echo "${PWD}/$1"; fi
 }
 
 extract_yaml() {
