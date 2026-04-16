@@ -80,8 +80,11 @@ PYTHON_CMD="python scripts/find_surface_partition.py --config ${CONFIG_ABS}"
 if [[ -n "$RESUME_FROM" ]]; then
     PYTHON_CMD+=" --resume-from $(abspath "$RESUME_FROM")"
 fi
+# Use explicit --solution-dir if given, otherwise default to RESULTS_BASE
 if [[ -n "$SOLUTION_DIR" ]]; then
     PYTHON_CMD+=" --solution-dir $(abspath "$SOLUTION_DIR")"
+elif [[ -n "${RESULTS_BASE:-}" ]]; then
+    PYTHON_CMD+=" --solution-dir ${RESULTS_BASE}"
 fi
 
 # --- Build SLURM script ---

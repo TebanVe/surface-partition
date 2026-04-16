@@ -21,6 +21,7 @@
 PROJECT_ID="uppmax2025-2-534"
 PROJECT_BASE="/proj/snic2020-15-36/private/LINKED_LST_MANIFOLD"
 REPO_DIR="/home/teban66/projects/surface-partition"
+RESULTS_BASE="${PROJECT_BASE}/results"
 
 # --- Python Environment ---
 # Verify available modules on Pelle with: module spider Python
