@@ -76,15 +76,13 @@ JOB_NAME="relax_${SURFACE}_npart${N_PARTITIONS}_${RES_TAG}_lam${LAMBDA}_s${SEED}
 JOB_NAME="${JOB_NAME:0:128}"
 
 # --- Build Python command ---
-PYTHON_CMD="python scripts/find_surface_partition.py --config ${CONFIG_ABS}"
+# Use absolute path for the script so it works regardless of working directory
+PYTHON_CMD="python ${REPO_DIR}/scripts/find_surface_partition.py --config ${CONFIG_ABS}"
 if [[ -n "$RESUME_FROM" ]]; then
     PYTHON_CMD+=" --resume-from $(abspath "$RESUME_FROM")"
 fi
-# Use explicit --solution-dir if given, otherwise default to RESULTS_BASE
 if [[ -n "$SOLUTION_DIR" ]]; then
     PYTHON_CMD+=" --solution-dir $(abspath "$SOLUTION_DIR")"
-elif [[ -n "${RESULTS_BASE:-}" ]]; then
-    PYTHON_CMD+=" --solution-dir ${RESULTS_BASE}"
 fi
 
 # --- Build SLURM script ---
@@ -103,7 +101,10 @@ read -r -d '' SLURM_SCRIPT << SLURM_EOF || true
 
 source ${SCRIPT_DIR}/pelle_config.sh
 activate_env
-cd ${REPO_DIR}
+# cd to PROJECT_BASE so the default relative output "results/run_..."
+# resolves to PROJECT_BASE/results/run_... instead of the home directory
+mkdir -p ${PROJECT_BASE}
+cd ${PROJECT_BASE}
 
 export OMP_NUM_THREADS=\${SLURM_CPUS_PER_TASK}
 export MKL_NUM_THREADS=\${SLURM_CPUS_PER_TASK}
