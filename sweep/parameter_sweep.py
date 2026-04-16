@@ -386,6 +386,53 @@ def run_parallel(
 # Result collection
 # ---------------------------------------------------------------------------
 
+def _gather_flat_runs(
+    experiment_dir: str, surface: str, n_partitions: int
+) -> int:
+    """Move flat run_* directories from the parent into the experiment directory.
+
+    On clusters, SLURM relaxation jobs create ``results/run_...`` under the
+    project base directory (flat) rather than inside the experiment
+    subdirectory.  This function detects matching runs in the parent and moves
+    them in before collection.
+    """
+    parent = os.path.dirname(os.path.abspath(experiment_dir))
+    if not os.path.isdir(parent):
+        return 0
+
+    experiment_abs = os.path.abspath(experiment_dir)
+    moved = 0
+    for entry in sorted(os.listdir(parent)):
+        if not entry.startswith("run_"):
+            continue
+        src_path = os.path.join(parent, entry)
+        if not os.path.isdir(src_path):
+            continue
+
+        meta_path = os.path.join(src_path, "solution", "metadata.yaml")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            meta = _load_yaml(meta_path)
+            inp = meta.get("input_parameters", {})
+            run_surface = inp.get("surface")
+            run_npart = inp.get("n_partitions")
+            if str(run_surface) != str(surface) or int(run_npart) != int(n_partitions):
+                continue
+        except Exception:
+            continue
+
+        dest = os.path.join(experiment_abs, entry)
+        if os.path.exists(dest):
+            continue
+
+        shutil.move(src_path, dest)
+        logger.info(f"Gathered: {entry} -> {os.path.basename(experiment_dir)}/")
+        moved += 1
+
+    return moved
+
+
 def _extract_run_metrics(run_dir: str) -> Optional[dict]:
     """Extract metrics from a single run directory's metadata.yaml."""
     meta_path = os.path.join(run_dir, "solution", "metadata.yaml")
@@ -439,21 +486,28 @@ def collect_results(
     experiment_dir: str,
     sweep_spec: Optional[dict] = None,
     sweep_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    n_partitions: Optional[int] = None,
 ) -> dict:
     """Scan experiment directory, update experiment_index.yaml, and optionally
     write a sweep-specific summary CSV.
 
     Returns the updated index dict.
     """
-    surface = None
-    n_partitions = None
+    # Gather flat runs from the parent directory (cluster layout)
+    if surface and n_partitions:
+        gathered = _gather_flat_runs(experiment_dir, surface, n_partitions)
+        if gathered:
+            logger.info(f"Gathered {gathered} run(s) into {experiment_dir}")
 
     existing_index_path = os.path.join(experiment_dir, "experiment_index.yaml")
     existing_index: dict = {}
     if os.path.isfile(existing_index_path):
         existing_index = _load_yaml(existing_index_path) or {}
-        surface = existing_index.get("surface")
-        n_partitions = existing_index.get("n_partitions")
+        if surface is None:
+            surface = existing_index.get("surface")
+        if n_partitions is None:
+            n_partitions = existing_index.get("n_partitions")
 
     existing_runs_by_dir = {}
     for run_entry in existing_index.get("runs", []):
@@ -606,7 +660,8 @@ def main():
     sweep_id = f"{timestamp}_{sweep_name}"
 
     if args.mode == "collect":
-        collect_results(experiment_dir, sweep_spec, sweep_id)
+        collect_results(experiment_dir, sweep_spec, sweep_id,
+                        surface=surface, n_partitions=n_partitions)
         print(f"Results collected in {experiment_dir}/experiment_index.yaml")
         return 0
 
@@ -663,7 +718,8 @@ def main():
         )
 
     if not args.dry_run:
-        collect_results(experiment_dir, sweep_spec, sweep_id)
+        collect_results(experiment_dir, sweep_spec, sweep_id,
+                        surface=surface, n_partitions=n_partitions)
         print(f"\nSweep complete. Results in {experiment_dir}")
         print(f"Index: {experiment_dir}/experiment_index.yaml")
 

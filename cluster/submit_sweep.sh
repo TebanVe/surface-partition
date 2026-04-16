@@ -51,10 +51,11 @@ fi
 
 # --- Generate per-run configs ---
 echo "Generating per-run configs from sweep spec..."
-GENERATE_CMD="python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode generate-only"
-if [[ -n "$OUTPUT_DIR" ]]; then
-    GENERATE_CMD+=" --output-dir $(abspath "$OUTPUT_DIR")"
-fi
+# Default output-dir to RESULTS_BASE so experiment dirs and configs land on
+# /proj/... alongside the run output, not in the home directory.
+SWEEP_OUTPUT_DIR="${OUTPUT_DIR:-${RESULTS_BASE}}"
+SWEEP_OUTPUT_DIR_ABS="$(abspath "$SWEEP_OUTPUT_DIR")"
+GENERATE_CMD="python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode generate-only --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
 
 cd "${REPO_DIR}"
 GENERATE_OUTPUT=$($GENERATE_CMD 2>&1)
@@ -138,7 +139,7 @@ source ${SCRIPT_DIR}/pelle_config.sh
 activate_env
 cd ${REPO_DIR}
 
-python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode collect
+python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}
 COLLECT_EOF
     )
     echo ""
@@ -150,5 +151,5 @@ fi
 if [[ "$DRY_RUN" == false ]]; then
     echo ""
     echo "To collect results manually after all jobs finish:"
-    echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect"
+    echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
 fi
