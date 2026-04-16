@@ -638,6 +638,7 @@ def main():
         if args.dry_run or args.mode == "generate-only":
             override_strs = [f"{k}={v}" for k, v in combo.items()]
             print(f"  Run {i:3d}: {', '.join(override_strs)}")
+        print(config_path)
 
     if args.mode == "generate-only":
         print(f"\nGenerated {len(configs)} configs in {sweeps_dir}")
