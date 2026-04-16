@@ -97,34 +97,38 @@ def render_partition_screenshots(
         ts.triangle_idx: ts for ts in partition.triangle_segments
     }
 
+    # Build the scene once, then screenshot from each camera angle
+    try:
+        plotter = pv.Plotter(off_screen=True, window_size=window_size)
+        _add_partition_mesh(
+            plotter, mesh, partition, area_calc, steiner_handler,
+            n_cells, tri_idx_to_segment,
+        )
+        plotter.show(auto_close=False)
+    except Exception as exc:
+        logger.warning(f"Failed to build partition scene: {exc}")
+        return []
+
     saved: List[str] = []
     for name, cam in angles.items():
         try:
-            plotter = pv.Plotter(off_screen=True, window_size=window_size)
-
-            _add_partition_mesh(
-                plotter, mesh, partition, area_calc, steiner_handler,
-                n_cells, tri_idx_to_segment,
-            )
-
-            # Scale camera position relative to bounding box
             direction = np.array(cam["position"], dtype=float)
             direction = direction / (np.linalg.norm(direction) + 1e-12)
             cam_pos = bbox_center + direction * cam_distance
-            viewup = cam["viewup"]
             plotter.camera_position = [
                 cam_pos.tolist(),
                 bbox_center.tolist(),
-                list(viewup),
+                list(cam["viewup"]),
             ]
+            plotter.render()
 
             out_path = str(Path(output_dir) / f"partition_{name}.png")
             plotter.screenshot(out_path)
-            plotter.close()
             saved.append(out_path)
         except Exception as exc:
             logger.warning(f"Screenshot '{name}' failed: {exc}")
 
+    plotter.close()
     return saved
 
 
@@ -134,12 +138,8 @@ def render_partition_screenshots(
 
 def _load_partition_data(solution_path: str):
     """Load mesh, partition, area calculator, and Steiner handler."""
-    import os
     import h5py
 
-    from ..mesh.tri_mesh import TriMesh
-    from ..partition.find_contours import ContourAnalyzer
-    from ..partition.contour_partition import PartitionContour
     from ..partition.area_calculator import AreaCalculator
     from ..partition.steiner_handler import SteinerHandler
     from ..pipeline.io import load_partition_from_refined_file, load_partition_from_base_file
