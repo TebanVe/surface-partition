@@ -3,27 +3,29 @@
 # Sourced by submit_relaxation.sh, submit_refinement.sh, submit_sweep.sh.
 #
 # FIRST-TIME SETUP ON PELLE:
-#   1. Edit PROJECT_ID and PROJECT_BASE below to match your UPPMAX allocation
-#   2. Clone the repo:  git clone <url> ~/surface-partition
-#   3. Create venv:
-#        module load Python/3.11.5-GCCcore-13.2.0
-#        python -m venv ${HOME}/venvs/surface-partition
-#        source ${HOME}/venvs/surface-partition/bin/activate
-#        cd ~/surface-partition && pip install -e ".[all]"
+#   1. Clone the repo:  git clone <url> /home/teban66/projects/surface-partition
+#   2. Create venv (first time only):
+#        module load Python/3.11.5-GCCcore-13.3.0
+#        python -m venv /home/teban66/venvs/surface-partition
+#        source /home/teban66/venvs/surface-partition/bin/activate
+#        pip install --upgrade pip
+#   3. Install dependencies (cyipopt excluded — IPOPT not available on Pelle):
+#        cd /home/teban66/projects/surface-partition && pip install -e ".[viz,implicit]"
 #   4. Verify:  python -c "import numpy, scipy, h5py; print('OK')"
 #
 # Directory conventions on UPPMAX:
 #   ~/                  — Code, repos, scripts (small, backed up, 32 GB quota)
 #   /proj/<allocation>/ — Large data: results, HDF5 solutions (large quota, not backed up)
 
-# --- Project Configuration (USER MUST EDIT) ---
-PROJECT_ID="uppmax2025-2-XXX"
-PROJECT_BASE="/proj/uppmax2025-2-XXX"
-REPO_DIR="${HOME}/surface-partition"
+# --- Project Configuration ---
+PROJECT_ID="snic2020-15-36"
+PROJECT_BASE="/proj/snic2020-15-36/private/LINKED_LST_MANIFOLD"
+REPO_DIR="/home/teban66/projects/surface-partition"
 
 # --- Python Environment ---
-PYTHON_MODULE="Python/3.11.5-GCCcore-13.2.0"
-VENV_DIR="${HOME}/venvs/surface-partition"
+# Verify available modules on Pelle with: module spider Python
+PYTHON_MODULE="Python/3.11.5-GCCcore-13.3.0"
+VENV_DIR="/home/teban66/venvs/surface-partition"
 
 # --- SLURM Defaults ---
 DEFAULT_TIME="12:00:00"
@@ -42,14 +44,14 @@ activate_env() {
         echo "  module load ${PYTHON_MODULE}"
         echo "  python -m venv ${VENV_DIR}"
         echo "  source ${VENV_DIR}/bin/activate"
-        echo "  cd ${REPO_DIR} && pip install -e '.[all]'"
+        echo "  cd ${REPO_DIR} && pip install -e '.[viz,implicit]'"
         exit 1
     fi
     export MPLBACKEND=Agg
 }
 
 abspath() {
-    python3 -c "import os,sys; print(os.path.abspath(sys.argv[1]))" "$1"
+    python3 -c "import os,sys; p=sys.argv[1]; print(p if os.path.isabs(p) else os.path.join(os.getcwd(),p))" "$1"
 }
 
 extract_yaml() {
