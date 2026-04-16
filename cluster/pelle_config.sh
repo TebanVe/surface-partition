@@ -18,7 +18,7 @@
 #   /proj/<allocation>/ — Large data: results, HDF5 solutions (large quota, not backed up)
 
 # --- Project Configuration ---
-PROJECT_ID="snic2020-15-36"
+PROJECT_ID="uppmax2025-2-534"
 PROJECT_BASE="/proj/snic2020-15-36/private/LINKED_LST_MANIFOLD"
 REPO_DIR="/home/teban66/projects/surface-partition"
 
