@@ -37,7 +37,6 @@ DEFAULT_MEM="16G"
 
 activate_env() {
     module load "${PYTHON_MODULE}"
-    module load Mesa/24.1.3-GCCcore-13.3.0
     if [ -d "${VENV_DIR}" ]; then
         source "${VENV_DIR}/bin/activate"
     else
