@@ -223,13 +223,24 @@ def _render_screenshots_subprocess(solution_h5: str, output_dir: str) -> None:
 # Run execution
 # ---------------------------------------------------------------------------
 
+_RESOLUTION_KEY_MAP: Dict[str, str] = {
+    "n_grid_x": "ngx",
+    "n_grid_y": "ngy",
+    "n_grid_z": "ngz",
+    "n_theta": "ntheta",
+    "n_phi": "nphi",
+}
+
+
 def _find_existing_run(experiment_dir: str, combo: Dict[str, Any]) -> Optional[str]:
     """Find an existing run directory whose config matches *combo*.
 
     Checks each ``run_*`` subdirectory for ``solution/metadata.yaml`` and
-    compares the relevant parameters.  Parameters that are not found in
-    the metadata are skipped (they may be internal PGD settings not recorded
-    in the output).
+    compares the relevant parameters.  Resolution parameters (``n_grid_x``,
+    ``n_theta``, etc.) are translated to the abbreviated labels used in
+    metadata levels (``ngx``, ``ntheta``, etc.) via ``_RESOLUTION_KEY_MAP``.
+    Parameters that are not found in the metadata are skipped (they may be
+    internal PGD settings not recorded in the output).
     """
     for entry in sorted(os.listdir(experiment_dir)):
         if not entry.startswith("run_"):
@@ -248,10 +259,11 @@ def _find_existing_run(experiment_dir: str, combo: Dict[str, Any]) -> Optional[s
             parts = dotpath.split(".")
             key = parts[-1]
             meta_val = inp.get(key)
-            if key.startswith("n_grid_") or key.startswith("n_theta") or key.startswith("n_phi"):
+            if key in _RESOLUTION_KEY_MAP:
                 levels = meta.get("levels", [])
                 if levels:
-                    meta_val = levels[0].get(key, meta_val)
+                    level_key = _RESOLUTION_KEY_MAP[key]
+                    meta_val = levels[0].get(level_key, meta_val)
             if meta_val is None:
                 sp = inp.get("surface_params", {})
                 meta_val = sp.get(key, meta_val)
