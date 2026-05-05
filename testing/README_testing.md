@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the surface partition project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-05-05 (May 5, 2026)
+**Last Updated**: 2026-05-05 (May 5, 2026) — Test 5 retired after validation
 
 ---
 
@@ -456,13 +456,13 @@ python testing/test_migrations_debug.py \
 
 ### Test 5: Phase A Vectorised Hessian Equivalence
 
-**File**: `test_phase_a_vectorised_hessian.py`
+**File**: ~~`test_phase_a_vectorised_hessian.py`~~ _(deleted 2026-05-05)_
 
-**Status**: ✅ APPROVED
+**Status**: ✅ APPROVED → 🗑️ DELETED
 
 **Created**: 2026-05-05
 
-**Approved**: 2026-05-05
+**Approved and deleted**: 2026-05-05
 
 **Objective**:
 Lock in the Phase A refactor described in `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md` §3 — replacing per-row Python loops in `compute_perimeter_hessian_sparse` and `compute_area_hessian_sparse` with vectorised `np.add.at` calls on pre-computed offset arrays. Guards against any future regression where the new offset arrays drift out of sync with `hess_offset_map`.
@@ -522,9 +522,8 @@ RESULT: PASS
 - `src/partition/vectorized_area.py` (`compute_area_hessian_sparse`)
 - `src/optimization/perimeter_optimizer.py`, `src/pipeline/io.py`
 
-**Notes**:
-- Exit code `0` on PASS, `1` on FAIL, suitable for CI smoke checks.
-- Future Phase B tests (`test_exact_hessian_vs_fd.py`, `compare_hessian_modes.py`) and the analytical-Steiner work will rely on the vectorised path validated by this test.
+**Why deleted**:
+The test was written as a one-time refactor validator; its only mechanism was forcing the legacy Python-loop fallback via monkey-patching and comparing against `np.add.at` output. Once the refactor was confirmed correct (worst `max|Δ| = 5.6e-17`) and the fallback branches were removed from the source, the test had no further comparison reference and no ongoing regression value. Future Hessian correctness is covered by the Phase B harness (`test_exact_hessian_vs_fd.py`), which tests against mathematical ground truth (finite differences) rather than against a deleted code path. Historical validation results are recorded in this entry.
 
 ---
 
@@ -547,7 +546,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
-| 2026-05-05 | Added Test 5 (Phase A vectorised Hessian regression test) | System |
+| 2026-05-05 | Added Test 5 (Phase A vectorised Hessian); validated and deleted after removing fallback branches | System |
 | 2026-03-24 | Deleted test_lambda_edge_roundtrip.py (resolved diagnostic); noted broken import in test_self_healing_selection.py; promoted refine_perimeter_iterative.py to APPROVED; added Test 5 (vectorized evaluation) | System |
 | 2026-03-03 | Added Test 4 (migration debug, no opt/export) | System |
 | 2026-02-08 | Added Test 3 (iterative perimeter refinement) | System |
