@@ -84,3 +84,25 @@ class PartitionArrays:
     hess_row: Optional[np.ndarray] = None     # int32 (hess_nnz,) — row indices (row >= col)
     hess_col: Optional[np.ndarray] = None     # int32 (hess_nnz,) — col indices
     hess_offset_map: Optional[Dict[Tuple[int, int], int]] = field(default=None, repr=False)
+
+    # --- Phase A: pre-computed Hessian offsets for fast accumulation ---
+    # See docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md §3.1.  These arrays
+    # let the vectorised Hessian builders use np.add.at(values, offsets, ...)
+    # instead of per-row Python loops with hess_offset_map dict lookups.
+    # Offsets index into the flat (hess_nnz,) values array.
+    seg_hess_off_aa: Optional[np.ndarray] = None   # int32 (n_segments,)
+    seg_hess_off_bb: Optional[np.ndarray] = None   # int32 (n_segments,)
+    seg_hess_off_ab: Optional[np.ndarray] = None   # int32 (n_segments,) — lower-triangle (max,min)
+
+    # Boundary triangles split by n_inside.  Order matches how
+    # compute_area_hessian_sparse iterates (mask m1 = btri_n_inside == 1
+    # first, then m2 = btri_n_inside == 2).
+    btri1_hess_off_aa: Optional[np.ndarray] = None   # int32 (n_btri_1,)
+    btri1_hess_off_bb: Optional[np.ndarray] = None   # int32 (n_btri_1,)
+    btri1_hess_off_ab: Optional[np.ndarray] = None   # int32 (n_btri_1,)
+    btri1_cell_active: Optional[np.ndarray] = None   # bool  (n_btri_1,) — cell < n_cells-1
+
+    btri2_hess_off_aa: Optional[np.ndarray] = None   # int32 (n_btri_2,)
+    btri2_hess_off_bb: Optional[np.ndarray] = None   # int32 (n_btri_2,)
+    btri2_hess_off_ab: Optional[np.ndarray] = None   # int32 (n_btri_2,)
+    btri2_cell_active: Optional[np.ndarray] = None   # bool  (n_btri_2,)

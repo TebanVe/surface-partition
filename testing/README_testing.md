@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the surface partition project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-04-03 (April 3, 2026)
+**Last Updated**: 2026-05-05 (May 5, 2026)
 
 ---
 
@@ -454,6 +454,80 @@ python testing/test_migrations_debug.py \
 
 ---
 
+### Test 5: Phase A Vectorised Hessian Equivalence
+
+**File**: `test_phase_a_vectorised_hessian.py`
+
+**Status**: ✅ APPROVED
+
+**Created**: 2026-05-05
+
+**Approved**: 2026-05-05
+
+**Objective**:
+Lock in the Phase A refactor described in `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md` §3 — replacing per-row Python loops in `compute_perimeter_hessian_sparse` and `compute_area_hessian_sparse` with vectorised `np.add.at` calls on pre-computed offset arrays. Guards against any future regression where the new offset arrays drift out of sync with `hess_offset_map`.
+
+**What it validates**:
+- The new vectorised path (using `seg_hess_off_*`, `btri{1,2}_hess_off_*`) returns numerically identical Hessian values (to `atol=1e-12, rtol=0`) as the legacy per-row Python loop.
+- Both kernels agree across three regimes: regular perimeter Hessian, area Hessian with zero multipliers (no contribution), and area Hessian with a deterministic random multiplier vector (`np.random.default_rng(42)`).
+- All nine Phase A offset fields on `PartitionArrays` are populated (non-`None`) after `compile_arrays()`.
+
+**Implementation**:
+The same process is used to compare both paths — no git stashing needed. The legacy fallback `else:` branches in `compute_perimeter_hessian_sparse` and `compute_area_hessian_sparse` are byte-for-byte the original code; the test forces them by monkey-patching the new offset fields to `None` on the live `PartitionArrays` instance, runs the kernel, then restores the offsets and re-runs.
+
+**Usage**:
+```bash
+# Any base solution or refined-contours iteration file
+python testing/test_phase_a_vectorised_hessian.py \
+    --solution results/run_xyz/solution_level0.h5
+
+# Tighten tolerance (default already 1e-12)
+python testing/test_phase_a_vectorised_hessian.py \
+    --solution results/run_xyz/iteration_001_*.h5 \
+    --atol 1e-14
+```
+
+**Command-line arguments**:
+- `--solution`: Path to a Phase 1 base solution or Phase 2 refined-contours HDF5 file (required)
+- `--atol`: Absolute tolerance for `np.allclose` (default `1e-12`)
+- `--seed`: RNG seed for the random-multiplier area Hessian case (default `42`)
+
+**Expected output**:
+```
+Phase A vectorised-Hessian regression test
+  solution = results/.../surface_part3_..._20260405_121807.h5
+  atol     = 1e-12
+
+  n_active_vp = 122
+  n_cells     = 3  (constrained: 2)
+  hess_nnz    = 250
+  segments    = 128
+  btri rows   = 232
+
+[1/3] compute_perimeter_hessian_sparse
+  [PASS] perimeter Hessian                ||H_new||_∞=1.322e+01  max|Δ|=5.551e-17
+[2/3] compute_area_hessian_sparse  (multipliers = 0)
+  [PASS] area Hessian (mu=0)              ||H_new||_∞=0.000e+00  max|Δ|=0.000e+00
+[3/3] compute_area_hessian_sparse  (multipliers = N(0,1), seed=42)
+  [PASS] area Hessian (random mu)         ||H_new||_∞=5.289e-02  max|Δ|=3.081e-33
+
+  worst max|Δ| over all cases = 5.551e-17
+RESULT: PASS
+```
+
+**Dependencies**:
+- `src/partition/partition_arrays.py` (Phase A offset fields)
+- `src/partition/contour_partition.py` (`compile_arrays()` populates them)
+- `src/partition/vectorized_perimeter.py` (`compute_perimeter_hessian_sparse`)
+- `src/partition/vectorized_area.py` (`compute_area_hessian_sparse`)
+- `src/optimization/perimeter_optimizer.py`, `src/pipeline/io.py`
+
+**Notes**:
+- Exit code `0` on PASS, `1` on FAIL, suitable for CI smoke checks.
+- Future Phase B tests (`test_exact_hessian_vs_fd.py`, `compare_hessian_modes.py`) and the analytical-Steiner work will rely on the vectorised path validated by this test.
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -473,6 +547,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-05-05 | Added Test 5 (Phase A vectorised Hessian regression test) | System |
 | 2026-03-24 | Deleted test_lambda_edge_roundtrip.py (resolved diagnostic); noted broken import in test_self_healing_selection.py; promoted refine_perimeter_iterative.py to APPROVED; added Test 5 (vectorized evaluation) | System |
 | 2026-03-03 | Added Test 4 (migration debug, no opt/export) | System |
 | 2026-02-08 | Added Test 3 (iterative perimeter refinement) | System |

@@ -1078,6 +1078,71 @@ class PartitionContour:
 
         self.logger.info(f"  Hessian sparsity: {len(hess_row)} non-zeros (lower triangle)")
 
+        # 10. Pre-computed Hessian offsets for fast accumulation
+        #     (Phase A of docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md).
+        #     These let the vectorised Hessian builders scatter per-row
+        #     contributions with np.add.at() instead of Python for-loops.
+
+        def _hess_off(i: int, j: int) -> int:
+            """Lower-triangle offset for the entry at (max(i,j), min(i,j))."""
+            return hess_offset_map[(max(i, j), min(i, j))]
+
+        if len(seg_vp1) > 0:
+            seg_hess_off_aa = np.fromiter(
+                (hess_offset_map[(int(a), int(a))] for a in seg_vp1),
+                dtype=np.int32, count=len(seg_vp1))
+            seg_hess_off_bb = np.fromiter(
+                (hess_offset_map[(int(b), int(b))] for b in seg_vp2),
+                dtype=np.int32, count=len(seg_vp2))
+            seg_hess_off_ab = np.fromiter(
+                (_hess_off(int(a), int(b)) for a, b in zip(seg_vp1, seg_vp2)),
+                dtype=np.int32, count=len(seg_vp1))
+        else:
+            seg_hess_off_aa = np.empty(0, dtype=np.int32)
+            seg_hess_off_bb = np.empty(0, dtype=np.int32)
+            seg_hess_off_ab = np.empty(0, dtype=np.int32)
+
+        # Boundary triangles split by n_inside.  The row order produced by
+        # np.flatnonzero(btri_n_inside == k) matches the row order produced
+        # by btri_*[btri_n_inside == k] at runtime, which is what
+        # compute_area_hessian_sparse uses.
+        m1_idx = np.flatnonzero(btri_n_inside == 1) if n_btri else np.empty(0, dtype=np.int64)
+        m2_idx = np.flatnonzero(btri_n_inside == 2) if n_btri else np.empty(0, dtype=np.int64)
+
+        def _btri_offsets(mask_indices):
+            if len(mask_indices) == 0:
+                empty_i = np.empty(0, dtype=np.int32)
+                return empty_i, empty_i, empty_i, np.empty(0, dtype=bool)
+            a = btri_vp1[mask_indices]
+            b = btri_vp2[mask_indices]
+            off_aa = np.fromiter(
+                (hess_offset_map[(int(x), int(x))] for x in a),
+                dtype=np.int32, count=len(a))
+            off_bb = np.fromiter(
+                (hess_offset_map[(int(x), int(x))] for x in b),
+                dtype=np.int32, count=len(b))
+            off_ab = np.fromiter(
+                (_hess_off(int(x), int(y)) for x, y in zip(a, b)),
+                dtype=np.int32, count=len(a))
+            cell_active = btri_cell[mask_indices] < (self.n_cells - 1)
+            return off_aa, off_bb, off_ab, cell_active
+
+        (btri1_hess_off_aa, btri1_hess_off_bb,
+         btri1_hess_off_ab, btri1_cell_active) = _btri_offsets(m1_idx)
+        (btri2_hess_off_aa, btri2_hess_off_bb,
+         btri2_hess_off_ab, btri2_cell_active) = _btri_offsets(m2_idx)
+
+        n_hess = len(hess_row)
+        for arr in (seg_hess_off_aa, seg_hess_off_bb, seg_hess_off_ab,
+                    btri1_hess_off_aa, btri1_hess_off_bb, btri1_hess_off_ab,
+                    btri2_hess_off_aa, btri2_hess_off_bb, btri2_hess_off_ab):
+            assert len(arr) == 0 or ((arr >= 0).all() and (arr < n_hess).all()), \
+                "Hessian offset out of range — hess_offset_map build is inconsistent"
+
+        self.logger.info(
+            f"  Hessian offset arrays: {len(seg_hess_off_aa)} seg, "
+            f"{len(btri1_hess_off_aa)} btri-1, {len(btri2_hess_off_aa)} btri-2")
+
         return PartitionArrays(
             vp_edge_v1=vp_edge_v1,
             vp_edge_v2=vp_edge_v2,
@@ -1113,6 +1178,17 @@ class PartitionContour:
             hess_row=hess_row,
             hess_col=hess_col,
             hess_offset_map=hess_offset_map,
+            seg_hess_off_aa=seg_hess_off_aa,
+            seg_hess_off_bb=seg_hess_off_bb,
+            seg_hess_off_ab=seg_hess_off_ab,
+            btri1_hess_off_aa=btri1_hess_off_aa,
+            btri1_hess_off_bb=btri1_hess_off_bb,
+            btri1_hess_off_ab=btri1_hess_off_ab,
+            btri1_cell_active=btri1_cell_active,
+            btri2_hess_off_aa=btri2_hess_off_aa,
+            btri2_hess_off_bb=btri2_hess_off_bb,
+            btri2_hess_off_ab=btri2_hess_off_ab,
+            btri2_cell_active=btri2_cell_active,
         )
 
     def identify_triple_points_from_current_vps(self) -> List[Tuple[int, List[int]]]:
