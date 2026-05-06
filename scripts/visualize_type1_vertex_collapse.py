@@ -848,7 +848,7 @@ def run_visualization(args):
     mesh_topology = MeshTopology(mesh)
     steiner_handler = SteinerHandler(mesh, partition)
 
-    if _preargs.use_legacy:
+    if args.use_legacy:
         switcher = TopologySwitcher(mesh, partition, mesh_topology)
         analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology)
     else:
@@ -861,7 +861,7 @@ def run_visualization(args):
     print("Analyzing Type 1 migration...")
     print()
 
-    if _preargs.use_legacy:
+    if args.use_legacy:
         # ------- Legacy path: TopologySwitcher + Type1ComponentAnalyzer -------
         print("Using vertex-collapse strategy (component-based migration)")
         print()
@@ -1000,7 +1000,7 @@ def run_visualization(args):
     
     print("Pre-computing migration VPs for visualization...")
 
-    if _preargs.use_legacy:
+    if args.use_legacy:
         try:
             preview_migrating_vp, preview_auxiliary = analyzer.select_migrating_vp_and_auxiliary(
                 selected_component, strict_validation=False
@@ -1104,7 +1104,7 @@ def run_visualization(args):
     
     # Add VPs if requested and we successfully pre-computed them
     if args.show_vps and preview_migrating_vp is not None:
-        if _preargs.use_legacy:
+        if args.use_legacy:
             highlight_vps = [preview_migrating_vp, preview_left, preview_right]
             vp_labels = ['Migrating', 'Neighbor-L', 'Neighbor-R']
             
@@ -1165,7 +1165,7 @@ def run_visualization(args):
     print(f"Migrating component/trigger {args.component_index}...")
     print()
 
-    if _preargs.use_legacy:
+    if args.use_legacy:
         result = switcher.apply_type1_switch_v2(
             selected_component, 
             distance_preservation=args.migration_distance,
@@ -1302,7 +1302,7 @@ def run_visualization(args):
     
     # Add VPs if requested (at new positions)
     if args.show_vps:
-        if _preargs.use_legacy:
+        if args.use_legacy:
             highlight_vps = [migrating_vp_idx, left_neighbor, right_neighbor]
             vp_labels = ['Migrating', 'Neighbor-L', 'Neighbor-R']
             
