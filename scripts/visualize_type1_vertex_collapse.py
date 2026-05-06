@@ -275,33 +275,52 @@ def compute_cell_portion_in_triangle_simple(
     
     if not is_boundary:
         return None
-    
-    # Standard case: Use VP positions and vertex_labels
-    vertices_inside = []
-    
+
+    # Decide whether the VPs define a non-degenerate boundary segment.
+    # Degenerate case: two (or more) VPs evaluate to the same 3D point. This
+    # happens when IPOPT pushes λ exactly to 0 or 1 on multiple incident
+    # edges at a high-valence vertex (the pre-Type 1 migration state). With
+    # a near-zero-length segment, the side test cannot distinguish sides
+    # reliably (signed-area is dominated by floating-point noise), so we
+    # fall back to label-based polygon construction.
+    #
+    # Tolerance: 1e-9 is six orders of magnitude below the smallest realistic
+    # mesh edge (~1e-3), so it never collapses real boundary segments while
+    # robustly catching IPOPT-saturated near-vertex VPs (which sit ~1e-12 to
+    # ~1e-11 from the mesh vertex).
+    DEGENERATE_TOL = 1e-9
+    have_segment = False
     if len(vp_positions) >= 2:
-        # 2+ VPs define the boundary line
         vp_pos1 = vp_positions[0]
         vp_pos2 = vp_positions[1]
-        
+        if np.linalg.norm(vp_pos2 - vp_pos1) >= DEGENERATE_TOL:
+            have_segment = True
+
+    vertices_inside = []
+    if have_segment:
         for v in [v1, v2, v3]:
             v_pos = mesh.vertices[v]
-            if _vertex_on_cell_side_for_viz(v_pos, vp_pos1, vp_pos2, cell_idx, 
+            if _vertex_on_cell_side_for_viz(v_pos, vp_pos1, vp_pos2, cell_idx,
                                            mesh, tri_idx, partition):
                 vertices_inside.append(v_pos)
     else:
-        # Fallback to vertex_labels
         for v, lab in zip([v1, v2, v3], labels):
             if lab == cell_idx:
                 vertices_inside.append(mesh.vertices[v])
-    
-    # Construct polygon
+        if vp_positions:
+            vp_positions = [vp_positions[0]]
+
     all_points = vertices_inside + vp_positions
-    
-    if len(all_points) < 3:
+
+    unique_points = []
+    for p in all_points:
+        if not any(np.linalg.norm(p - u) < DEGENERATE_TOL for u in unique_points):
+            unique_points.append(p)
+
+    if len(unique_points) < 3:
         return None
-    
-    return _order_polygon_vertices(np.array(all_points), mesh, tri_idx)
+
+    return _order_polygon_vertices(np.array(unique_points), mesh, tri_idx)
 
 
 def compute_triple_point_cell_portion(
