@@ -1,9 +1,10 @@
 """
 Shared utility functions for Type 1 migration calculations.
 
-This module contains low-level helper functions used by both:
-- Component analysis (type1_component_analyzer.py)
+This module contains low-level helper functions used by:
+- Trigger detection (migration_detector.py)
 - Migration execution (migration_executor.py)
+- One-ring rebuild (one_ring_rebuilder.py)
 """
 
 import numpy as np

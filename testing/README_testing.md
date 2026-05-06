@@ -335,13 +335,15 @@ Iteration N:
 ```
 
 **Dependencies**:
-- `src/find_contours.py` (ContourAnalyzer)
-- `src/core/tri_mesh.py`
-- `src/core/contour_partition.py`
-- `src/core/perimeter_optimizer.py`
-- `src/core/mesh_topology.py`
-- `src/core/topology_switcher.py` (v2/v4 methods)
-- `src/core/type1_component_analyzer.py`
+- `src/partition/find_contours.py` (ContourAnalyzer)
+- `src/mesh/tri_mesh.py`
+- `src/partition/contour_partition.py`
+- `src/optimization/perimeter_optimizer.py`
+- `src/mesh/mesh_topology.py`
+- `src/migration/migration_orchestrator.py` (top-level migration API)
+- `src/migration/migration_detector.py` (Type 1 + Type 2 trigger detection,
+  with the triple-point safety guard for Type 1)
+- `src/migration/migration_executor.py` (apply migrations to partition state)
 - `src/logging_config.py`
 - `h5py`, `numpy`
 
@@ -444,13 +446,12 @@ python testing/test_migrations_debug.py \
 6. `FINAL STATE OF WATCHED VPs`
 
 **Dependencies**:
-- `scripts/data_loader.py`
-- `src/core/topology_switcher.py`
-- `src/core/type1_component_analyzer.py`
-- `src/core/steiner_handler.py`
-- `src/core/perimeter_optimizer.py`
-- `src/core/type2_migration_history.py`
-- `src/core/migration_utils.py`
+- `src/pipeline/io.py` (`load_partition_from_refined_file`)
+- `src/migration/migration_orchestrator.py`
+- `src/migration/migration_detector.py`
+- `src/migration/migration_executor.py`
+- `src/migration/migration_utils.py`
+- `src/mesh/mesh_topology.py`
 
 ---
 

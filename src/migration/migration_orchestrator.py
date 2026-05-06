@@ -38,7 +38,8 @@ class MigrationOrchestrator:
     """
     Top-level orchestrator for topology migrations.
     
-    Replaces the old TopologySwitcher + Type1ComponentAnalyzer with a unified API.
+    Provides a unified API for detection, conflict resolution, and execution of
+    Type 1 (vertex collapse) and Type 2 (Steiner / triple-point) migrations.
     """
     
     def __init__(self, partition: PartitionContour, mesh: TriMesh,
@@ -70,10 +71,16 @@ class MigrationOrchestrator:
         return self._triple_point_histories
     
     def detect_all_triggers(self, delta: Optional[float] = None) -> DetectionResult:
-        """Run full trigger detection (Type 1 + Type 2)."""
+        """Run full trigger detection (Type 1 + Type 2).
+
+        Type 1 detection receives the SteinerHandler so that candidates whose
+        1-ring touches an existing triple-point triangle are rejected (the site
+        should be handled by Type 2, not Type 1).
+        """
         d = delta if delta is not None else self.config.delta
-        
-        t1 = detect_type1_triggers(self.partition, self.mesh_topology, d)
+
+        t1 = detect_type1_triggers(self.partition, self.mesh_topology, d,
+                                    steiner_handler=self.steiner_handler)
         t2 = detect_type2_triggers(self.partition, self.steiner_handler,
                                     self.mesh_topology, self.config.angle_threshold)
         

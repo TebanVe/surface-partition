@@ -42,12 +42,9 @@ from src.mesh.mesh_topology import MeshTopology
 from src.partition.steiner_handler import SteinerHandler
 from src.partition.area_calculator import AreaCalculator
 from src.migration import migration_utils
-
-# Pre-parse --use-legacy before conditional imports
 from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 from src.migration.migration_detector import detect_type1_triggers
 
-# Import data loading utility
 from src.pipeline.io import load_partition_from_refined_file
 
 
@@ -848,228 +845,78 @@ def run_visualization(args):
     mesh_topology = MeshTopology(mesh)
     steiner_handler = SteinerHandler(mesh, partition)
 
-    if args.use_legacy:
-        switcher = TopologySwitcher(mesh, partition, mesh_topology)
-        analyzer = Type1ComponentAnalyzer(mesh, partition, mesh_topology)
-    else:
-        orchestrator = MigrationOrchestrator(
-            partition, mesh, mesh_topology,
-            MigrationConfig(delta=args.boundary_tol)
-        )
-    
-    # Component analysis
-    print("Analyzing Type 1 migration...")
+    orchestrator = MigrationOrchestrator(
+        partition, mesh, mesh_topology,
+        MigrationConfig(delta=args.boundary_tol)
+    )
+
+    print("Analyzing Type 1 migration via MigrationOrchestrator (trigger-based detection)...")
     print()
 
-    if args.use_legacy:
-        # ------- Legacy path: TopologySwitcher + Type1ComponentAnalyzer -------
-        print("Using vertex-collapse strategy (component-based migration)")
-        print()
-        
-        if args.protect_type2:
-            print("Using Type 2 protection (excluding components with outer neighbor VPs)...")
-            analysis_result = analyzer.run_full_analysis(
-                boundary_tol=args.boundary_tol,
-                conflict_strategy='exclude_one',
-                build_migration_plan=False,
-                protect_type2=True
-            )
-            
-            component_info = analysis_result['components']
-            conflicts = analysis_result['conflicts']
-            to_migrate = analysis_result['to_migrate']
-            deferred = analysis_result['excluded']
-            type2_excluded = analysis_result['type2_excluded']
-            
-            print(f"✓ Type 2 protection: {len(type2_excluded)} component(s) excluded")
-            print()
-        else:
-            boundary_vps = switcher.get_non_triple_point_boundary_vps(boundary_tol=args.boundary_tol)
-            boundary_vps_set = set(boundary_vps)
-            
-            if not boundary_vps:
-                print("ERROR: No boundary VPs found for Type 1 migration")
-                return
-            
-            components = analyzer.find_connected_components(boundary_vps_set)
-            print(f"✓ Found {len(components)} connected component(s)")
-            print()
-            
-            component_info = []
-            for i, comp_vps in enumerate(components):
-                info = analyzer.analyze_component(comp_vps)
-                info['index'] = i
-                component_info.append(info)
-            
-            conflicts, chain_warnings = analyzer.detect_proximity_conflicts(component_info)
-            to_migrate, deferred = analyzer.select_components_for_migration(component_info, conflicts)
-            type2_excluded = []
-        
-        # Display component table
-        print("="*80)
-        print("AVAILABLE COMPONENTS FOR MIGRATION")
-        print("="*80)
-        print(f"{'Idx':<5} {'Size':<6} {'Dist':<10} {'Cells':<10} {'Status':<20} {'VPs':<30}")
-        print("-" * 80)
-        
-        for comp in component_info:
-            if comp in to_migrate:
-                status = "TO MIGRATE"
-            elif comp in type2_excluded:
-                status = "EXCLUDED (Type 2)"
-            else:
-                status = "DEFERRED"
-            
-            vp_list = str(comp['vp_indices'][:5]) + ("..." if len(comp['vp_indices']) > 5 else "")
-            
-            all_cells = set()
-            for vp_idx in comp['vp_indices']:
-                vp = partition.variable_points[vp_idx]
-                all_cells.update(vp.belongs_to_cells)
-            cells_str = str(sorted(list(all_cells)))
-            
-            print(f"{comp['index']:<5} {comp['size']:<6} {comp['min_distance']:<10.6f} {cells_str:<10} {status:<20} {vp_list:<30}")
-        
-        print()
-        
-        if args.component_index >= len(component_info):
-            print(f"ERROR: Component index {args.component_index} out of range (max: {len(component_info)-1})")
-            return
-        
-        selected_component = component_info[args.component_index]
-        component_vps = selected_component['vp_indices']
-        target_vertex = selected_component['target_vertex']
-        
-        if selected_component in to_migrate:
-            status_str = "TO MIGRATE"
-        elif selected_component in type2_excluded:
-            status_str = "EXCLUDED (Type 2 protection)"
-        else:
-            status_str = "DEFERRED"
-        
-        print(f"✓ Selected Component {args.component_index} for migration:")
-        print(f"  Size: {selected_component['size']} VPs")
-        print(f"  VPs: {component_vps}")
-        print(f"  Target vertex: {target_vertex}")
-        print(f"  Min distance: {selected_component['min_distance']:.6f}")
-        print(f"  Status: {status_str}")
-        print()
+    detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
+    type1_triggers = detection.type1_triggers
 
-    else:
-        # ------- New path: MigrationOrchestrator + detect_type1_triggers -------
-        print("Using MigrationOrchestrator trigger-based detection")
-        print()
-        
-        detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
-        type1_triggers = detection.type1_triggers
-        
-        if not type1_triggers:
-            print("No Type 1 triggers detected.")
-            return
-        
-        print("="*80)
-        print("DETECTED TYPE 1 TRIGGERS")
-        print("="*80)
-        print(f"{'Idx':<5} {'Vertex':<8} {'Dist':<10} {'Cells':<15} {'#VPs':<6} {'VPs':<30}")
-        print("-" * 80)
-        
-        for i, trig in enumerate(type1_triggers):
-            vp_list = str(trig.approaching_vps[:5]) + ("..." if len(trig.approaching_vps) > 5 else "")
-            cells_str = f"{trig.current_cell} -> {trig.target_cell}"
-            print(f"{i:<5} {trig.vertex:<8} {trig.min_lambda_distance:<10.6f} {cells_str:<15} {trig.n_boundary_vps:<6} {vp_list:<30}")
-        
-        print()
-        
-        if args.component_index >= len(type1_triggers):
-            print(f"ERROR: Trigger index {args.component_index} out of range (max: {len(type1_triggers)-1})")
-            return
-        
-        selected_trigger = type1_triggers[args.component_index]
-        component_vps = selected_trigger.approaching_vps
-        target_vertex = selected_trigger.vertex
-        
-        print(f"✓ Selected Trigger {args.component_index} for migration:")
-        print(f"  Vertex: {selected_trigger.vertex}")
-        print(f"  Cell transition: {selected_trigger.current_cell} -> {selected_trigger.target_cell}")
-        print(f"  Approaching VPs: {component_vps}")
-        print(f"  Min distance: {selected_trigger.min_lambda_distance:.6f}")
-        print()
+    if not type1_triggers:
+        print("No Type 1 triggers detected.")
+        return
+
+    print("="*80)
+    print("DETECTED TYPE 1 TRIGGERS")
+    print("="*80)
+    print(f"{'Idx':<5} {'Vertex':<8} {'Dist':<10} {'Cells':<15} {'#VPs':<6} {'VPs':<30}")
+    print("-" * 80)
+
+    for i, trig in enumerate(type1_triggers):
+        vp_list = str(trig.approaching_vps[:5]) + ("..." if len(trig.approaching_vps) > 5 else "")
+        cells_str = f"{trig.current_cell} -> {trig.target_cell}"
+        print(f"{i:<5} {trig.vertex:<8} {trig.min_lambda_distance:<10.6f} {cells_str:<15} {trig.n_boundary_vps:<6} {vp_list:<30}")
+
+    print()
+
+    if args.component_index >= len(type1_triggers):
+        print(f"ERROR: Trigger index {args.component_index} out of range (max: {len(type1_triggers)-1})")
+        return
+
+    selected_trigger = type1_triggers[args.component_index]
+    component_vps = selected_trigger.approaching_vps
+    target_vertex = selected_trigger.vertex
+
+    print(f"✓ Selected Trigger {args.component_index} for migration:")
+    print(f"  Vertex: {selected_trigger.vertex}")
+    print(f"  Cell transition: {selected_trigger.current_cell} -> {selected_trigger.target_cell}")
+    print(f"  Approaching VPs: {component_vps}")
+    print(f"  Min distance: {selected_trigger.min_lambda_distance:.6f}")
+    print()
     # ========================================================================
     # PRE-COMPUTE MIGRATION VPs FOR VISUALIZATION
     # ========================================================================
     
     print("Pre-computing migration VPs for visualization...")
 
-    if args.use_legacy:
-        try:
-            preview_migrating_vp, preview_auxiliary = analyzer.select_migrating_vp_and_auxiliary(
-                selected_component, strict_validation=False
-            )
-            
-            preview_left, preview_right = analyzer._get_neighbors_from_auxiliary(
-                preview_migrating_vp, preview_auxiliary
-            )
+    print(f"  Trigger approaching VPs: {selected_trigger.approaching_vps}")
+    for vp_idx in selected_trigger.approaching_vps:
+        vp_obj = partition.variable_points[vp_idx]
+        vp_target = migration_utils.identify_target_vertex(vp_obj)
+        print(f"    VP {vp_idx}: edge {vp_obj.edge}, "
+              f"λ={vp_obj.lambda_param:.6f}, "
+              f"approaches vertex {vp_target}")
 
-            print("  Auxiliary VP state BEFORE migration:")
-            for vp_idx in preview_auxiliary:
-                vp_obj = partition.variable_points[vp_idx]
-                vp_target = migration_utils.identify_target_vertex(vp_obj)
-                role = ("Migrating" if vp_idx == preview_migrating_vp
-                        else "Neighbor-L" if vp_idx == preview_left
-                        else "Neighbor-R")
-                print(f"    VP {vp_idx} ({role}): edge {vp_obj.edge}, "
-                      f"λ={vp_obj.lambda_param:.6f}, "
-                      f"approaches vertex {vp_target}")
+    preview_migrating_vp = min(
+        selected_trigger.approaching_vps,
+        key=lambda vi: migration_utils.compute_boundary_distance(partition.variable_points[vi])
+    ) if selected_trigger.approaching_vps else None
+    preview_left = None
+    preview_right = None
 
-            preview_migrating_vp_obj = partition.variable_points[preview_migrating_vp]
-            preview_old_edge = preview_migrating_vp_obj.edge
-            
-            actual_target_vertex = migration_utils.identify_target_vertex(preview_migrating_vp_obj)
-            if actual_target_vertex != target_vertex:
-                print(f"⚠ WARNING: Component target vertex {target_vertex} differs from VP's target {actual_target_vertex}")
-                print(f"  Using VP's target vertex: {actual_target_vertex}")
-                target_vertex = actual_target_vertex
-            
-            preview_target_edge = switcher._find_opposite_edge(preview_old_edge, target_vertex)
-            
-            print(f"✓ Will migrate VP {preview_migrating_vp}")
-            print(f"  Neighbors: {preview_left}, {preview_right}")
-            print(f"  Auxiliary component: {preview_auxiliary}")
-            print()
-        except Exception as e:
-            print(f"⚠ Could not pre-compute migration VPs: {e}")
-            print("  Will show BEFORE without VP highlighting")
-            preview_migrating_vp = None
-            preview_left = None
-            preview_right = None
-            preview_old_edge = None
-            preview_target_edge = None
+    if preview_migrating_vp is not None:
+        preview_migrating_vp_obj = partition.variable_points[preview_migrating_vp]
+        preview_old_edge = preview_migrating_vp_obj.edge
     else:
-        # New path: approaching VPs are already known from the trigger
-        print(f"  Trigger approaching VPs: {selected_trigger.approaching_vps}")
-        for vp_idx in selected_trigger.approaching_vps:
-            vp_obj = partition.variable_points[vp_idx]
-            vp_target = migration_utils.identify_target_vertex(vp_obj)
-            print(f"    VP {vp_idx}: edge {vp_obj.edge}, "
-                  f"λ={vp_obj.lambda_param:.6f}, "
-                  f"approaches vertex {vp_target}")
-        
-        preview_migrating_vp = min(
-            selected_trigger.approaching_vps,
-            key=lambda vi: migration_utils.compute_boundary_distance(partition.variable_points[vi])
-        ) if selected_trigger.approaching_vps else None
-        preview_left = None
-        preview_right = None
-        
-        if preview_migrating_vp is not None:
-            preview_migrating_vp_obj = partition.variable_points[preview_migrating_vp]
-            preview_old_edge = preview_migrating_vp_obj.edge
-        else:
-            preview_old_edge = None
-        preview_target_edge = None
-        
-        print(f"✓ Closest approaching VP: {preview_migrating_vp}")
-        print()
+        preview_old_edge = None
+    preview_target_edge = None
+
+    print(f"✓ Closest approaching VP: {preview_migrating_vp}")
+    print()
     
     # ========================================================================
     # BEFORE STATE
@@ -1102,31 +949,9 @@ def run_visualization(args):
         args.region, args.intense_color
     )
     
-    # Add VPs if requested and we successfully pre-computed them
     if args.show_vps and preview_migrating_vp is not None:
-        if args.use_legacy:
-            highlight_vps = [preview_migrating_vp, preview_left, preview_right]
-            vp_labels = ['Migrating', 'Neighbor-L', 'Neighbor-R']
-            
-            try:
-                left_n1, left_n2 = switcher._get_two_neighbors(preview_left)
-                left_secondary = left_n1 if left_n1 != preview_migrating_vp else left_n2
-                highlight_vps.append(left_secondary)
-                vp_labels.append('Secondary-L')
-            except:
-                pass
-            
-            try:
-                right_n1, right_n2 = switcher._get_two_neighbors(preview_right)
-                right_secondary = right_n1 if right_n1 != preview_migrating_vp else right_n2
-                highlight_vps.append(right_secondary)
-                vp_labels.append('Secondary-R')
-            except:
-                pass
-        else:
-            highlight_vps = list(selected_trigger.approaching_vps)
-            vp_labels = [f'VP{vi}' for vi in highlight_vps]
-        
+        highlight_vps = list(selected_trigger.approaching_vps)
+        vp_labels = [f'VP{vi}' for vi in highlight_vps]
         add_vp_visualization(plotter_before, mesh, partition, highlight_vps, vp_labels, args.vp_size)
     
     # Add Steiner points if requested
@@ -1162,89 +987,33 @@ def run_visualization(args):
     print("\n" + "="*60)
     print("PERFORMING TYPE 1 MIGRATION")
     print("="*60)
-    print(f"Migrating component/trigger {args.component_index}...")
+    print(f"Migrating trigger {args.component_index}...")
     print()
 
-    if args.use_legacy:
-        result = switcher.apply_type1_switch_v2(
-            selected_component, 
-            distance_preservation=args.migration_distance,
-            strict_validation=False
-        )
-        
-        if isinstance(result, dict):
-            success = result.get('success', False)
-            if success:
-                migrating_vp_idx = result['migrating_vp_idx']
-                left_neighbor = result['left_neighbor']
-                right_neighbor = result['right_neighbor']
-                target_vertex = result['target_vertex']
-                old_edge = result['old_edge']
-                target_edge = result['target_edge']
-                auxiliary_component = result['auxiliary_component']
-                
-                print("\n" + "="*60)
-                print("✓ MIGRATION COMPLETED SUCCESSFULLY")
-                print("="*60)
-                print(f"  Migrating VP: {migrating_vp_idx}")
-                print(f"  Neighbors: {left_neighbor}, {right_neighbor}")
-                print(f"  Auxiliary component: {auxiliary_component}")
-                print(f"  Target vertex: {target_vertex}")
-                print(f"  Old edge: {old_edge} → Target edge: {target_edge}")
-                print("="*60)
-                print()
-            else:
-                print("\n" + "="*60)
-                print("❌ MIGRATION FAILED")
-                print("="*60)
-                error = result.get('error', 'Unknown error')
-                print(f"  Error: {error}")
-                if 'validation_message' in result:
-                    print("\n" + result['validation_message'])
-                print("="*60)
-                print()
-                print("⚠ BEFORE figure is displayed. Close it to exit.")
-                input("\nPress Enter to close and exit...")
-                return
-        else:
-            success = result
-            if not success:
-                print("❌ ERROR: Migration failed!")
-                print("⚠ BEFORE figure is displayed. Close it to exit.")
-                input("\nPress Enter to close and exit...")
-                return
-            print("\n✓ Migration completed successfully!")
-            print()
-            migrating_vp_idx = min(component_vps, key=lambda vi: migration_utils.compute_boundary_distance(partition.variable_points[vi]))
-            left_neighbor, right_neighbor = migration_utils.get_two_neighbors(partition, migrating_vp_idx)
-            migrating_vp = partition.variable_points[migrating_vp_idx]
-            old_edge = migrating_vp.edge
-            target_edge = None
-    else:
-        success = orchestrator.execute_single_trigger(selected_trigger)
-        if not success:
-            print("❌ ERROR: Migration failed!")
-            print("⚠ BEFORE figure is displayed. Close it to exit.")
-            input("\nPress Enter to close and exit...")
-            return
-        
-        print("\n" + "="*60)
-        print("✓ MIGRATION COMPLETED SUCCESSFULLY")
-        print("="*60)
-        print(f"  Trigger vertex: {selected_trigger.vertex}")
-        print(f"  Cell transition: {selected_trigger.current_cell} -> {selected_trigger.target_cell}")
-        print("="*60)
-        print()
-        
-        migrating_vp_idx = min(
-            selected_trigger.approaching_vps,
-            key=lambda vi: migration_utils.compute_boundary_distance(partition.variable_points[vi])
-        )
-        left_neighbor = None
-        right_neighbor = None
-        old_edge = None
-        target_edge = None
-        steiner_handler = orchestrator.steiner_handler
+    success = orchestrator.execute_single_trigger(selected_trigger)
+    if not success:
+        print("❌ ERROR: Migration failed!")
+        print("⚠ BEFORE figure is displayed. Close it to exit.")
+        input("\nPress Enter to close and exit...")
+        return
+
+    print("\n" + "="*60)
+    print("✓ MIGRATION COMPLETED SUCCESSFULLY")
+    print("="*60)
+    print(f"  Trigger vertex: {selected_trigger.vertex}")
+    print(f"  Cell transition: {selected_trigger.current_cell} -> {selected_trigger.target_cell}")
+    print("="*60)
+    print()
+
+    migrating_vp_idx = min(
+        selected_trigger.approaching_vps,
+        key=lambda vi: migration_utils.compute_boundary_distance(partition.variable_points[vi])
+    )
+    left_neighbor = None
+    right_neighbor = None
+    old_edge = None
+    target_edge = None
+    steiner_handler = orchestrator.steiner_handler
     
     # ========================================================================
     # AFTER STATE
@@ -1300,36 +1069,10 @@ def run_visualization(args):
         args.region, args.intense_color
     )
     
-    # Add VPs if requested (at new positions)
     if args.show_vps:
-        if args.use_legacy:
-            highlight_vps = [migrating_vp_idx, left_neighbor, right_neighbor]
-            vp_labels = ['Migrating', 'Neighbor-L', 'Neighbor-R']
-            
-            left_secondary = None
-            right_secondary = None
-            try:
-                left_n1, left_n2 = switcher._get_two_neighbors(left_neighbor)
-                left_secondary = left_n1 if left_n1 != migrating_vp_idx else left_n2
-            except:
-                pass
-            try:
-                right_n1, right_n2 = switcher._get_two_neighbors(right_neighbor)
-                right_secondary = right_n1 if right_n1 != migrating_vp_idx else right_n2
-            except:
-                pass
-            
-            if left_secondary is not None:
-                highlight_vps.append(left_secondary)
-                vp_labels.append('Secondary-L')
-            if right_secondary is not None:
-                highlight_vps.append(right_secondary)
-                vp_labels.append('Secondary-R')
-        else:
-            highlight_vps = [vi for vi in selected_trigger.approaching_vps
-                             if partition.variable_points[vi].active]
-            vp_labels = [f'VP{vi}' for vi in highlight_vps]
-        
+        highlight_vps = [vi for vi in selected_trigger.approaching_vps
+                         if partition.variable_points[vi].active]
+        vp_labels = [f'VP{vi}' for vi in highlight_vps]
         add_vp_visualization(plotter_after, mesh, partition, highlight_vps, vp_labels, args.vp_size)
     
     # Add Steiner points if requested
@@ -1371,24 +1114,11 @@ def main():
     
     # Migration parameters
     parser.add_argument('--component-index', type=int, default=0,
-                       help='Component index to migrate (default: 0)')
+                       help='Trigger index (within MigrationOrchestrator detection list) to migrate '
+                            '(default: 0)')
     parser.add_argument('--boundary-tol', type=float, default=0.1,
                        help='Boundary tolerance for VP detection (default: 0.1)')
-    parser.add_argument('--migration-distance', default='preserve',
-                       help='Distance preservation strategy: "preserve" (maintain original distance), '
-                            '"midpoint" (λ=0.5), or float value (e.g., "0.1" for close to target) (default: preserve)')
-    parser.add_argument('--selection-method', choices=['topology', 'distance'], default='topology',
-                       help='VP selection method: "topology" (topology-based, recommended), '
-                            '"distance" (distance-based, old method) (default: topology)')
-    
-    # Type 2 protection
-    parser.add_argument('--protect-type2', action='store_true',
-                       help='Enable Type 2 protection (exclude components with outer neighbor VPs)')
-    
-    # API mode
-    parser.add_argument('--use-legacy', action='store_true',
-                       help='Use legacy TopologySwitcher/Type1ComponentAnalyzer APIs')
-    
+
     # Visualization options
     parser.add_argument('--state', choices=['before', 'after', 'both'], default='before',
                        help='Which state to show (default: before)')

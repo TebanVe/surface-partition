@@ -2,8 +2,18 @@
 """
 Visualize Type 2 migration (Triple Point Migration).
 
-Clean, focused implementation for testing and debugging Type 2 strategy.
-Only includes necessary code - shows BEFORE state for now.
+Debug viewer for inspecting Type 2 triggers detected by the
+MigrationOrchestrator. The BEFORE state renders the partition with the
+selected triple-point's VPs and Steiner point highlighted; the AFTER state
+applies ``MigrationOrchestrator.execute_migrations(mode='batch')`` and
+re-renders.
+
+NOTE: This script's AFTER pathway was originally written against the legacy
+TopologySwitcher result schema (dict fields like ``vp_count_change``,
+``vp_close_to_steiner_idx``). After the legacy code was removed, the AFTER
+section has not been ported to the orchestrator's ``MigrationResult``
+dataclass and may raise on access to those fields. The BEFORE section is
+the supported path. Use ``--state before`` for routine debugging.
 
 Usage:
     python scripts/visualize_type2_triple_point.py \
@@ -41,12 +51,8 @@ from src.partition.contour_partition import PartitionContour
 from src.mesh.mesh_topology import MeshTopology
 from src.partition.steiner_handler import SteinerHandler, TriplePoint
 from src.partition.area_calculator import AreaCalculator
-
-# Pre-parse --use-legacy before conditional imports
-import argparse as _argparse
 from src.migration.migration_orchestrator import MigrationOrchestrator, MigrationConfig
 
-# Import data loading from the reference script
 from src.pipeline.io import load_partition_from_refined_file
 
 
@@ -644,17 +650,10 @@ def run_visualization(args):
     
     # Initialize topology components
     mesh_topology = MeshTopology(mesh)
-    if _preargs.use_legacy:
-        switcher = TopologySwitcher(mesh, partition, mesh_topology)
-        if migration_history is not None:
-            switcher.type2_migration_history = migration_history
-            print("✓ Migration history attached to topology switcher")
-            print()
-    else:
-        orchestrator = MigrationOrchestrator(
-            partition, mesh, mesh_topology,
-            MigrationConfig(delta=args.boundary_tol)
-        )
+    orchestrator = MigrationOrchestrator(
+        partition, mesh, mesh_topology,
+        MigrationConfig(delta=args.boundary_tol)
+    )
     
     steiner_handler = SteinerHandler(mesh, partition)
     
@@ -721,123 +720,24 @@ def run_visualization(args):
     print("="*80)
     print()
     
-    if _preargs.use_legacy:
-        # ------- Legacy path: TopologySwitcher analysis -------
-        migration_result = switcher.apply_type2_switch_v3(steiner_handler, args.triple_point_index)
+    print("Using MigrationOrchestrator trigger-based detection")
+    print()
 
-        if not migration_result['success']:
-            print(f"❌ ERROR: Migration analysis failed: {migration_result.get('error', 'Unknown error')}")
-            return
+    detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
+    print(f"  Detected {len(detection.type2_triggers)} Type 2 triggers")
+    for i, trig in enumerate(detection.type2_triggers):
+        print(f"    [{i}] {trig}")
+    print()
 
-        if 'warning' in migration_result:
-            print(f"⚠️  WARNING: {migration_result['warning']}")
-            print()
-
-        print("Migration Analysis Results:")
-        print(f"  Triple triangle: {migration_result['triple_triangle_idx']}")
-        print(f"  Target triangle: {migration_result['target_triangle_idx']}")
-        print(f"  Shared edge (Steiner approaching): {migration_result['shared_edge']}")
-        print(f"  Target edge (free edge in target triangle): {migration_result['target_edge']}")
-        print()
-
-        print("VP Classification:")
-        print(f"  Anchor VP: {migration_result['anchor_vp_idx']} (on shared edge)")
-        print(f"  Migrating VP: {migration_result['migrating_vp_idx']} (will move to target edge)")
-        print(f"    Edge: {migration_result['migrating_vp_edge']}")
-        if migration_result['shared_vertex'] is not None:
-            print(f"    Shared vertex with target edge: {migration_result['shared_vertex']}")
-        print(f"  Non-migrating VP: {migration_result['non_migrating_vp_idx']} (stays in place)")
-        print(f"    Edge: {migration_result['non_migrating_vp_edge']}")
-        print()
-
-        print("Connectivity Analysis:")
-        for vp_idx, info in migration_result['connectivity_analysis'].items():
-            print(f"  VP {vp_idx}:")
-            print(f"    Edge: {info['edge']}")
-            print(f"    Shared vertices with target edge: {info['shared_vertices']} (count={info['num_shared']})")
-        print()
-
-        migrating_vp_idx = migration_result['migrating_vp_idx']
-        triple_vp_set = set(selected_tp.var_point_indices)
-
-        def get_neighbors(vp_idx):
-            """Get all neighbors of a VP via boundary_segments."""
-            neighbors = []
-            for seg in partition.boundary_segments:
-                if vp_idx == seg.vp_idx_1:
-                    neighbors.append(seg.vp_idx_2)
-                elif vp_idx == seg.vp_idx_2:
-                    neighbors.append(seg.vp_idx_1)
-            return neighbors
-
-        all_neighbors = get_neighbors(migrating_vp_idx)
-        direct_outer_neighbors = [vp for vp in all_neighbors if vp not in triple_vp_set]
-
-        second_level_neighbors = []
-        for direct_neighbor in direct_outer_neighbors:
-            neighbor_neighbors = get_neighbors(direct_neighbor)
-            second_level = [vp for vp in neighbor_neighbors if vp != migrating_vp_idx]
-            second_level_neighbors.extend(second_level)
-
-        outer_neighbors = direct_outer_neighbors + second_level_neighbors
-
-        print(f"Migrating VP {migrating_vp_idx} Neighbor Analysis:")
-        print(f"  All immediate neighbors: {all_neighbors}")
-        print(f"  Triple triangle VPs (excluded): {list(triple_vp_set)}")
-        print(f"  Direct outer neighbor (Level 1): {direct_outer_neighbors}")
-        print(f"  Second-level neighbors (Level 2): {second_level_neighbors}")
-        print(f"  Total outer neighbors to display: {outer_neighbors}")
-        print()
-
-        if outer_neighbors:
-            print("Outer Neighbor Details:")
-            for i, vp_idx in enumerate(outer_neighbors):
-                vp = partition.variable_points[vp_idx]
-                level = "Level 1 (direct)" if vp_idx in direct_outer_neighbors else "Level 2 (indirect)"
-                print(f"  Outer Neighbor {i+1} [{level}]: VP {vp_idx}")
-                print(f"    Edge: {vp.edge}")
-                print(f"    Lambda: {vp.lambda_param:.6f}")
-            print()
-
-        print("="*80)
-        print("KEY TRIANGLES FOR TYPE 2 MIGRATION")
-        print("="*80)
-        print()
-
-        triangle_result = switcher._identify_type2_migration_triangles(migration_result)
-
-        if not triangle_result['success']:
-            print(f"❌ ERROR: Triangle identification failed: {triangle_result.get('error', 'Unknown error')}")
-            return
-
-        print("Triangle Identification Results:")
-        print(f"  T_second_VP: {triangle_result['T_second_VP']}")
-        print(f"    Contains segment: VP{triangle_result['vp_context']['direct_outer_neighbor']} -- VP{triangle_result['vp_context']['second_level_neighbor']}")
-        print(f"    Free edge: {triangle_result['T_second_VP_free_edge']}")
-        print()
-        print(f"  T_adjacent_to_T_second: {triangle_result['T_adjacent_to_T_second']}")
-        print(f"    Shares free edge {triangle_result['T_second_VP_free_edge']} with T_second_VP")
-        print()
-        print(f"  T_shared_edge_with_target: {triangle_result['T_shared_edge_with_target']}")
-        print(f"    Shares target edge {migration_result['target_edge']} with target triangle")
-        print()
-
-    else:
-        # ------- New path: MigrationOrchestrator -------
-        print("Using MigrationOrchestrator trigger-based detection")
-        print()
-
-        detection = orchestrator.detect_all_triggers(delta=args.boundary_tol)
-        print(f"  Detected {len(detection.type2_triggers)} Type 2 triggers")
-        for i, trig in enumerate(detection.type2_triggers):
-            print(f"    [{i}] {trig}")
-        print()
-
-        migration_result = None
-        triangle_result = {'success': False}
-        outer_neighbors = []
-        migrating_vp_idx = None
-        direct_outer_neighbors = []
+    # NOTE: Detailed migration-result and triangle-result data structures used
+    # below for visualization were specific to the legacy TopologySwitcher path.
+    # The orchestrator-based AFTER state in this script is a known
+    # debug-only stub (see top-of-file docstring); fields are stubbed out.
+    migration_result = None
+    triangle_result = {'success': False}
+    outer_neighbors = []
+    migrating_vp_idx = None
+    direct_outer_neighbors = []
     
     # ========================================================================
     # BEFORE STATE
@@ -1155,22 +1055,13 @@ def run_visualization(args):
         mesh_topology_after = MeshTopology(mesh)
         steiner_handler_after = SteinerHandler(mesh, partition_after)
         
-        if _preargs.use_legacy:
-            switcher_after = TopologySwitcher(mesh, partition_after, mesh_topology_after)
-            print("Applying apply_type2_switch_v4()...")
-            migration_v4_result = switcher_after.apply_type2_switch_v4(
-                steiner_handler_after,
-                args.triple_point_index,
-                distance_preservation='preserve'
-            )
-        else:
-            orchestrator_after = MigrationOrchestrator(
-                partition_after, mesh, mesh_topology_after,
-                MigrationConfig(delta=args.boundary_tol)
-            )
-            orchestrator_after.detect_all_triggers(delta=args.boundary_tol)
-            print("Applying MigrationOrchestrator.execute_migrations()...")
-            migration_v4_result = orchestrator_after.execute_migrations(mode='batch')
+        orchestrator_after = MigrationOrchestrator(
+            partition_after, mesh, mesh_topology_after,
+            MigrationConfig(delta=args.boundary_tol)
+        )
+        orchestrator_after.detect_all_triggers(delta=args.boundary_tol)
+        print("Applying MigrationOrchestrator.execute_migrations()...")
+        migration_v4_result = orchestrator_after.execute_migrations(mode='batch')
         
         if not migration_v4_result['success']:
             print()
@@ -1655,9 +1546,7 @@ def main():
                        help='Size of Steiner point spheres (default: 0.000005)')
     parser.add_argument('--opacity', type=float, default=1.0,
                        help='Opacity of non-highlighted regions (0.0-1.0, default: 1.0)')
-    parser.add_argument('--use-legacy', action='store_true',
-                       help='Use legacy TopologySwitcher instead of MigrationOrchestrator')
-    
+
     args = parser.parse_args()
     
     run_visualization(args)

@@ -28,12 +28,29 @@ logger = get_logger(__name__)
 
 def detect_type1_triggers(partition: PartitionContour,
                           mesh_topology: MeshTopology,
-                          delta: float = 0.05) -> List[Type1Trigger]:
+                          delta: float = 0.05,
+                          steiner_handler: Optional[SteinerHandler] = None) -> List[Type1Trigger]:
     """
     Detect Type 1 migration triggers using the three-VP validation criterion.
-    
+
     For each VP where min(λ, 1-λ) < delta, identify the target vertex. Then
     validate: the candidate must have >= 3 VPs on boundary edges approaching it.
+
+    Triple-point safety guard
+    -------------------------
+    If ``steiner_handler`` is provided, candidates whose 1-ring intersects an
+    existing triple-point triangle are rejected. A candidate is considered
+    "near a triple point" when either:
+
+      (a) the candidate vertex itself is one of the three vertices of a
+          triple-point triangle (i.e. it participates in the Steiner tree), or
+      (b) any of the candidate's approaching VPs is one of the three VPs of a
+          triple-point triangle (i.e. moving the vertex would tear through the
+          void / Steiner infrastructure).
+
+    Such candidates should be handled by Type 2 (Steiner-aware) migration, not
+    Type 1. This guard prevents Type 1 from corrupting Steiner state in cases
+    where Type 2 detection has not also flagged the same site.
     """
     vertex_candidates: Dict[int, List[int]] = defaultdict(list)
     
@@ -45,7 +62,14 @@ def detect_type1_triggers(partition: PartitionContour,
             target_v = migration_utils.identify_target_vertex(vp)
             if target_v is not None:
                 vertex_candidates[target_v].append(vp_idx)
-    
+
+    triple_point_vp_set: Set[int] = set()
+    triple_point_vertex_set: Set[int] = set()
+    if steiner_handler is not None:
+        for tp in steiner_handler.triple_points:
+            triple_point_vp_set.update(int(vi) for vi in tp.var_point_indices)
+            triple_point_vertex_set.update(int(v) for v in tp.vertex_indices)
+
     triggers: List[Type1Trigger] = []
     vertex_labels = partition.vertex_labels
     
@@ -65,7 +89,21 @@ def detect_type1_triggers(partition: PartitionContour,
         if not all_approaching:
             logger.debug(f"Vertex {vertex}: not all boundary VPs approaching. Skipped.")
             continue
-        
+
+        if triple_point_vertex_set and vertex in triple_point_vertex_set:
+            logger.info(f"Vertex {vertex}: rejected as Type 1 candidate — "
+                        f"vertex participates in an existing triple-point triangle "
+                        f"(should be handled by Type 2).")
+            continue
+
+        if triple_point_vp_set:
+            shared_vps = [vi for vi in approaching_vps if vi in triple_point_vp_set]
+            if shared_vps:
+                logger.info(f"Vertex {vertex}: rejected as Type 1 candidate — "
+                            f"approaching VPs {shared_vps} belong to an existing "
+                            f"triple-point triangle (should be handled by Type 2).")
+                continue
+
         target_cell = _determine_target_cell(vertex, approaching_vps, partition, vertex_labels)
         if target_cell is None or target_cell == current_cell:
             continue

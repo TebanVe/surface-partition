@@ -97,7 +97,6 @@ src/
 │   ├── migration_executor.py     # Execute migrations on partition state
 │   ├── migration_types.py        # DetectionResult, MigrationResult, MigrationConfig dataclasses
 │   ├── migration_utils.py        # Shared helpers (edge utilities, geometry)
-│   ├── type1_component_analyzer.py  # Connected-component analysis for Type 1 vertex collapse
 │   ├── type2_migration_io.py     # Type 2 snapshot save/restore
 │   ├── type2_migration_history.py   # Type 2 rollback history tracking
 │   └── one_ring_rebuilder.py     # One-ring mesh topology rebuilding after Type 1 migration
@@ -278,7 +277,7 @@ Variable points sit on mesh edges. Position: `x = λ * vertices[edge[0]] + (1-λ
 
 ### Migration Types
 
-- **Type 1 (Vertex Collapse):** A VP's λ is near 0 or 1, meaning it has migrated to a mesh vertex. The VP is absorbed and the topology around that vertex is rebuilt via connected-component analysis (`type1_component_analyzer.py`, `one_ring_rebuilder.py`).
+- **Type 1 (Vertex Collapse):** A VP's λ is near 0 or 1, meaning it has migrated to a mesh vertex. Trigger detection (`migration_detector.py`) requires ≥3 incident boundary VPs all approaching the same vertex (with a triple-point safety guard rejecting candidates whose 1-ring intersects an existing Steiner triangle). The vertex is then flipped and its 1-ring is rebuilt edge-by-edge by `one_ring_rebuilder.py` (valence-agnostic).
 - **Type 2 (Triple-Point):** Changes to which cells meet at a Steiner/triple point. Can be a forward migration (new triple-point structure) or a rollback (revert to a prior snapshot). History tracked in `type2_migration_history.py`.
 
 ## Style & Conventions
