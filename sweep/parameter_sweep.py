@@ -185,7 +185,15 @@ def run_post_analysis(run_dir: str) -> None:
     except Exception as exc:
         logger.warning(f"Optimization analysis failed for {run_dir}: {exc}")
 
-    # 2. Partition screenshots (PyVista — run in subprocess to isolate segfaults)
+    # 2. Partition screenshots (PyVista — subprocess; often times out / is slow on
+    #    batch nodes with large HDF5 meshes). Skip when SWEEP_SKIP_PARTITION_SCREENSHOTS
+    #    is set (Slurm collectors set this — see cluster/submit_sweep.sh).
+    if os.environ.get("SWEEP_SKIP_PARTITION_SCREENSHOTS", "").lower() not in (
+        "", "0", "false", "no",
+    ):
+        logger.info(f"Skipping partition screenshots for {run_dir} (SWEEP_SKIP_PARTITION_SCREENSHOTS)")
+        return
+
     solution_h5 = find_solution_h5(run_dir)
     if solution_h5:
         try:

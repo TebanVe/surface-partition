@@ -129,8 +129,8 @@ if [[ "$AUTO_COLLECT" == true && "$DRY_RUN" == false && ${#JOB_IDS[@]} -gt 0 ]];
 #!/bin/bash
 #SBATCH -A ${PROJECT_ID}
 #SBATCH -c 1
-#SBATCH --mem=4G
-#SBATCH -t 0:30:00
+#SBATCH --mem=8G
+#SBATCH -t 8:00:00
 #SBATCH -J collect_${SWEEP_NAME}
 #SBATCH -o ${COLLECT_LOGS}/%x_%j.out
 #SBATCH -e ${COLLECT_LOGS}/%x_%j.err
@@ -138,6 +138,10 @@ if [[ "$AUTO_COLLECT" == true && "$DRY_RUN" == false && ${#JOB_IDS[@]} -gt 0 ]];
 source ${SCRIPT_DIR}/pelle_config.sh
 activate_env
 cd ${REPO_DIR}
+
+# Matplotlib analyzer rebuilds FEM matrices per refinement level (slow on coarse
+# Slurm CPUs). PyVista screenshots consistently hit subprocess timeouts — skip default.
+export SWEEP_SKIP_PARTITION_SCREENSHOTS=1
 
 python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}
 COLLECT_EOF
@@ -151,5 +155,7 @@ fi
 if [[ "$DRY_RUN" == false ]]; then
     echo ""
     echo "To collect results manually after all jobs finish:"
+    echo "  # PyVista screenshots usually time out on Pelle; skip for a fast collect:"
+    echo "  export SWEEP_SKIP_PARTITION_SCREENSHOTS=1"
     echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
 fi
