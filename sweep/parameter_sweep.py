@@ -169,6 +169,18 @@ def find_solution_h5(run_dir: str) -> Optional[str]:
     return None
 
 
+def _collect_skip_figures() -> bool:
+    """When true, collect only merges metadata into index/CSV — no matplotlib/PyVista."""
+    v = os.environ.get("SWEEP_COLLECT_METADATA_ONLY", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _collect_skip_partition_screenshots() -> bool:
+    """When true, run_post_analysis still runs matplotlib but skips PyVista screenshots."""
+    v = os.environ.get("SWEEP_COLLECT_SKIP_PARTITION_SCREENSHOTS", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def run_post_analysis(run_dir: str) -> None:
     """Generate analysis plots and partition screenshots for a completed run."""
     analysis_dir = os.path.join(run_dir, "analysis")
@@ -185,13 +197,9 @@ def run_post_analysis(run_dir: str) -> None:
     except Exception as exc:
         logger.warning(f"Optimization analysis failed for {run_dir}: {exc}")
 
-    # 2. Partition screenshots (PyVista — subprocess; often times out / is slow on
-    #    batch nodes with large HDF5 meshes). Skip when SWEEP_SKIP_PARTITION_SCREENSHOTS
-    #    is set (Slurm collectors set this — see cluster/submit_sweep.sh).
-    if os.environ.get("SWEEP_SKIP_PARTITION_SCREENSHOTS", "").lower() not in (
-        "", "0", "false", "no",
-    ):
-        logger.info(f"Skipping partition screenshots for {run_dir} (SWEEP_SKIP_PARTITION_SCREENSHOTS)")
+    # 2. Partition screenshots (PyVista — run in subprocess to isolate segfaults)
+    if _collect_skip_partition_screenshots():
+        logger.info(f"Skipping PyVista partition screenshots for {run_dir}")
         return
 
     solution_h5 = find_solution_h5(run_dir)
@@ -520,6 +528,12 @@ def collect_results(
         if gathered:
             logger.info(f"Gathered {gathered} run(s) into {experiment_dir}")
 
+    if _collect_skip_figures():
+        logger.info(
+            "Collect metadata-only: building experiment_index.yaml and summary CSV "
+            "from solution/metadata.yaml (no matplotlib / partition screenshots)."
+        )
+
     existing_index_path = os.path.join(experiment_dir, "experiment_index.yaml")
     existing_index: dict = {}
     if os.path.isfile(existing_index_path):
@@ -563,13 +577,14 @@ def collect_results(
         if sweep_id and "sweep_origin" not in metrics:
             metrics["sweep_origin"] = sweep_id
 
-        analysis_dir = os.path.join(run_path, "analysis")
-        expected = ["refinement_optimization_metrics.png"]
-        if not all(
-            os.path.isfile(os.path.join(analysis_dir, f)) for f in expected
-        ):
-            logger.info(f"Generating missing analysis for {entry}")
-            run_post_analysis(run_path)
+        if not _collect_skip_figures():
+            analysis_dir = os.path.join(run_path, "analysis")
+            expected = ["refinement_optimization_metrics.png"]
+            if not all(
+                os.path.isfile(os.path.join(analysis_dir, f)) for f in expected
+            ):
+                logger.info(f"Generating missing analysis for {entry}")
+                run_post_analysis(run_path)
 
         run_entries.append(metrics)
 
@@ -594,7 +609,25 @@ def collect_results(
 
 
 def _write_summary_csv(csv_path: str, runs: List[dict]) -> None:
+    """Write summary table. Always creates the file when there is a sweep (headers if no rows)."""
+    base_fields = [
+        "directory",
+        "status",
+        "perimeter",
+        "final_energy",
+        "initial_N",
+        "final_N",
+        "converged",
+        "total_iterations",
+    ]
     if not runs:
+        parent = os.path.dirname(os.path.abspath(csv_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(base_fields + ["lambda_penalty", "seed"])
+        logger.info(f"Empty sweep summary CSV (header only): {csv_path}")
         return
     all_param_keys: List[str] = []
     for r in runs:
@@ -659,7 +692,24 @@ def main():
         action="store_true",
         help="Skip runs whose metadata.yaml already exists",
     )
+    parser.add_argument(
+        "--collect-metadata-only",
+        action="store_true",
+        help="With --mode collect: only experiment_index.yaml and the sweep summary CSV "
+        "(from solution/metadata.yaml); skips matplotlib plots and partition screenshots.",
+    )
+    parser.add_argument(
+        "--collect-skip-screenshots",
+        action="store_true",
+        help="With --mode collect: still run matplotlib optimization analysis into "
+        "analysis/ when missing, but skip PyVista screenshots (same as env "
+        "SWEEP_COLLECT_SKIP_PARTITION_SCREENSHOTS=1). Ignored if --collect-metadata-only.",
+    )
     args = parser.parse_args()
+
+    if args.collect_metadata_only and args.mode != "collect":
+        print("ERROR: --collect-metadata-only is only valid with --mode collect")
+        return 1
 
     setup_logging(log_level="INFO", log_to_console=True, log_to_file=False)
 
@@ -680,6 +730,10 @@ def main():
     sweep_id = f"{timestamp}_{sweep_name}"
 
     if args.mode == "collect":
+        if args.collect_metadata_only:
+            os.environ["SWEEP_COLLECT_METADATA_ONLY"] = "1"
+        if args.collect_skip_screenshots:
+            os.environ["SWEEP_COLLECT_SKIP_PARTITION_SCREENSHOTS"] = "1"
         collect_results(experiment_dir, sweep_spec, sweep_id,
                         surface=surface, n_partitions=n_partitions)
         print(f"Results collected in {experiment_dir}/experiment_index.yaml")

@@ -118,6 +118,11 @@ echo "Sweep spec: ${SWEEP_YAML_ABS}"
 echo "========================================"
 
 # --- Optional: submit collector job ---
+# Auto-collector uses --collect-skip-screenshots: writes experiment_index.yaml,
+# *_summary.csv, and matplotlib optimization plots under analysis/ when missing —
+# but skips PyVista screenshots (fast-ish; matplotlib can still be heavy on huge meshes).
+# Summary-only (no matplotlib): add --collect-metadata-only instead.
+# Full analysis: omit both flags when running collect manually.
 if [[ "$AUTO_COLLECT" == true && "$DRY_RUN" == false && ${#JOB_IDS[@]} -gt 0 ]]; then
     DEPS=$(IFS=:; echo "${JOB_IDS[*]}")
     COLLECT_LOGS="${REPO_DIR}/slurm_logs"
@@ -139,23 +144,21 @@ source ${SCRIPT_DIR}/pelle_config.sh
 activate_env
 cd ${REPO_DIR}
 
-# Matplotlib analyzer rebuilds FEM matrices per refinement level (slow on coarse
-# Slurm CPUs). PyVista screenshots consistently hit subprocess timeouts — skip default.
-export SWEEP_SKIP_PARTITION_SCREENSHOTS=1
-
-python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}
+python sweep/parameter_sweep.py --sweep ${SWEEP_YAML_ABS} --mode collect --collect-skip-screenshots --output-dir ${SWEEP_OUTPUT_DIR_ABS}
 COLLECT_EOF
     )
     echo ""
     echo "Collector job submitted (Job ID: ${COLLECT_JID}), depends on: ${DEPS}"
-    echo "  Will run: python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect"
+    echo "  Will run: python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --collect-skip-screenshots"
 fi
 
 # --- Manual collect command ---
 if [[ "$DRY_RUN" == false ]]; then
     echo ""
-    echo "To collect results manually after all jobs finish:"
-    echo "  # PyVista screenshots usually time out on Pelle; skip for a fast collect:"
-    echo "  export SWEEP_SKIP_PARTITION_SCREENSHOTS=1"
+    echo "Recommended (summary CSV + matplotlib analysis/, no PyVista):"
+    echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --collect-skip-screenshots --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
+    echo "Summary/index only — fastest:"
+    echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --collect-metadata-only --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
+    echo "Full matplotlib + screenshots (slow on large meshes):"
     echo "  python sweep/parameter_sweep.py --sweep ${SWEEP_YAML} --mode collect --output-dir ${SWEEP_OUTPUT_DIR_ABS}"
 fi
