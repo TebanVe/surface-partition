@@ -723,7 +723,15 @@ def main():
     base_config = _load_yaml(base_config_path)
     surface, n_partitions = derive_experiment_identity(base_config)
 
-    experiment_dir = os.path.join(args.output_dir, f"{surface}_npart{n_partitions}")
+    exp_suffix = f"{surface}_npart{n_partitions}"
+    out_raw = os.path.expanduser(args.output_dir)
+    out_abs = os.path.abspath(out_raw)
+    # Avoid torus_npart10/torus_npart10 when someone passes .../results/torus_npart10
+    # as output-dir instead of .../results.
+    if os.path.basename(out_abs.rstrip(os.sep)) == exp_suffix:
+        experiment_dir = out_abs
+    else:
+        experiment_dir = os.path.join(out_raw, exp_suffix)
     os.makedirs(experiment_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

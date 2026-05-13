@@ -139,6 +139,30 @@ cluster/
 └── submit_sweep.sh              # Submit parameter sweep to Pelle (one job per combination)
 ```
 
+### Math Documentation (`docs/math/`)
+
+`docs/` is gitignored (local only).  Mathematical derivations of the quantities
+computed in the codebase are written as LaTeX documents compiled to PDF:
+
+```
+docs/math/
+├── AUTHORING_GUIDE.md          ← how to add a new document (read this first)
+├── Makefile                    ← master build: `make all`
+├── shared/
+│   ├── macros.tex              ← shared notation for all documents
+│   └── references.bib          ← shared bibliography
+└── 01-phase2-derivatives/
+    ├── main.tex
+    └── main.pdf                ← Phase 2 perimeter/area derivatives (analytical + FD)
+```
+
+**Adding a new math document**: follow `docs/math/AUTHORING_GUIDE.md`.  It
+specifies the directory naming convention, the `main.tex` template, all
+available macros from `shared/macros.tex`, bibliography keys, and the scope
+policy (only derive what is currently implemented — not planned features).
+
+To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/math all`.
+
 ### Run Output Layout (Structured)
 
 Each Phase 1 run creates a structured directory under `results/`:
