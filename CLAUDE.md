@@ -27,6 +27,8 @@ python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_4p
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
 # Or with CLI overrides:
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --max-iterations 10 --method ipopt
+# Enable timing profiling (writes timing_profile.yaml per campaign):
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml --profile
 
 # Visualization (all require pyvista)
 # Production viewer — vectorized, handles fine meshes efficiently:
@@ -49,6 +51,10 @@ python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml
 # Sweep analysis (reads experiment_index.yaml)
 python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/ --metric final_energy
+
+# Timing analysis (reads experiment_index.yaml timing fields; requires --profile runs)
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --campaign ipopt_btol0.001_lbfgs30_hess
 ```
 
 ## Testing
@@ -108,6 +114,7 @@ src/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
 │   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
+├── profiling.py                  # ProfilingState: opt-in timing accumulator for Phase 2 callbacks (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
@@ -129,6 +136,7 @@ parameters/
 sweep/                              # Parameter sweep tool (independent from core pipeline)
 ├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
 ├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
+├── timing_analyzer.py            # Scaling figures from timing_profile.yaml data (requires --profile runs)
 └── parameters/
     ├── sweep_torus_lambda.yaml       # Sweep: lambda × seed for torus (grid strategy)
     └── sweep_double_torus_lambda.yaml  # Sweep: lambda × resolution for double torus (grouped grid)
@@ -185,7 +193,8 @@ results/run_{timestamp}_surf{surface}_npart{N}_v1..._v2..._lam{λ}_seed{S}/
 │       ├── iteration_001_20260410_131042.h5
 │       ├── iteration_002_20260410_131215.h5
 │       ├── refinement.yaml
-│       └── refinement.log
+│       ├── refinement.log
+│       └── timing_profile.yaml   # written only when --profile is passed
 ├── analysis/
 │   ├── refinement_optimization_metrics.png
 │   ├── constraint_evolution.png
@@ -240,6 +249,12 @@ final_N, converged, total_iterations). Perimeter is the primary comparison
 metric because it is resolution-independent (unlike energy, which is
 ε-dependent).
 
+When runs have been profiled with `--profile`, `--mode collect` also extracts
+timing scalars into each run entry: `n_cells`, `n_active_vps`, `n_triple_points`,
+and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callback
+% breakdown, Steiner recomputation totals). These fields are consumed by
+`sweep/timing_analyzer.py` to produce scaling figures.
+
 ### Key Classes and Their Roles
 
 | Class | Module | Purpose |
@@ -262,6 +277,7 @@ metric because it is resolution-independent (unlike energy, which is
 | `SteinerHandler` | `src/partition/steiner_handler.py` | Manages Steiner/triple-point perimeter and area contributions for triangles where 3+ cells meet. |
 | `PartitionArrays` | `src/partition/partition_arrays.py` | Pre-computes sparse Jacobian/Hessian sparsity structure for IPOPT. |
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
+| `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |

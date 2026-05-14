@@ -181,6 +181,12 @@ def _collect_skip_partition_screenshots() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _collect_force_analysis() -> bool:
+    """When true, collect runs run_post_analysis even if expected PNGs already exist."""
+    v = os.environ.get("SWEEP_COLLECT_FORCE_ANALYSIS", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def run_post_analysis(run_dir: str) -> None:
     """Generate analysis plots and partition screenshots for a completed run."""
     analysis_dir = os.path.join(run_dir, "analysis")
@@ -461,6 +467,50 @@ def _gather_flat_runs(
     return moved
 
 
+def _extract_timing_metrics(run_dir: str) -> Optional[dict]:
+    """Scan refinement campaign dirs for timing_profile.yaml files.
+
+    Returns a dict keyed by campaign name, or None if no profiles found.
+    """
+    refinement_dir = os.path.join(run_dir, "refinement")
+    if not os.path.isdir(refinement_dir):
+        return None
+    timing: dict = {}
+    for campaign in os.listdir(refinement_dir):
+        tp_path = os.path.join(refinement_dir, campaign, "timing_profile.yaml")
+        if os.path.isfile(tp_path):
+            try:
+                timing[campaign] = _load_yaml(tp_path)
+            except Exception:
+                pass
+    return timing if timing else None
+
+
+def _flatten_timing(timing: dict) -> dict:
+    """Flatten the first campaign's timing_profile into a scalar summary dict."""
+    flat: dict = {}
+    for campaign_name, tdata in timing.items():
+        meta = tdata.get("run_metadata", {})
+        flat["n_cells"] = meta.get("n_cells")
+        flat["n_active_vps"] = meta.get("n_active_vps")
+        flat["n_triple_points"] = meta.get("n_triple_points")
+        summary = tdata.get("summary", {})
+        flat["timing_total_wall_s"] = summary.get("total_wall_s")
+        flat["timing_hessian_pct_wall"] = summary.get("hessian_pct_wall")
+        callbacks = tdata.get("callbacks", {})
+        for cb in ("objective", "gradient", "constraints", "jacobian", "hessian"):
+            cb_data = callbacks.get(cb, {})
+            flat[f"timing_{cb}_total_wall_s"] = cb_data.get("total_wall_s")
+            flat[f"timing_{cb}_mean_wall_s"] = cb_data.get("mean_wall_s")
+            if "steiner_recomps_total" in cb_data:
+                flat[f"timing_{cb}_steiner_recomps_total"] = cb_data["steiner_recomps_total"]
+                flat[f"timing_{cb}_steiner_recomps_per_call"] = cb_data.get(
+                    "steiner_recomps_per_call_mean")
+        flat["timing_campaigns"] = timing  # full nested data
+        break  # use first campaign only for flat scalars
+    return flat
+
+
 def _extract_run_metrics(run_dir: str) -> Optional[dict]:
     """Extract metrics from a single run directory's metadata.yaml."""
     meta_path = os.path.join(run_dir, "solution", "metadata.yaml")
@@ -497,7 +547,7 @@ def _extract_run_metrics(run_dir: str) -> Optional[dict]:
             if val is not None:
                 params[lab] = int(val)
 
-    return {
+    entry: dict = {
         "directory": os.path.basename(run_dir),
         "params": params,
         "status": "completed",
@@ -508,6 +558,12 @@ def _extract_run_metrics(run_dir: str) -> Optional[dict]:
         "converged": meta.get("success", False),
         "total_iterations": total_iterations,
     }
+
+    timing = _extract_timing_metrics(run_dir)
+    if timing:
+        entry.update(_flatten_timing(timing))
+
+    return entry
 
 
 def collect_results(
@@ -533,8 +589,13 @@ def collect_results(
             "Collect metadata-only: building experiment_index.yaml and summary CSV "
             "from solution/metadata.yaml (no matplotlib / partition screenshots)."
         )
-
-    existing_index_path = os.path.join(experiment_dir, "experiment_index.yaml")
+    else:
+        logger.info(
+            "Collect analysis flags: skip_partition_screenshots=%s, force_analysis=%s",
+            _collect_skip_partition_screenshots(),
+            _collect_force_analysis(),
+        )
+        logger.info("Collect target experiment_dir=%s", experiment_dir)
     existing_index: dict = {}
     if os.path.isfile(existing_index_path):
         existing_index = _load_yaml(existing_index_path) or {}
@@ -580,10 +641,11 @@ def collect_results(
         if not _collect_skip_figures():
             analysis_dir = os.path.join(run_path, "analysis")
             expected = ["refinement_optimization_metrics.png"]
-            if not all(
+            have_all = all(
                 os.path.isfile(os.path.join(analysis_dir, f)) for f in expected
-            ):
-                logger.info(f"Generating missing analysis for {entry}")
+            )
+            if _collect_force_analysis() or not have_all:
+                logger.info(f"Generating analysis for {entry}")
                 run_post_analysis(run_path)
 
         run_entries.append(metrics)
@@ -705,10 +767,23 @@ def main():
         "analysis/ when missing, but skip PyVista screenshots (same as env "
         "SWEEP_COLLECT_SKIP_PARTITION_SCREENSHOTS=1). Ignored if --collect-metadata-only.",
     )
+    parser.add_argument(
+        "--force-analysis",
+        action="store_true",
+        help="With --mode collect: (re)run matplotlib post-processing even if "
+        "analysis/refinement_optimization_metrics.png exists. Incompatible with "
+        "--collect-metadata-only.",
+    )
     args = parser.parse_args()
 
     if args.collect_metadata_only and args.mode != "collect":
         print("ERROR: --collect-metadata-only is only valid with --mode collect")
+        return 1
+    if args.force_analysis and args.mode != "collect":
+        print("ERROR: --force-analysis is only valid with --mode collect")
+        return 1
+    if args.force_analysis and args.collect_metadata_only:
+        print("ERROR: --force-analysis cannot be combined with --collect-metadata-only")
         return 1
 
     setup_logging(log_level="INFO", log_to_console=True, log_to_file=False)
@@ -740,8 +815,15 @@ def main():
     if args.mode == "collect":
         if args.collect_metadata_only:
             os.environ["SWEEP_COLLECT_METADATA_ONLY"] = "1"
+        else:
+            # Avoid a leftover export from an earlier session disabling all analysis.
+            os.environ.pop("SWEEP_COLLECT_METADATA_ONLY", None)
         if args.collect_skip_screenshots:
             os.environ["SWEEP_COLLECT_SKIP_PARTITION_SCREENSHOTS"] = "1"
+        if args.force_analysis:
+            os.environ["SWEEP_COLLECT_FORCE_ANALYSIS"] = "1"
+        else:
+            os.environ.pop("SWEEP_COLLECT_FORCE_ANALYSIS", None)
         collect_results(experiment_dir, sweep_spec, sweep_id,
                         surface=surface, n_partitions=n_partitions)
         print(f"Results collected in {experiment_dir}/experiment_index.yaml")

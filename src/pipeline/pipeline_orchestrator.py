@@ -201,6 +201,7 @@ class RefinementConfig:
     use_vectorized: bool = True
     save_iterations: bool = False
     distance_preservation: str = 'preserve'
+    profile: bool = False
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RefinementConfig':
@@ -237,6 +238,7 @@ class PipelineOrchestrator:
         self.target_area = float(mesh.M.sum()) / partition.n_cells
 
         self._migration_orchestrator: Optional[MigrationOrchestrator] = None
+        self._prof_state = None
 
     # ── Individual stage methods ──────────────────────────────────────
 
@@ -266,6 +268,17 @@ class PipelineOrchestrator:
             self.partition, self.mesh, self.target_area,
             use_vectorized=use_vectorized)
 
+        if self.config.profile and self._prof_state is None:
+            from ..profiling import ProfilingState
+            n_active = sum(1 for vp in self.partition.variable_points
+                           if getattr(vp, 'active', True))
+            n_tp = len(optimizer.steiner_handler.triple_points)
+            self._prof_state = ProfilingState(
+                n_cells=self.partition.n_cells,
+                n_active_vps=n_active,
+                n_triple_points=n_tp,
+            )
+
         x0 = self.partition.get_variable_vector()
         initial_perimeter = optimizer.objective(x0)
         self.logger.info(f"Perimeter at start of iteration: {initial_perimeter:.10f}")
@@ -278,6 +291,7 @@ class PipelineOrchestrator:
             lbfgs_memory=lbfgs_memory,
             best_iterate=best_iterate,
             exact_hessian=exact_hessian,
+            profile=self._prof_state,
         )
         opt_elapsed = time.time() - opt_start_time
 
@@ -528,6 +542,8 @@ class PipelineOrchestrator:
         self.logger.info(f"Save iterations: {self.config.save_iterations}")
         self.logger.info("=" * 80)
 
+        self._prof_state = None  # reset for this run
+
         global_start_time = time.time()
         converged = False
         topology_iteration = 0
@@ -743,6 +759,10 @@ class PipelineOrchestrator:
             self.logger.info(f"Final state: {final_file}")
         self.logger.info("=" * 80)
 
+        if self._prof_state is not None and output_dir:
+            self._prof_state.topology_iterations = topology_iteration
+            self._write_timing_profile(output_dir, self.config, self.mesh)
+
         return {
             'converged': converged,
             'iterations': topology_iteration,
@@ -753,6 +773,20 @@ class PipelineOrchestrator:
         }
 
     # ── Private helpers ───────────────────────────────────────────────
+
+    def _write_timing_profile(self, campaign_dir, cfg, mesh):
+        """Finalize and write timing_profile.yaml into the campaign directory."""
+        tp_path = os.path.join(campaign_dir, 'timing_profile.yaml')
+        self._prof_state.finalize()
+        data = self._prof_state.to_yaml_dict(
+            campaign_name=build_campaign_name(cfg),
+            method=cfg.method,
+            exact_hessian=cfg.exact_hessian,
+            mesh_vertices=len(mesh.vertices),
+        )
+        with open(tp_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        self.logger.info(f"Timing profile written to: {tp_path}")
 
     def _write_refinement_yaml(self, campaign_dir, solution_path):
         """Write a refinement.yaml config snapshot into the campaign directory."""

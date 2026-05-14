@@ -84,6 +84,8 @@ def _build_config(args):
         config.exact_hessian = True
     if args.save_iterations:
         config.save_iterations = True
+    if args.profile:
+        config.profile = True
 
     return config
 
@@ -160,6 +162,11 @@ Example usage:
 
     parser.add_argument('--save-iterations', action='store_true', default=False,
                        help='Save checkpoint after each optimization step.')
+
+    parser.add_argument('--profile', action='store_true', default=False,
+                       help='Enable timing profiling. Writes timing_profile.yaml per campaign '
+                            'with per-callback wall-clock times and Steiner recomputation counts. '
+                            'Zero overhead when omitted.')
 
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging')

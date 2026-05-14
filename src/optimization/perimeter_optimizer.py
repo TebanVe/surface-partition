@@ -23,6 +23,7 @@ from typing import Dict, Optional, Tuple, List, Set
 import time
 
 from ..logging_config import get_logger
+from ..profiling import ProfilingState
 from ..mesh.tri_mesh import TriMesh
 from ..partition.contour_partition import PartitionContour
 from ..partition.area_calculator import AreaCalculator
@@ -53,12 +54,14 @@ class IPOPTProblemAdapter:
 
     def __init__(self, optimizer: 'PerimeterOptimizer',
                  track_best: bool = False, best_feas_tol: float = 1e-6,
-                 exact_hessian: bool = False):
+                 exact_hessian: bool = False,
+                 profile: Optional[ProfilingState] = None):
         self._opt = optimizer
         self._pa = optimizer._arrays   # PartitionArrays snapshot
         self._track_best = track_best
         self._best_feas_tol = best_feas_tol
         self._exact_hessian = exact_hessian
+        self._profile = profile
         self.best_obj: float = np.inf
         self.best_x: Optional[np.ndarray] = None
         self._last_x: Optional[np.ndarray] = None
@@ -70,13 +73,28 @@ class IPOPTProblemAdapter:
     def objective(self, x: np.ndarray) -> float:
         if self._track_best:
             self._last_x = x.copy()
-        return self._opt.objective(x)
+        if self._profile is not None:
+            t0 = time.perf_counter()
+        result = self._opt.objective(x)
+        if self._profile is not None:
+            self._profile.record('objective', time.perf_counter() - t0)
+        return result
 
     def gradient(self, x: np.ndarray) -> np.ndarray:
-        return self._opt.objective_gradient(x)
+        if self._profile is not None:
+            t0 = time.perf_counter()
+        result = self._opt.objective_gradient(x)
+        if self._profile is not None:
+            self._profile.record('gradient', time.perf_counter() - t0)
+        return result
 
     def constraints(self, x: np.ndarray) -> np.ndarray:
-        return self._opt.constraint_area_equality(x)
+        if self._profile is not None:
+            t0 = time.perf_counter()
+        result = self._opt.constraint_area_equality(x)
+        if self._profile is not None:
+            self._profile.record('constraints', time.perf_counter() - t0)
+        return result
 
     def jacobianstructure(self) -> tuple:
         """Pre-computed sparsity pattern — called once at setup."""
@@ -87,16 +105,23 @@ class IPOPTProblemAdapter:
 
         Direct sparse computation — no dense matrix allocated.
         """
+        if self._profile is not None:
+            t0 = time.perf_counter()
         self._opt._arrays.vp_lambda[:] = x
         pa = self._opt._arrays
 
         if pa.nnz_lookup is not None:
             area_vals = vectorized_area.compute_area_jacobian_sparse(pa)
-            steiner_vals = vectorized_steiner.compute_steiner_area_jacobian_sparse(pa)
-            return area_vals + steiner_vals
+            steiner_vals = vectorized_steiner.compute_steiner_area_jacobian_sparse(
+                pa, _prof=self._profile)
+            result = area_vals + steiner_vals
+        else:
+            J_dense = self._opt.constraint_area_jacobian(x)
+            result = J_dense[self._pa.jac_row, self._pa.jac_col]
 
-        J_dense = self._opt.constraint_area_jacobian(x)
-        return J_dense[self._pa.jac_row, self._pa.jac_col]
+        if self._profile is not None:
+            self._profile.record('jacobian', time.perf_counter() - t0)
+        return result
 
     def _hessianstructure_impl(self) -> tuple:
         """Return Hessian sparsity pattern (lower triangle)."""
@@ -116,18 +141,24 @@ class IPOPTProblemAdapter:
         Returns:
             (hess_nnz,) float64 — lower triangle values.
         """
+        if self._profile is not None:
+            t0 = time.perf_counter()
         self._opt._arrays.vp_lambda[:] = x
         pa = self._opt._arrays
 
         perim_hess = vectorized_perimeter.compute_perimeter_hessian_sparse(pa)
-        steiner_perim_hess = vectorized_steiner.compute_steiner_perimeter_hessian_fd(pa)
+        steiner_perim_hess = vectorized_steiner.compute_steiner_perimeter_hessian_fd(
+            pa, _prof=self._profile)
 
         area_hess = vectorized_area.compute_area_hessian_sparse(pa, lagrange)
         steiner_area_hess = vectorized_steiner.compute_steiner_area_hessian_fd(
-            pa, lagrange)
+            pa, lagrange, _prof=self._profile)
 
-        return (obj_factor * (perim_hess + steiner_perim_hess)
-                + area_hess + steiner_area_hess)
+        result = (obj_factor * (perim_hess + steiner_perim_hess)
+                  + area_hess + steiner_area_hess)
+        if self._profile is not None:
+            self._profile.record('hessian', time.perf_counter() - t0)
+        return result
 
     def intermediate(self, alg_mod, iter_count, obj_value,
                      inf_pr, inf_du, mu, d_norm,
@@ -138,6 +169,9 @@ class IPOPTProblemAdapter:
         if iter_count % 10 == 0:
             logger.info(f"IPOPT iter {iter_count}: obj={obj_value:.6f}, "
                         f"constr_viol={inf_pr:.2e}")
+
+        if self._profile is not None:
+            self._profile.ipopt_iter_count += 1
 
         if (self._track_best
                 and inf_pr < self._best_feas_tol
@@ -407,7 +441,8 @@ class PerimeterOptimizer:
                 method: str = 'SLSQP',
                 lbfgs_memory: int = 6,
                 best_iterate: bool = False,
-                exact_hessian: bool = False) -> OptimizeResult:
+                exact_hessian: bool = False,
+                profile: Optional[ProfilingState] = None) -> OptimizeResult:
         """
         Run constrained perimeter optimization.
         
@@ -498,7 +533,7 @@ class PerimeterOptimizer:
 
             adapter = IPOPTProblemAdapter(
                 self, track_best=best_iterate, best_feas_tol=tol * 100,
-                exact_hessian=exact_hessian)
+                exact_hessian=exact_hessian, profile=profile)
 
             problem = cyipopt.Problem(
                 n=n,
@@ -582,7 +617,9 @@ class PerimeterOptimizer:
             )
 
         elapsed_time = time.time() - start_time
-        
+        if profile is not None:
+            profile.total_wall_s += elapsed_time
+
         # Sync optimized lambdas back to the object representation
         if self._arrays is not None:
             # Vectorized path: result.x lives in active-index space; expand to full
