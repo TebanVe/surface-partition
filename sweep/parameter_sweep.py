@@ -596,6 +596,8 @@ def collect_results(
             _collect_force_analysis(),
         )
         logger.info("Collect target experiment_dir=%s", experiment_dir)
+
+    existing_index_path = os.path.join(experiment_dir, "experiment_index.yaml")
     existing_index: dict = {}
     if os.path.isfile(existing_index_path):
         existing_index = _load_yaml(existing_index_path) or {}
