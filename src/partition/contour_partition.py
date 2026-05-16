@@ -647,7 +647,7 @@ class PartitionContour:
         if self.boundary_segments:
             # MODE 2: Update existing segments (after topology switch)
             # Preserve connectivity, only update cell_pair attributes
-            self.logger.info(f"Updating {len(self.boundary_segments)} existing boundary segments (preserving connectivity)")
+            self.logger.debug(f"Updating {len(self.boundary_segments)} existing boundary segments (preserving connectivity)")
             
             for seg in self.boundary_segments:
                 # Update cell_pair from current VP membership
@@ -661,11 +661,11 @@ class PartitionContour:
                 seg.segment_type = "normal"
                 seg.crossing_triangles = []
             
-            self.logger.info(f"Updated cell_pair attributes for {len(self.boundary_segments)} segments")
+            self.logger.debug(f"Updated cell_pair attributes for {len(self.boundary_segments)} segments")
             return
         
         # MODE 1: Initial build from scratch (boundary_segments is empty)
-        self.logger.info("Building segment connectivity from scratch (initial build)")
+        self.logger.debug("Building segment connectivity from scratch (initial build)")
         seen_segments = set()
         
         for tri_seg in self._triangle_segments.values():
@@ -714,7 +714,7 @@ class PartitionContour:
                                 segment_type="normal"
                             ))
         
-        self.logger.info(f"Built {len(self.boundary_segments)} boundary segments from triangle_segments")
+        self.logger.debug(f"Built {len(self.boundary_segments)} boundary segments from triangle_segments")
     
     def evaluate_variable_point(self, var_point_idx: int) -> np.ndarray:
         """Get 3D/2D coordinates of a variable point."""
@@ -741,7 +741,7 @@ class PartitionContour:
         - Any manual modification to triangle_segments
         """
         self._build_segment_to_triangle_map()
-        self.logger.info("Rebuilt segment_to_triangle map")
+        self.logger.debug("Rebuilt segment_to_triangle map")
     
     def get_triangle_based_segments(self) -> List[Tuple[int, int]]:
         """

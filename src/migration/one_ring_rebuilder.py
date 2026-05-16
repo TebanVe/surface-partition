@@ -136,7 +136,7 @@ def rebuild_one_ring(vertex: int,
         if len(labels) == 3:
             if is_type2:
                 result.new_triple_triangle = tri_idx
-                logger.info(f"New triple-point triangle {tri_idx} created (expected for Type 2)")
+                logger.debug(f"New triple-point triangle {tri_idx} created (expected for Type 2)")
             else:
                 logger.error(f"Pure Type 1 flip created triple-point triangle {tri_idx}! "
                            f"Labels: v{v1}={vertex_labels[v1]}, v{v2}={vertex_labels[v2]}, "
@@ -145,7 +145,7 @@ def rebuild_one_ring(vertex: int,
     # Phase 8: Rebuild VP adjacency for affected region
     partition._rebuild_vp_adjacency()
     
-    logger.info(f"1-ring rebuild complete: {len(result.destroyed_vps)} destroyed, "
+    logger.debug(f"1-ring rebuild complete: {len(result.destroyed_vps)} destroyed, "
                f"{len(result.created_vps)} created, {len(result.kept_vps)} kept")
     
     return result
