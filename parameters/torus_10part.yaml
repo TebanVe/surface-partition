@@ -58,12 +58,12 @@ surface:
 refinement:
   method: ipopt                       # "ipopt", "SLSQP", or "trust-constr"
   max_iterations: 2                  # topology iteration cycles (optimize → migrate)
-  max_opt_iter: 1000                  # optimizer iterations per topology
+  max_opt_iter: 300                  # optimizer iterations per topology
   tolerance: 1.0e-7                    # optimizer convergence tolerance
   boundary_tol: 0.001                 # λ threshold triggering Type 1 migration
   lbfgs_memory: 30                    # L-BFGS history size (ipopt only; default 6, try 20-50)
-  exact_hessian: false                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
-  best_iterate: false                 # track best feasible iterate (ipopt only)
+  exact_hessian: true                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
+  best_iterate: true                 # track best feasible iterate (ipopt only)
   allow_partial_convergence: true     # continue to migration even if optimizer hits max_opt_iter
   save_iterations: true              # true: checkpoint after every topology iteration
   distance_preservation: preserve     # "preserve", "midpoint", or a float 0.0-1.0
