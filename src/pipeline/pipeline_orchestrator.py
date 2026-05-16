@@ -228,14 +228,14 @@ class PipelineOrchestrator:
     plus a convenience run_refinement_loop() that chains them.
     """
 
-    def __init__(self, mesh: TriMesh, partition: PartitionContour,
+    def __init__(self, mesh: TriMesh = None, partition: PartitionContour = None,
                  config: RefinementConfig = None, logger=None):
         self.mesh = mesh
         self.partition = partition
         self.config = config or RefinementConfig()
         self.logger = logger or get_logger(__name__)
 
-        self.target_area = float(mesh.M.sum()) / partition.n_cells
+        self.target_area = float(mesh.M.sum()) / partition.n_cells if mesh is not None else None
 
         self._migration_orchestrator: Optional[MigrationOrchestrator] = None
         self._prof_state = None
