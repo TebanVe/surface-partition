@@ -602,7 +602,7 @@ class PipelineOrchestrator:
             opt_info = self.optimize()
 
             if not opt_info['success']:
-                IPOPT_NONFATAL = {-1, -4, 5}
+                IPOPT_NONFATAL = {-1, -3, -4, 5}
                 ipopt_status = opt_info.get('status', None)
                 is_nonfatal = (ipopt_status in IPOPT_NONFATAL)
 
