@@ -90,9 +90,14 @@ topology cycles within a single run:
 \begin{itemize}[noitemsep]
   \item \textbf{Wall-clock time} --- total and per-call mean for each
         callback.
-  \item \textbf{Steiner recomputation count} --- number of times a
-        per-triple-point Steiner geometry evaluation is triggered inside
-        that callback.
+  \item \textbf{Steiner recomputation count} --- a running integer
+        incremented each time \code{record\_steiner()} is called inside a
+        callback.  One increment corresponds to one full evaluation of the
+        Steiner geometry (Fermat-Torricelli point and associated perimeter
+        or area) for all active triple points.  This counter directly
+        measures the number of finite-difference perturbations executed
+        within a callback, making it the primary diagnostic for the FD
+        cost.
 \end{itemize}
 
 Results are written to \code{timing\_profile.yaml} in the campaign
@@ -103,28 +108,39 @@ directory when \texttt{-{}-profile} is passed to
                   title={Code: profiling accumulator}, fontupper=\small]
 \codefile{src/profiling.py}: \code{ProfilingState}\\[2pt]
 \code{record(key, dt)} --- accumulate wall time.\\
-\code{record\_steiner(key, n)} --- increment recomp counter.\\
+\code{record\_steiner(key, n)} --- increment the Steiner recomputation count.\\
 \code{finalize()} --- compute means and percentage breakdown.\\
 \code{to\_yaml\_dict()} --- serialize to \code{timing\_profile.yaml}.
 \end{tcolorbox}
 
 \subsection{Why only Jacobian and Hessian report recomp counts}
 
-The \code{\_prof} handle is only threaded into the vectorized Steiner
-functions in \codefile{src/partition/vectorized\_steiner.py} when they
-are called from the Jacobian and Hessian paths.  The gradient callback
-also computes Steiner derivatives by finite differences, but the recomp
-counter is not incremented there.
+All Steiner derivative quantities --- the perimeter gradient, the area
+Jacobian, and both Hessians --- are computed by finite differences (see
+document \codefile{01-phase2-derivatives}, \S{}6).  None of these
+quantities has an analytical derivative implementation.  However, the
+Steiner recomputation count is only recorded for the Jacobian and
+Hessian callbacks.  This is an instrumentation choice: the profiling
+handle \code{\_prof} is threaded into the vectorized Steiner functions in
+\codefile{src/partition/vectorized\_steiner.py} only when they are called
+from those two paths.  In the gradient callback, the same finite-difference
+loop executes and the Steiner geometry is re-evaluated for every
+Steiner-affected VP, but \code{\_prof} is not passed in, so those
+evaluations are not counted.  The gradient's Steiner FD cost is real but
+small (absorbed into the $0.54\%$ wall time in
+Table~\ref{tab:reference-breakdown}); the counter was wired primarily
+where the cost was expected to be large.
 
-\begin{remark}[Recomp counts and FD structure]
-The recomp counter was specifically designed to quantify the cost of
-the finite-difference loops in the Jacobian and Hessian paths.  A single
-Jacobian call loops over all active Steiner triangles once (one recomp
-per triangle per call, totalling $\sim\!61$ for a run with 20 triple
-points).  A single Hessian call invokes the full Jacobian once per
-Steiner-related VP perturbation; with $\sim\!180$ such VPs and
-$\sim\!61$ per-Jacobian recomps, the per-Hessian count is
-$180 \times 61 \approx 11\,000$.
+\begin{remark}[FD structure and recomp counts]
+A single gradient call perturbs each of the $\sim\!180$ Steiner-affected
+VPs once (forward FD, $\varepsilon = 10^{-6}$) and evaluates the Steiner
+geometry at each perturbation --- but these are not counted.  A single
+Jacobian call does the same for the area constraints, and \emph{is}
+counted: $\sim\!61$ evaluations for a run with 20 triple points.  A
+single Hessian call then re-runs the full FD gradient and Jacobian once
+per Steiner-affected VP (the outer FD layer), giving
+$180 \times 61 \approx 11\,000$ counted evaluations per Hessian call ---
+in agreement with the measured 11\,041.
 \end{remark}
 
 % =========================================================================
