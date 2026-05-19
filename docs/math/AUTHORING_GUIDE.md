@@ -289,5 +289,6 @@ a forward-looking design document.
 | Directory | Topic | Status |
 |---|---|---|
 | `01-phase2-derivatives/` | Perimeter value/gradient/Hessian; area Jacobian/Hessian; Steiner FD schemes | Complete |
+| `02-phase2-timing-profile/` | Empirical IPOPT callback timing; Steiner FD bottleneck; scaling outlook | Living document |
 
 When you create a new document, add a row to this table.
