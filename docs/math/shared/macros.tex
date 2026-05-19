@@ -1,0 +1,94 @@
+% shared/macros.tex
+% Shared notation for all surface-partition math documents.
+% Include with: \input{../shared/macros}
+
+% -------------------------------------------------------------------------
+% Packages (include here so each document only needs \input{../shared/macros})
+% -------------------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}           % \bm for bold math
+\usepackage{mathtools}    % \coloneqq, dcases, etc.
+\usepackage{booktabs}     % \toprule etc. in tables
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+
+\geometry{a4paper, margin=2.5cm}
+
+% -------------------------------------------------------------------------
+% Theorem-like environments
+% -------------------------------------------------------------------------
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+
+\theoremstyle{plain}
+\newtheorem{prop}{Proposition}[section]
+
+% -------------------------------------------------------------------------
+% Mesh and geometry
+% -------------------------------------------------------------------------
+\newcommand{\V}{\mathbf{V}}            % vertex array V[i] in R^dim
+\newcommand{\F}{\mathbf{F}}            % face (triangle) array
+\newcommand{\vone}[1]{v_{1,#1}}       % first vertex index of VP i
+\newcommand{\vtwo}[1]{v_{2,#1}}       % second vertex index of VP i
+
+% -------------------------------------------------------------------------
+% Variable points
+% -------------------------------------------------------------------------
+\newcommand{\lam}{\lambda}             % scalar VP parameter
+\newcommand{\Lam}{\boldsymbol{\lambda}}% full parameter vector
+\newcommand{\vp}[1]{\mathbf{p}_{#1}}  % 3D position of VP i
+\newcommand{\ed}[1]{\mathbf{d}_{#1}}  % edge direction d_i = V[v1_i] - V[v2_i]
+
+% -------------------------------------------------------------------------
+% Steiner / triple-point
+% -------------------------------------------------------------------------
+\newcommand{\Sv}{\mathbf{S}}           % Steiner (Fermat-Torricelli) point
+\newcommand{\Ki}{K_{i}}               % projection matrix (I-n_i n_i^T)/r_i
+\newcommand{\Mmat}{M}                 % sum of K_i matrices at a triple point
+
+% -------------------------------------------------------------------------
+% Normals and unit vectors
+% -------------------------------------------------------------------------
+\newcommand{\nhat}{\hat{\mathbf{n}}}  % unit normal to a triangle
+\newcommand{\Dhat}{\hat{\boldsymbol{\Delta}}}  % unit segment direction
+
+% -------------------------------------------------------------------------
+% Operations
+% -------------------------------------------------------------------------
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\newcommand{\abs}[1]{\left|#1\right|}
+\newcommand{\ip}[2]{\langle #1,\, #2 \rangle}
+
+% Projection perpendicular to a unit vector \uhat
+\newcommand{\Proj}[1]{\bigl(\mathbf{I} - #1 #1^\top\bigr)}
+
+% -------------------------------------------------------------------------
+% Calculus shorthands
+% -------------------------------------------------------------------------
+\newcommand{\pd}[2]{\dfrac{\partial #1}{\partial #2}}
+\newcommand{\pdd}[3]{\dfrac{\partial^2 #1}{\partial #2\,\partial #3}}
+\newcommand{\grad}{\nabla}
+\newcommand{\Hess}[1]{\nabla^2 #1}
+
+% -------------------------------------------------------------------------
+% Optimization problem objects
+% -------------------------------------------------------------------------
+\newcommand{\Preg}{P_{\mathrm{reg}}}  % regular perimeter
+\newcommand{\Pst}{P_{\mathrm{st}}}   % Steiner perimeter
+\newcommand{\Areg}{A^{\mathrm{reg}}} % regular cell area
+\newcommand{\Ast}{A^{\mathrm{st}}}   % Steiner area contribution
+\newcommand{\Atgt}{\bar{A}}           % target area per cell
+\newcommand{\Lagr}{\mathcal{L}}       % Lagrangian
+\newcommand{\objfac}{\sigma}          % IPOPT objective scaling factor
+
+% -------------------------------------------------------------------------
+% Code cross-references (for "In the code..." callouts)
+% -------------------------------------------------------------------------
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\codefile}[1]{\texttt{\small #1}}
