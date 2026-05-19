@@ -113,7 +113,7 @@ directory when \texttt{-{}-profile} is passed to
 \code{to\_yaml\_dict()} --- serialize to \code{timing\_profile.yaml}.
 \end{tcolorbox}
 
-\subsection{Why only Jacobian and Hessian report recomp counts}
+\subsection{Why only Jacobian and Hessian report Steiner evaluation counts}
 
 All Steiner derivative quantities --- the perimeter gradient, the area
 Jacobian, and both Hessians --- are computed by finite differences (see
@@ -131,7 +131,7 @@ small (absorbed into the $0.54\%$ wall time in
 Table~\ref{tab:reference-breakdown}); the counter was wired primarily
 where the cost was expected to be large.
 
-\begin{remark}[FD structure and recomp counts]
+\begin{remark}[FD structure and Steiner evaluation counts]
 A single gradient call perturbs each of the $\sim\!180$ Steiner-affected
 VPs once (forward FD, $\varepsilon = 10^{-6}$) and evaluates the Steiner
 geometry at each perturbation --- but these are not counted.  A single
@@ -194,7 +194,7 @@ run of Section~\ref{sec:ref-run}.
 \begin{tabular}{lrrrrr}
 \toprule
 \textbf{Callback} & \textbf{Calls} & \textbf{Total (s)} &
-  \textbf{\% wall} & \textbf{Mean (s/call)} & \textbf{Steiner recomps/call} \\
+  \textbf{\% wall} & \textbf{Mean (s/call)} & \textbf{Steiner evals/call} \\
 \midrule
 Objective    & 1\,724 &     1.00  &  0.08          & 0.0006 & --- \\
 Gradient     &   372  &     6.95  &  0.54          & 0.019  & --- \\
@@ -238,7 +238,7 @@ one base Jacobian call plus $n$ perturbed Jacobian calls, each costing
 $n+1$ recomputations.  The total is
 
 \begin{equation}
-  \text{recomps per Hessian call}
+  \text{Steiner evaluations per Hessian call}
   \;=\;
   \underbrace{2n(n+1)}_{\Hess{\Pst}}
   \;+\;
@@ -282,7 +282,7 @@ scaling axes are planned:
         Table~\ref{tab:reference-breakdown}-style breakdowns.
   \item \textbf{Cell-count scaling.}  Fix a moderate mesh resolution,
         vary $N$, and measure how the number of triple points and the
-        Hessian recomp count scale with $N$.
+        Hessian Steiner evaluation count scale with $N$.
 \end{itemize}
 
 % Tables and figures will be inserted here as profile data becomes available.
