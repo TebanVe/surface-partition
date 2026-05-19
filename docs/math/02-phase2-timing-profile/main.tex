@@ -219,32 +219,45 @@ $\Hess{\Pst}$ and $\Hess{A^{\mathrm{st}}_k}$, described in \S{}6.4
 and \S{}6.5 of document \codefile{01-phase2-derivatives}.
 
 \paragraph{Cost decomposition.}
-Let $T$ denote the number of active triple points, $d$ the mean number
-of Steiner-related VPs per triple point, and $c$ the cost of one Steiner
-geometry evaluation.  Then:
+Let $T$ denote the number of active triple points and $n = |S|$ the
+total number of Steiner-affected VPs (the set \code{tp\_affected\_vps}
+in \codefile{src/partition/partition\_arrays.py}).  Each triple-point
+triangle has exactly 3 boundary edges, each carrying one VP, so
+$n = 3T$.  In the reference run $T = 20$, giving $n = 60$.
+
+A single Jacobian call evaluates the Steiner geometry once as a base,
+then once per VP in $S$, for a total of $n + 1$ recomputations --- in
+agreement with the measured 61.
+
+The Hessian executes two nested FD loops.  The perimeter Hessian
+(\S{}6.4 of \codefile{01-phase2-derivatives}) uses central differences:
+for each of the $n$ VPs in $S$ it calls the gradient FD twice
+($+\varepsilon$ and $-\varepsilon$), and each gradient call costs $n+1$
+recomputations.  The area Hessian (\S{}6.5) uses forward differences:
+one base Jacobian call plus $n$ perturbed Jacobian calls, each costing
+$n+1$ recomputations.  The total is
 
 \begin{equation}
-  \text{cost per Hessian call}
-  \;\approx\;
-  T \cdot d \cdot 2 \cdot T \cdot d \cdot c
+  \text{recomps per Hessian call}
   \;=\;
-  2\,(T d)^2\,c
+  \underbrace{2n(n+1)}_{\Hess{\Pst}}
+  \;+\;
+  \underbrace{(n+1)^2}_{\Hess{A_k^{\mathrm{st}}}}
+  \;=\;
+  (n+1)(3n+1)
   \label{eq:hess-cost}
 \end{equation}
 
 \noindent
-where the factor $2$ arises from the two-sided FD stencil for
-$\Hess{\Pst}$ (\S{}6.4) and the inner-FD layer for $\Hess{A_k^{\mathrm{st}}}$
-(\S{}6.5).  With $T=20$, $d \approx 9$, the reference run gives
-$Td \approx 180$ Steiner-related VPs, yielding
-$\sim\!180 \times 61 \approx 11\,000$ recomps per Hessian call ---
-in agreement with the measured 11\,041.
+With $n = 60$: $(61)(181) = 11\,041$ --- in exact agreement with the
+measured value.
 
 \begin{remark}[Quadratic scaling with triple-point count]
-Equation~\eqref{eq:hess-cost} shows that the Hessian cost scales
-as $(Td)^2$ in the number of Steiner-related VPs.  Increasing the
-number of cells $N$ increases $T$ and therefore increases the Hessian
-cost \emph{quadratically}.  This is the key motivation for implementing
+Since $n = 3T$, Equation~\eqref{eq:hess-cost} gives
+$(n+1)(3n+1) \approx 3n^2 = 27T^2$ for large $T$.  The Hessian cost
+therefore scales \emph{quadratically} with the number of triple points.
+Increasing the number of cells $N$ increases $T$ and therefore the cost
+grows as $\mathcal{O}(T^2)$.  This is the key motivation for implementing
 an analytical Steiner Hessian.
 \end{remark}
 
