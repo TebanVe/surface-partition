@@ -104,7 +104,7 @@ discussed below.
 
 The L-BFGS run triggered **zero Type 1 migrations** compared to the exact
 Hessian's 77.  This reproduces a known issue documented in detail in
-`IPOPT_REFINEMENT_QUALITY.md` (Sections 2.2, 3.5):
+`docs/reference/IPOPT_REFINEMENT_QUALITY.md` (Sections 2.2, 3.5):
 
 - **Insufficient VP saturation.** The exact Hessian pushes VPs to triangle
   edge endpoints (min_dist ≈ 0.0000), triggering Type 1 migrations that
@@ -117,7 +117,7 @@ Hessian's 77.  This reproduces a known issue documented in detail in
   meshes (where each VP controls a long boundary segment), this produces
   visibly jagged partition boundaries.  The issue is mesh-resolution-dependent:
   on finer meshes (>100k vertices) the coupling becomes more local and L-BFGS
-  produces smoother results (see `IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
+  produces smoother results (see `docs/reference/IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
 
 - **Oscillatory convergence.**  The L-BFGS objective trace shows non-monotone
   behaviour (e.g., obj bounces between 58.606 and 58.614 around iterations
@@ -261,7 +261,7 @@ expected.
 
 **Quality trade-off — significant.** The benchmark revealed that L-BFGS
 triggered **zero Type 1 migrations** versus 77 for the exact Hessian (see
-the head-to-head comparison above and `IPOPT_REFINEMENT_QUALITY.md`).
+the head-to-head comparison above and `docs/reference/IPOPT_REFINEMENT_QUALITY.md`).
 L-BFGS does not push VPs to triangle edge endpoints, so the topology
 exploration that Type 1 migrations enable is effectively disabled.  On
 coarser meshes the boundaries also appear jagged due to the lack of
@@ -271,7 +271,7 @@ curvature coupling between neighbouring VPs.
 extraction, followed by an exact Hessian or SLSQP polishing pass if
 boundary quality and topology exploration matter.  Also suitable as a
 standalone solver on fine meshes (>100k vertices) where the quality gap
-narrows (see `IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
+narrows (see `docs/reference/IPOPT_REFINEMENT_QUALITY.md` Section 3.4).
 
 **Not recommended** as the sole solver when topology migrations are important
 or when visual boundary smoothness is required at coarse mesh resolutions.
@@ -317,12 +317,12 @@ independent of the number of triple points (up to the O(T) cost of evaluating
 T blocks).  Empirically removes the O(T) per-iteration cost that scales
 with N.
 
-**Status**: **planned in detail** in
-`docs/ANALYTICAL_STEINER_DERIVATIVES_PLAN.md`.  That plan documents the
-implicit-function-theorem derivation (∂S/∂p_k = M⁻¹ K_k and the chain rule
-to ∂²S/∂p_k∂p_l), Phase A (first derivatives) and Phase B (second
-derivatives), degenerate-case handling, and a validation harness tightening
-the exact-Hessian-vs-FD tolerance to ~1e-10.
+**Status**: **planned in detail** as Phases 2–3 of
+`docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`.  That plan
+documents the implicit-function-theorem derivation (∂S/∂p_k = M⁻¹ K_k and
+the chain rule to ∂²S/∂p_k∂p_l), analytical first derivatives (Phase 2)
+and second derivatives (Phase 3), degenerate-case handling, and a
+validation harness tightening the exact-Hessian-vs-FD tolerance to ~1e-10.
 
 #### 2B. Sparse Jacobian assembly + vectorised Hessian accumulation
 
@@ -338,14 +338,15 @@ most impactful for mid-to-large problems (many segments → many dict
 lookups in the current Python loop).
 
 **Status**:
-- Sparse Jacobian — **implemented**, per
-  `docs/SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md` §2.
-- Vectorised Hessian accumulation + validation harness — **planned in
-  detail** in `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md`.  That
-  plan also specifies `testing/compare_hessian_modes.py` with a
-  per-component profile breakdown (perimeter-H / area-H / Steiner-H /
-  IPOPT linear-solve time) — the primary instrument for deciding when
-  Tier 2 has hit its ceiling and Tier 3 is required.
+- Sparse Jacobian — **implemented**.
+- Vectorised Hessian accumulation (`np.add.at` on pre-computed offset
+  arrays) — **implemented**.
+- Validation harness — **planned in detail** as Phase 1 of
+  `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`.  That plan
+  specifies `testing/compare_hessian_modes.py` with a per-component
+  profile breakdown (perimeter-H / area-H / Steiner-H / IPOPT
+  linear-solve time) — the primary instrument for deciding when Tier 2
+  has hit its ceiling and Tier 3 is required.
 
 #### 2C. Hybrid solver strategy (L-BFGS → exact Hessian, or L-BFGS → SLSQP)
 
@@ -379,7 +380,7 @@ optimum, expect ~10–30 min) would likely total ~15–35 min — significantly
 faster than pure exact Hessian (2 h) while preserving quality.
 
 A `--method auto` or `--hybrid` flag could automate this in a future
-refactoring pass.  See also `IPOPT_REFINEMENT_QUALITY.md` Option C for
+refactoring pass.  See also `docs/reference/IPOPT_REFINEMENT_QUALITY.md` Option C for
 the analogous IPOPT → SLSQP hybrid strategy.
 
 ### Tier 3 — Algorithmic redesigns (significant effort)
@@ -505,10 +506,10 @@ Significant implementation effort.
 | ~~Immediate~~ | ~~Benchmark L-BFGS vs exact Hessian on 10-partition~~ | ~~1 hour~~ | ~~Validates Tier 1A~~ | **Done** — 23.8× speedup confirmed; quality trade-offs documented |
 | **Immediate** | Test hybrid L-BFGS → exact Hessian workflow (Tier 2C) on 10-partition | 1–2 hours | Validates combined speed + quality | Pending |
 | **Immediate** | Increase `max_opt_iter` for L-BFGS runs to 2000–3000 | trivial | L-BFGS did not converge in 1000 iters | Pending |
-| **Short-term** | Vectorise Hessian accumulation + validation harness (Tier 2B refactor) — `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md` | 3–5 days | Removes Python-for-loop in `h()`; adds `compare_hessian_modes.py` with per-component profile breakdown (the primary instrument for deciding when Tier 2 is exhausted and Tier 3 is needed) | Pending |
-| **Short-term** | Implement analytical Steiner Hessian (Tier 2A) — `docs/ANALYTICAL_STEINER_DERIVATIVES_PLAN.md` | 1–2 weeks | At N ~1000 the FD Steiner Hessian is ~O(N²) per iter; analytical Steiner is O(N). Becomes a real perf win (not just accuracy) at scale. Required for the exact-Hessian path at N ≳ 100 | Pending |
+| **Short-term** | Validation harness for the exact-Hessian path — Phase 1 of `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md` | 1–2 days | Adds `compare_hessian_modes.py` with per-component profile breakdown (the primary instrument for deciding when Tier 2 is exhausted and Tier 3 is needed) | Pending |
+| **Short-term** | Implement analytical Steiner derivatives (Tier 2A) — Phases 2–3 of `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md` | 1–2 weeks | At N ~1000 the FD Steiner Hessian is ~O(N²) per iter; analytical Steiner is O(N). Becomes a real perf win (not just accuracy) at scale. Required for the exact-Hessian path at N ≳ 100 | Pending |
 | **Short-term** | Experiment with `acceptable_tol` tuning (Tier 1B) | 1 hour | May cut exact Hessian polishing time by 50%+ | Pending |
-| ~~**Medium-term**~~ | ~~Direct sparse Jacobian (Tier 2B)~~ | ~~1 week~~ | ~~Needed for N > 50~~ | **Done** — implemented per `docs/SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md` |
+| ~~**Medium-term**~~ | ~~Direct sparse Jacobian (Tier 2B)~~ | ~~1 week~~ | ~~Needed for N > 50~~ | **Done** — implemented |
 | **Medium-term** | Swap IPOPT linear solver (MUMPS → MA57 / MA97 via HSL) | 1–3 days once Tier 2 profile identifies it as the bottleneck | Attacks the dense Schur complement cost directly; `compare_hessian_modes.py` tells you when this is worthwhile | Pending |
 | **Medium-term** | Augmented Lagrangian prototype (Tier 3A) | 2–4 weeks | Enables N = 100–500 by decomposing the monolithic NLP; per-iter cost becomes independent of N | Pending |
 | **Long-term** | Multigrid / hierarchical coarse-to-fine optimisation (Tier 3B) | 3–6 weeks | Enables N = 100–1,000 by re-using warm starts from coarser partitions | Pending |
@@ -519,31 +520,28 @@ Significant implementation effort.
 
 ## Related documents
 
-- **`IPOPT_REFINEMENT_QUALITY.md`** — Detailed analysis of L-BFGS quality
-  issues (jagged boundaries, migration deficit, restoration-phase losses),
-  including the mesh-resolution dependence that makes L-BFGS adequate on
-  fine meshes but insufficient on coarser ones.  The findings in that
-  document directly explain the migration asymmetry observed in the
-  benchmark above.
-- **`SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`** — Original plan for the
-  sparse-Jacobian and exact-Hessian infrastructure.  Implementation is
-  **done**; serves as the reference for the mathematical derivations.
-- **`EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md`** — Follow-up plan
-  delivering (i) vectorised Hessian accumulation via pre-computed offset
-  arrays and `np.add.at`, (ii) a three-script validation harness
-  (`test_sparse_jacobian_equivalence.py`, `test_exact_hessian_vs_fd.py`,
-  `compare_hessian_modes.py`), and (iii) the per-component profile
-  breakdown in `compare_hessian_modes.py` that identifies which bucket
-  (Python Hessian, Steiner FD, or IPOPT linear solver) to target next.
-  **Required reading** before any further scaling work, because its
-  profile output is the empirical gate for deciding between Tier 2 and
-  Tier 3 investments.
-- **`ANALYTICAL_STEINER_DERIVATIVES_PLAN.md`** — Follow-up plan
-  replacing the FD Steiner derivatives with closed-form analytical
-  formulas derived via the implicit-function theorem from the Fermat-
-  point optimality condition.  At the N ≈ 1000 scale this is a
-  performance unlock (O(N²) → O(N) on the Steiner Hessian
-  contribution), not merely an accuracy / robustness improvement.
+- **`docs/reference/IPOPT_REFINEMENT_QUALITY.md`** — Detailed analysis of
+  L-BFGS quality issues (jagged boundaries, migration deficit,
+  restoration-phase losses), including the mesh-resolution dependence
+  that makes L-BFGS adequate on fine meshes but insufficient on coarser
+  ones.  The findings in that document directly explain the migration
+  asymmetry observed in the benchmark above.
+- **`docs/reference/OPTIMIZATION_METHODS_PRIMER.md`** — Conceptual primer
+  on SLSQP, IPOPT, L-BFGS, and the exact Hessian, assuming no prior
+  optimisation background.  The non-technical companion to this
+  document.
+- **`docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`** — The
+  consolidated plan for completing the exact-Hessian path.  Phase 1 is a
+  validation harness (`test_sparse_jacobian_equivalence.py`,
+  `test_exact_hessian_vs_fd.py`, `compare_hessian_modes.py` with the
+  per-component profile breakdown that gates Tier 2 vs Tier 3
+  decisions).  Phases 2–3 replace the FD Steiner derivatives with
+  closed-form analytical formulas derived via the implicit-function
+  theorem from the Fermat-point optimality condition — at N ≈ 1000 an
+  O(N²) → O(N) performance unlock on the Steiner Hessian, not merely an
+  accuracy improvement.  The sparse Jacobian, exact Hessian, and
+  vectorised `np.add.at` accumulation are already implemented; the
+  mathematical derivations are in `docs/math/01-phase2-derivatives`.
 
 ---
 

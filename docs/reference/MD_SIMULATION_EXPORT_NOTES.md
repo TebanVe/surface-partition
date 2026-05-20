@@ -210,6 +210,6 @@ the MD pipeline requirements are clear.
 - Vertex-label / VP semantics — see `CLAUDE.md` "The λ Convention" and
   `src/partition/contour_partition.py`.
 - Triple-point geometry — see `src/partition/steiner_handler.py` and
-  `docs/TOPOLOGY_SWITCH_METHODOLOGY.md`.
+  `docs/reference/TOPOLOGY_SWITCH_METHODOLOGY.md`.
 - Smoothness improvements (separate concern) — see refinement-loop tuning
-  in `docs/IPOPT_REFINEMENT_QUALITY.md`.
+  in `docs/reference/IPOPT_REFINEMENT_QUALITY.md`.

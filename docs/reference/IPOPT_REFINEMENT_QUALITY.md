@@ -2,7 +2,7 @@
 
 ## 1. Problem Statement
 
-After implementing Phase 1 of the IPOPT integration (see `IPOPT_INTEGRATION_PLAN.md`),
+After the initial IPOPT integration,
 empirical testing on the 5-partition torus problem reveals that IPOPT delivers a
 **~130× speed-up per optimization cycle** but **fails to match SLSQP's solution
 quality in later iterations**. The perimeter gap widens over successive
@@ -213,15 +213,16 @@ This could also be automated with a `--method auto` flag that switches from
 IPOPT to SLSQP when the per-iteration perimeter improvement drops below a
 threshold.
 
-### Option D: Implement Phase 2 — sparse Jacobian (medium effort)
+### Option D: Sparse Jacobian (implemented)
 
 **Change:** Replace the dense Jacobian computation in `IPOPTProblemAdapter.jacobian()`
-with a direct sparse computation, as described in `IPOPT_INTEGRATION_PLAN.md`
-Phase 2.
+with a direct sparse computation.  **This has since been implemented**, together
+with the exact Hessian — see `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`
+§1.1.
 
 **Rationale:** While this doesn't directly fix the Hessian approximation issue,
 it removes the 50 MB dense matrix warning and enables scaling to larger problems.
-It is a prerequisite for Phase 4 (exact Hessian).
+It was a prerequisite for the exact Hessian.
 
 **Expected impact on quality:** Minimal — the Jacobian is already correct; this
 is a performance optimization. However, it unblocks Phase 4.

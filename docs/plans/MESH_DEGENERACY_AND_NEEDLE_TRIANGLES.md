@@ -4,8 +4,8 @@
 **Date:** 2026-05-07 (revised 2026-05-07 with data-vs-rendering clarification
 and mesh-quality philosophy).
 **Audience:** Future agents / developers picking up the mesh-cleanup work.
-**Related:** `docs/TOPOLOGY_SWITCH_METHODOLOGY.md`, `docs/type1_several_VPs_issue.md`,
-`docs/MD_SIMULATION_EXPORT_NOTES.md`.
+**Related:** `docs/reference/TOPOLOGY_SWITCH_METHODOLOGY.md`, `docs/reference/type1_several_VPs_issue.md`,
+`docs/reference/MD_SIMULATION_EXPORT_NOTES.md`.
 
 ---
 
@@ -129,7 +129,7 @@ the topology.
 ### 1.4 Why this matters for downstream use
 
 The user's downstream goal is molecular simulation on the partitioned surface
-(see `docs/MD_SIMULATION_EXPORT_NOTES.md`). For that:
+(see `docs/reference/MD_SIMULATION_EXPORT_NOTES.md`). For that:
 
 - Boundaries that lie along mesh edges are *jagged* (piecewise mesh-edge) —
   far from the smooth optimal boundary the optimisation is supposed to find.
@@ -193,7 +193,7 @@ at the cluster's "exit" vertices, not zigzag inside any single triangle.
 **Practical implication for downstream code.** Any classifier that reduces
 to point-in-triangle on a face-labelled mesh — Representation 1
 (face-labeled, winner-take-all) or Representation 3 (subdivided mesh with
-boundary cuts) in `docs/MD_SIMULATION_EXPORT_NOTES.md` — gets unambiguous
+boundary cuts) in `docs/reference/MD_SIMULATION_EXPORT_NOTES.md` — gets unambiguous
 answers everywhere, including in the cluster region. The data is clean and
 exhaustive: every point on the surface lies in exactly one triangle, and every
 triangle has a defined ownership. Only classifiers that integrate *along the
@@ -324,7 +324,7 @@ is well-behaved and boundary segments cut cleanly through triangles.
 What L2 does *not* do: smoothing of the piecewise-linear boundary curve.
 That's a Phase 2.5 / post-processing job, completely separate from mesh
 quality. If MD work eventually needs a `C¹`-smoothed boundary representation
-that's its own problem to solve and belongs in `docs/MD_SIMULATION_EXPORT_NOTES.md`.
+that's its own problem to solve and belongs in `docs/reference/MD_SIMULATION_EXPORT_NOTES.md`.
 
 ---
 
@@ -589,14 +589,14 @@ e) **Implicit vs parametric surfaces.** Parametric surfaces (`TorusMeshProvider`
 
 | Issue | Location | Status |
 |---|---|---|
-| Type 1 ≥3-VP threshold blind spot | `src/migration/migration_detector.py::detect_type1_triggers` | Documented in `docs/type1_several_VPs_issue.md`. Not yet addressed. |
+| Type 1 ≥3-VP threshold blind spot | `src/migration/migration_detector.py::detect_type1_triggers` | Documented in `docs/reference/type1_several_VPs_issue.md`. Not yet addressed. |
 | Triple-point safety guard | same | Implemented (commit `f9b...` series). |
 | Rendering "degenerate boundary segment" fallback (Config 2 — coinciding VPs / both VPs collapsed onto the same vertex) | `scripts/visualize_type1_vertex_collapse.py::compute_cell_portion_in_triangle_simple` | Implemented (commit `ac8f90d`). |
 | Rendering Config 3 (boundary segment along a triangle edge: VPs at two distinct triangle vertices) | same | **Pending.** Specified above in §5. |
 | Migration Config 3 (low-valence trigger when boundary segment aligns with a mesh edge) | `src/migration/migration_detector.py` | **Pending.** Specified above in §5 (and Group B option 3 in the agent transcript). |
 | Mesh cleanup tool (L2 in §4) | `src/mesh/mesh_cleanup.py` (does not exist) | **Pending.** Specified in §6. |
 | Quality-controlled surface mesher (L3 in §4) | external — would replace `ImplicitSurfaceProvider.build()` | Not started; only consider if L1+L2 are insufficient. |
-| MD export representation | `docs/MD_SIMULATION_EXPORT_NOTES.md` | Discussion only, deferred. |
+| MD export representation | `docs/reference/MD_SIMULATION_EXPORT_NOTES.md` | Discussion only, deferred. |
 
 ---
 

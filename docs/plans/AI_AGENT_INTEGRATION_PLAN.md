@@ -7,10 +7,11 @@ manifold partition pipeline, analyze intermediate results, make decisions
 about parameter adjustments and continuation, and produce written reports
 — all without manual intervention between steps.
 
-This plan assumes the codebase restructure described in
-`CODEBASE_RESTRUCTURE_PLAN.md` has been completed.  The restructured
-`src/pipeline/pipeline_orchestrator.py` provides the programmatic API
-that the AI agent calls.
+The codebase restructure into `src/pipeline/`, `src/optimization/`,
+`src/partition/`, `src/migration/`, and `src/mesh/` is complete.
+`src/pipeline/pipeline_orchestrator.py` (`PipelineOrchestrator`) and
+`src/pipeline/relaxation.py` (`run_relaxation()`) provide the
+programmatic API that the AI agent layer calls.
 
 ---
 
@@ -102,9 +103,10 @@ sweeps.
 
 Before starting Layer 2 implementation:
 
-1. **Codebase restructure complete** (`CODEBASE_RESTRUCTURE_PLAN.md`
-   Phases A–C).  The key deliverable is
-   `src/pipeline/pipeline_orchestrator.py` with a clean programmatic API.
+1. **Codebase restructure complete.**  Done — `src/pipeline/` exposes
+   the programmatic API: `PipelineOrchestrator.run_refinement_loop()`
+   for Phase 2 refinement, and `run_relaxation()` in
+   `src/pipeline/relaxation.py` for Phase 1 relaxation.
 
 2. **Pipeline functions return structured results**, not just log output.
    Each function should return a dataclass or dict with all metrics the
@@ -166,9 +168,23 @@ structured summary.
 
 #### Example tool implementation
 
+The exact constructor signatures and return types below must be
+confirmed against the live code in `src/pipeline/` before implementing —
+they are illustrative.  Phase 1 (relaxation) is the free function
+`run_relaxation()` in `src/pipeline/relaxation.py`; Phase 2 (refinement)
+is `PipelineOrchestrator.run_refinement_loop()` in
+`src/pipeline/pipeline_orchestrator.py`.  Both `RelaxationConfig` and
+`RefinementConfig` expose `from_yaml_dict()`, which accepts sectioned or
+flat YAML; `run_refinement_loop()` returns a `dict`.
+
 ```python
 from langchain.tools import tool
-from src.pipeline.pipeline_orchestrator import PipelineOrchestrator, PipelineConfig
+
+from src.pipeline.relaxation import run_relaxation as _run_relaxation
+from src.pipeline.relaxation import RelaxationConfig
+from src.pipeline.pipeline_orchestrator import (
+    PipelineOrchestrator, RefinementConfig,
+)
 
 @tool
 def run_relaxation(
@@ -182,15 +198,14 @@ def run_relaxation(
     Returns energy, initial perimeter, solution path, and timing.
     Use this when you need to generate a new base solution from scratch.
     """
-    config = PipelineConfig(
-        seed=seed,
-        lambda_penalty=lambda_penalty,
-        n_partitions=n_partitions,
-        surface=surface,
-    )
-    orchestrator = PipelineOrchestrator(config)
-    result = orchestrator.run_relaxation()
-    return result.to_dict()
+    config = RelaxationConfig.from_yaml_dict({
+        "seed": seed,
+        "lambda_penalty": lambda_penalty,
+        "n_partitions": n_partitions,
+        "surface": surface,
+    })
+    result = _run_relaxation(config)
+    return _summarize_relaxation(result)   # → RelaxationResult-shaped dict
 
 
 @tool
@@ -207,14 +222,15 @@ def run_refinement(
     and timing.  Use this after a relaxation run to optimize the partition
     boundary geometry.
     """
-    orchestrator = PipelineOrchestrator.from_solution(solution_path)
-    result = orchestrator.run_refinement(
-        method=method,
-        max_iterations=max_iterations,
-        exact_hessian=exact_hessian,
-        lbfgs_memory=lbfgs_memory,
-    )
-    return result.to_dict()
+    config = RefinementConfig.from_yaml_dict({
+        "method": method,
+        "max_iterations": max_iterations,
+        "exact_hessian": exact_hessian,
+        "lbfgs_memory": lbfgs_memory,
+    })
+    orchestrator = PipelineOrchestrator(config)
+    result = orchestrator.run_refinement_loop(solution_path)   # returns a dict
+    return _summarize_refinement(result)   # → RefinementResult-shaped dict
 ```
 
 #### Deliverables
@@ -428,6 +444,14 @@ Extend the graph with a parameter exploration mode that runs multiple
 relaxation seeds or lambda values and selects the best candidate for
 refinement.
 
+> **Reuse the existing sweep tool.**  `sweep/parameter_sweep.py` already
+> implements grid/paired sweep generation, local-sequential and
+> local-parallel execution, `--resume`, and result collection into
+> `experiment_index.yaml`.  The Phase 3 agent should *drive* that tool
+> (or import its orchestration functions) rather than reimplement sweep
+> mechanics.  The agent's added value is the LLM `plan_sweep` /
+> `rank_candidates` nodes, not the sweep execution itself.
+
 #### Extended graph
 
 ```
@@ -600,6 +624,6 @@ For someone new to LangChain/LangGraph, a suggested order:
 
 | Document | Relationship |
 |---|---|
-| `CODEBASE_RESTRUCTURE_PLAN.md` | **Prerequisite.** The restructured `src/pipeline/` API is what the agent tools wrap. |
-| `SCALABILITY_ANALYSIS.md` | **Informs agent decisions.** The agent should know when to switch from exact Hessian to L-BFGS based on partition count, and when to recommend coarser meshes. |
-| `SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md` | **Improves compute layer.** Faster IPOPT iterations mean the agent can explore more parameter combinations in the same wall time. |
+| `docs/reference/SCALABILITY_ANALYSIS.md` | **Informs agent decisions.** The agent should know when to switch from exact Hessian to L-BFGS based on partition count, and when to recommend coarser meshes. |
+| `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md` | **Improves compute layer.** Faster, validated IPOPT iterations mean the agent can explore more parameter combinations in the same wall time. |
+| `sweep/parameter_sweep.py` | **Existing tool to reuse.** The Phase 3 parameter-sweep agent should drive this tool rather than reimplement grid/paired sweep generation, parallel execution, and result collection. |
