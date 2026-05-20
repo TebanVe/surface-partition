@@ -39,7 +39,6 @@ from src.pipeline.pipeline_orchestrator import (
     PipelineOrchestrator, RefinementConfig, detect_file_type, derive_output_paths,
     build_campaign_name,
 )
-from src.pipeline.io import load_partition_from_base_file, load_partition_from_refined_file
 
 
 def _build_config(args):
@@ -84,6 +83,8 @@ def _build_config(args):
         config.exact_hessian = True
     if args.save_iterations:
         config.save_iterations = True
+    if args.profile:
+        config.profile = True
 
     return config
 
@@ -160,6 +161,11 @@ Example usage:
 
     parser.add_argument('--save-iterations', action='store_true', default=False,
                        help='Save checkpoint after each optimization step.')
+
+    parser.add_argument('--profile', action='store_true', default=False,
+                       help='Enable timing profiling. Writes timing_profile.yaml per campaign '
+                            'with per-callback wall-clock times and Steiner recomputation counts. '
+                            'Zero overhead when omitted.')
 
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging')
@@ -251,12 +257,7 @@ Example usage:
     _root.addHandler(_fh)
     logger.info(f"Logging to: {campaign_log_path}")
 
-    if file_type == 'base':
-        mesh, partition = load_partition_from_base_file(args.solution, verbose=True)
-    else:
-        mesh, partition = load_partition_from_refined_file(args.solution, verbose=True)
-
-    orch = PipelineOrchestrator(mesh, partition, config, logger=logger)
+    orch = PipelineOrchestrator(config=config, logger=logger)
     result = orch.run_refinement_loop(args.solution, output_dir=campaign_dir)
 
     if result.get('error'):

@@ -11,8 +11,8 @@ relaxation:
   n_partitions: 10
   lambda_penalty: 3.0
   seed: 42131313
-  max_iter: 15000
-  refinement_levels: 2                # number of multi-level mesh refinement steps
+  max_iter: 20000
+  refinement_levels: 3                # number of multi-level mesh refinement steps
   use_analytic: true
   use_discrete_area_for_constraints: true
 
@@ -50,22 +50,22 @@ relaxation:
 # z-grid resolution scales proportionally with x during refinement.
 surface:
   double_torus:
-    n_grid_x: 80                     # x-axis grid points (base level)
-    n_grid_y: 60                      # y-axis grid points (base level)
-    n_grid_z: 30                      # z-axis grid points (base level)
+    n_grid_x: 80                     # x-axis grid points (base level) 120 to avoid degeneracy in the mesh
+    n_grid_y: 60                      # y-axis grid points (base level) 90 to avoid degeneracy in the mesh
+    n_grid_z: 30                      # z-axis grid points (base level) 60 to avoid degeneracy in the mesh
     c: 0.03                           # implicit function constant (tube thickness)
-    n_grid_x_increment: 40            # added per refinement level
-    n_grid_y_increment: 30            # added per refinement level
+    n_grid_x_increment: 40            # added per refinement level 60 to avoid degeneracy in the mesh
+    n_grid_y_increment: 30            # added per refinement level 45 to avoid degeneracy in the mesh
 
 # Phase 2: iterative perimeter refinement
 refinement:
   method: ipopt                       # "ipopt", "SLSQP", or "trust-constr"
   max_iterations: 2                   # topology iteration cycles (optimize → migrate)
-  max_opt_iter: 1000                  # optimizer iterations per topology
-  tolerance: 1.0e-7                   # optimizer convergence tolerance
+  max_opt_iter: 300                  # optimizer iterations per topology
+  tolerance: 1.0e-6                   # optimizer convergence tolerance
   boundary_tol: 0.001                 # λ threshold triggering Type 1 migration
   lbfgs_memory: 30                    # L-BFGS history size (ipopt only; default 6, try 20-50)
-  exact_hessian: false                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
+  exact_hessian: true                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
   best_iterate: true                  # track best feasible iterate (ipopt only)
   allow_partial_convergence: true     # continue to migration even if optimizer hits max_opt_iter
   save_iterations: true               # true: checkpoint after every topology iteration

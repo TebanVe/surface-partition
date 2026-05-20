@@ -131,19 +131,25 @@ def compute_steiner_areas(pa: PartitionArrays,
 # =========================================================================
 
 def compute_steiner_perimeter_gradient(pa: PartitionArrays,
-                                       eps: float = 1e-6) -> np.ndarray:
+                                       eps: float = 1e-6,
+                                       _prof=None,
+                                       _prof_key: str = 'gradient') -> np.ndarray:
     """d(steiner_perimeter)/d(lambda) via finite differences."""
     gradient = np.zeros(pa.n_active_vp, dtype=np.float64)
     if pa.n_triple_points == 0:
         return gradient
 
     base_steiner = compute_steiner_points(pa)
+    if _prof is not None:
+        _prof.record_steiner(_prof_key, 1)
     base_perim = compute_steiner_perimeter(pa, base_steiner)
     original_lambda = pa.vp_lambda.copy()
 
     for vp_idx in pa.tp_affected_vps:
         pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
         pert_steiner = compute_steiner_points(pa)
+        if _prof is not None:
+            _prof.record_steiner(_prof_key, 1)
         pert_perim = compute_steiner_perimeter(pa, pert_steiner)
         gradient[vp_idx] = (pert_perim - base_perim) / eps
         pa.vp_lambda[vp_idx] = original_lambda[vp_idx]
@@ -156,7 +162,9 @@ def compute_steiner_perimeter_gradient(pa: PartitionArrays,
 # =========================================================================
 
 def compute_steiner_area_jacobian_sparse(pa: PartitionArrays,
-                                         eps: float = 1e-7) -> np.ndarray:
+                                         eps: float = 1e-7,
+                                         _prof=None,
+                                         _prof_key: str = 'jacobian') -> np.ndarray:
     """Steiner area Jacobian — sparse values in jac_row/jac_col order.
 
     Uses the same finite-difference approach as compute_steiner_area_jacobian()
@@ -172,12 +180,16 @@ def compute_steiner_area_jacobian_sparse(pa: PartitionArrays,
 
     n_constraints = pa.n_cells - 1
     base_steiner = compute_steiner_points(pa)
+    if _prof is not None:
+        _prof.record_steiner(_prof_key, 1)
     base_areas = compute_steiner_areas(pa, base_steiner)
     original_lambda = pa.vp_lambda.copy()
 
     for vp_idx in pa.tp_affected_vps:
         pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
         pert_steiner = compute_steiner_points(pa)
+        if _prof is not None:
+            _prof.record_steiner(_prof_key, 1)
         pert_areas = compute_steiner_areas(pa, pert_steiner)
         dA = (pert_areas[:n_constraints] - base_areas[:n_constraints]) / eps
 
@@ -192,7 +204,8 @@ def compute_steiner_area_jacobian_sparse(pa: PartitionArrays,
 
 
 def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
-                                         eps: float = 1e-5) -> np.ndarray:
+                                         eps: float = 1e-5,
+                                         _prof=None) -> np.ndarray:
     """Steiner perimeter Hessian via central FD on the gradient.
 
     Only tp_affected_vps have non-zero entries. The inner gradient FD uses
@@ -212,9 +225,11 @@ def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
 
     for vp_i in affected:
         pa.vp_lambda[vp_i] = original[vp_i] + eps
-        grad_plus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
+        grad_plus = compute_steiner_perimeter_gradient(
+            pa, eps=eps_inner, _prof=_prof, _prof_key='hessian')
         pa.vp_lambda[vp_i] = original[vp_i] - eps
-        grad_minus = compute_steiner_perimeter_gradient(pa, eps=eps_inner)
+        grad_minus = compute_steiner_perimeter_gradient(
+            pa, eps=eps_inner, _prof=_prof, _prof_key='hessian')
         pa.vp_lambda[vp_i] = original[vp_i]
 
         hess_col_i = (grad_plus - grad_minus) / (2.0 * eps)
@@ -231,7 +246,8 @@ def compute_steiner_perimeter_hessian_fd(pa: PartitionArrays,
 
 def compute_steiner_area_hessian_fd(pa: PartitionArrays,
                                     multipliers: np.ndarray,
-                                    eps: float = 1e-5) -> np.ndarray:
+                                    eps: float = 1e-5,
+                                    _prof=None) -> np.ndarray:
     """Multiplier-weighted Steiner area Hessian via forward FD on the Jacobian.
 
     The inner Jacobian uses its own default eps (1e-7), much smaller than the
@@ -249,11 +265,11 @@ def compute_steiner_area_hessian_fd(pa: PartitionArrays,
     original = pa.vp_lambda.copy()
     affected = pa.tp_affected_vps
 
-    base_jac = compute_steiner_area_jacobian(pa)
+    base_jac = compute_steiner_area_jacobian(pa, _prof=_prof, _prof_key='hessian')
 
     for vp_i in affected:
         pa.vp_lambda[vp_i] = original[vp_i] + eps
-        jac_plus = compute_steiner_area_jacobian(pa)
+        jac_plus = compute_steiner_area_jacobian(pa, _prof=_prof, _prof_key='hessian')
         pa.vp_lambda[vp_i] = original[vp_i]
 
         djac = (jac_plus - base_jac) / eps
@@ -272,7 +288,9 @@ def compute_steiner_area_hessian_fd(pa: PartitionArrays,
 
 
 def compute_steiner_area_jacobian(pa: PartitionArrays,
-                                  eps: float = 1e-7) -> np.ndarray:
+                                  eps: float = 1e-7,
+                                  _prof=None,
+                                  _prof_key: str = 'jacobian') -> np.ndarray:
     """d(steiner_areas)/d(lambda) via finite differences.
 
     Returns:
@@ -284,12 +302,16 @@ def compute_steiner_area_jacobian(pa: PartitionArrays,
         return jacobian
 
     base_steiner = compute_steiner_points(pa)
+    if _prof is not None:
+        _prof.record_steiner(_prof_key, 1)
     base_areas = compute_steiner_areas(pa, base_steiner)
     original_lambda = pa.vp_lambda.copy()
 
     for vp_idx in pa.tp_affected_vps:
         pa.vp_lambda[vp_idx] = original_lambda[vp_idx] + eps
         pert_steiner = compute_steiner_points(pa)
+        if _prof is not None:
+            _prof.record_steiner(_prof_key, 1)
         pert_areas = compute_steiner_areas(pa, pert_steiner)
         jacobian[:, vp_idx] = (pert_areas[:n_constraints] - base_areas[:n_constraints]) / eps
         pa.vp_lambda[vp_idx] = original_lambda[vp_idx]

@@ -99,20 +99,13 @@ def compute_perimeter_hessian_sparse(pa: PartitionArrays) -> np.ndarray:
     H_bb = weights * (db_dot_db - db_dot_dh**2) / r
     H_ab = -weights * (da_dot_db - da_dot_dh * db_dot_dh) / r
 
-    vp1 = pa.seg_vp1
-    vp2 = pa.seg_vp2
-
-    for s in range(len(vp1)):
-        a, b = int(vp1[s]), int(vp2[s])
-
-        off_aa = pa.hess_offset_map[(a, a)]
-        values[off_aa] += H_aa[s]
-        off_bb = pa.hess_offset_map[(b, b)]
-        values[off_bb] += H_bb[s]
-
-        hi, lo = max(a, b), min(a, b)
-        off_ab = pa.hess_offset_map[(hi, lo)]
-        values[off_ab] += H_ab[s]
+    # Multiple segments may share the same Hessian entry so np.add.at is
+    # required — it correctly accumulates duplicate-index contributions.
+    assert pa.seg_hess_off_aa is not None, \
+        "PartitionArrays missing Phase A Hessian offset fields — call compile_arrays() first"
+    np.add.at(values, pa.seg_hess_off_aa, H_aa)
+    np.add.at(values, pa.seg_hess_off_bb, H_bb)
+    np.add.at(values, pa.seg_hess_off_ab, H_ab)
 
     return values
 

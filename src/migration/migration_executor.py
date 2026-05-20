@@ -195,7 +195,7 @@ def restore_snapshot(snapshot: LocalStateSnapshot,
     if steiner_handler and snapshot.steiner_data:
         _restore_steiner(snapshot.steiner_data, steiner_handler, partition)
     
-    logger.info(f"Restored snapshot for vertex {snapshot.flipped_vertex}")
+    logger.debug(f"Restored snapshot for vertex {snapshot.flipped_vertex}")
 
 
 def _restore_steiner(steiner_snap: SteinerSnapshot,
@@ -242,7 +242,7 @@ def execute_type1(trigger: Type1Trigger,
     
     Returns True on success, False if the flip created an invalid triple-point triangle.
     """
-    logger.info(f"Executing Type 1: vertex {trigger.vertex} "
+    logger.debug(f"Executing Type 1: vertex {trigger.vertex} "
                f"({trigger.current_cell} -> {trigger.target_cell})")
     
     result = rebuild_one_ring(
@@ -261,7 +261,7 @@ def execute_type1(trigger: Type1Trigger,
     partition._build_segment_connectivity(force_rebuild=True)
     partition._build_segment_to_triangle_map()
     
-    logger.info(f"Type 1 complete: {len(result.destroyed_vps)} destroyed, "
+    logger.debug(f"Type 1 complete: {len(result.destroyed_vps)} destroyed, "
                f"{len(result.created_vps)} created, {len(result.kept_vps)} kept")
     return True
 
@@ -287,7 +287,7 @@ def execute_type2_forward(trigger: Type2Trigger,
       6. Set up new Steiner infrastructure in T'
       7. Record in history
     """
-    logger.info(f"Executing Type 2 forward: triangle {trigger.triple_triangle}, "
+    logger.debug(f"Executing Type 2 forward: triangle {trigger.triple_triangle}, "
                f"vertex {trigger.target_vertex} -> cell {trigger.target_cell}")
     
     collapsed_edge = tuple(sorted(trigger.collapsed_vp_edge))
@@ -341,7 +341,7 @@ def execute_type2_forward(trigger: Type2Trigger,
         partition.edge_to_varpoint[collapsed_edge] = new_vp.global_idx
         steiner_converted_vp_idx = new_vp.global_idx
         
-        logger.info(f"Steiner-to-VP conversion: created VP {steiner_converted_vp_idx} "
+        logger.debug(f"Steiner-to-VP conversion: created VP {steiner_converted_vp_idx} "
                     f"on edge {collapsed_edge} (net +1 VP)")
     
     # Rebuild triangle segments for the collapsed-edge triangles
@@ -388,7 +388,7 @@ def execute_type2_forward(trigger: Type2Trigger,
     partition._build_segment_to_triangle_map()
     partition._rebuild_vp_adjacency()
     
-    logger.info(f"Type 2 forward complete: new triple triangle = {new_triple_tri}")
+    logger.debug(f"Type 2 forward complete: new triple triangle = {new_triple_tri}")
     return True
 
 
@@ -414,7 +414,7 @@ def execute_type2_rollback(target_triangle: int,
         logger.warning(f"Target position {target_pos} >= current {current_pos}, nothing to roll back")
         return False
     
-    logger.info(f"Type 2 rollback: {current_pos - target_pos} steps back "
+    logger.debug(f"Type 2 rollback: {current_pos - target_pos} steps back "
                f"(from triangle {history.visited_triangles[-1]} to {target_triangle})")
     
     for i in range(current_pos - 1, target_pos - 1, -1):
@@ -443,7 +443,7 @@ def execute_type2_rollback(target_triangle: int,
     partition._build_segment_connectivity(force_rebuild=True)
     partition._build_segment_to_triangle_map()
     
-    logger.info(f"Type 2 rollback complete. Triple junction now at triangle {target_triangle}")
+    logger.debug(f"Type 2 rollback complete. Triple junction now at triangle {target_triangle}")
     return True
 
 
@@ -483,7 +483,7 @@ def _setup_new_steiner(triangle_idx: int,
     tp.compute_steiner_point(vp_positions=vp_positions)
     steiner_handler.triple_points.append(tp)
     
-    logger.info(f"Set up new Steiner tree in triangle {triangle_idx} "
+    logger.debug(f"Set up new Steiner tree in triangle {triangle_idx} "
                f"with VPs {ts.var_point_indices}")
 
 

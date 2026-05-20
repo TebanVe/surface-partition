@@ -1,0 +1,25 @@
+# Sweep: lambda_penalty x seed for 10-partition torus
+#
+# Mesh is pinned to the configuration that produced the current best Phase-1
+# result on this surface (run_20260403_171144 ..._lam3.25_seed13131313 with
+# perimeter ~ 66.58):
+#   surface.torus.n_theta = 80   (base resolution along major circle)
+#   surface.torus.n_phi   = 66   (base resolution along tube circle)
+#   relaxation.refinement_levels = 2          (2 levels: 80x66 -> 142x124)
+# Increments (n_theta_increment = 62, n_phi_increment = 58) come from the
+# base_config and are not swept.
+#
+# Strategy: grid -> 7 lambdas x 5 seeds x 1 mesh = 35 runs
+
+name: lambda-seed
+base_config: parameters/torus_10part.yaml
+
+sweep:
+  relaxation.lambda_penalty: [2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0]
+  relaxation.seed: [13131313, 84172851, 52698790, 55369783, 24513201]
+  relaxation.refinement_levels: [8]
+  resolution:
+    surface.torus.n_theta: [80]
+    surface.torus.n_phi:   [66]
+
+strategy: grid

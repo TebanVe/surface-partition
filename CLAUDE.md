@@ -27,6 +27,8 @@ python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_4p
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
 # Or with CLI overrides:
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --max-iterations 10 --method ipopt
+# Enable timing profiling (writes timing_profile.yaml per campaign):
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml --profile
 
 # Visualization (all require pyvista)
 # Production viewer — vectorized, handles fine meshes efficiently:
@@ -39,6 +41,20 @@ python scripts/visualize_type2_triple_point.py --solution <path_to_refined.h5> -
 
 # Analysis
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
+
+# Parameter sweeps (sweep/ directory — independent from core scripts)
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml                      # local-sequential
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode local-parallel --workers 4
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode generate-only  # configs only
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect        # scan & index
+
+# Sweep analysis (reads experiment_index.yaml)
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/ --metric final_energy
+
+# Timing analysis (reads experiment_index.yaml timing fields; requires --profile runs)
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --campaign ipopt_btol0.001_lbfgs30_hess
 ```
 
 ## Testing
@@ -87,7 +103,6 @@ src/
 │   ├── migration_executor.py     # Execute migrations on partition state
 │   ├── migration_types.py        # DetectionResult, MigrationResult, MigrationConfig dataclasses
 │   ├── migration_utils.py        # Shared helpers (edge utilities, geometry)
-│   ├── type1_component_analyzer.py  # Connected-component analysis for Type 1 vertex collapse
 │   ├── type2_migration_io.py     # Type 2 snapshot save/restore
 │   ├── type2_migration_history.py   # Type 2 rollback history tracking
 │   └── one_ring_rebuilder.py     # One-ring mesh topology rebuilding after Type 1 migration
@@ -97,12 +112,14 @@ src/
 │   └── io.py                     # HDF5 loaders, detect_run_layout(), find_base_solution_path()
 ├── visualization/
 │   ├── plot_utils.py             # Matplotlib utilities
-│   └── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+│   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+│   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
+├── profiling.py                  # ProfilingState: opt-in timing accumulator for Phase 2 callbacks (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
-├── optimization_analyzer.py      # Result analysis and plotting
+├── optimization_analyzer.py      # Per-run analysis and plotting
 ├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
 ├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
@@ -116,8 +133,43 @@ parameters/
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
 ├── double_torus_4part.yaml       # Double torus, 4 partitions (implicit / marching cubes)
 └── banchoff_chmutov_4part.yaml   # Banchoff-Chmutov order 4, 4 partitions (implicit / marching cubes)
-cluster/submit.sh                 # SLURM submission for UPPMAX (Rackham)
+sweep/                              # Parameter sweep tool (independent from core pipeline)
+├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
+├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
+├── timing_analyzer.py            # Scaling figures from timing_profile.yaml data (requires --profile runs)
+└── parameters/
+    ├── sweep_torus_lambda.yaml       # Sweep: lambda × seed for torus (grid strategy)
+    └── sweep_double_torus_lambda.yaml  # Sweep: lambda × resolution for double torus (grouped grid)
+cluster/
+├── pelle_config.sh              # Shared Pelle configuration (project, venv, SLURM defaults)
+├── submit_relaxation.sh         # Submit Phase 1 job to Pelle
+├── submit_refinement.sh         # Submit Phase 2 job to Pelle
+└── submit_sweep.sh              # Submit parameter sweep to Pelle (one job per combination)
 ```
+
+### Math Documentation (`docs/math/`)
+
+`docs/` is gitignored (local only).  Mathematical derivations of the quantities
+computed in the codebase are written as LaTeX documents compiled to PDF:
+
+```
+docs/math/
+├── AUTHORING_GUIDE.md          ← how to add a new document (read this first)
+├── Makefile                    ← master build: `make all`
+├── shared/
+│   ├── macros.tex              ← shared notation for all documents
+│   └── references.bib          ← shared bibliography
+└── 01-phase2-derivatives/
+    ├── main.tex
+    └── main.pdf                ← Phase 2 perimeter/area derivatives (analytical + FD)
+```
+
+**Adding a new math document**: follow `docs/math/AUTHORING_GUIDE.md`.  It
+specifies the directory naming convention, the `main.tex` template, all
+available macros from `shared/macros.tex`, bibliography keys, and the scope
+policy (only derive what is currently implemented — not planned features).
+
+To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/math all`.
 
 ### Run Output Layout (Structured)
 
@@ -141,7 +193,8 @@ results/run_{timestamp}_surf{surface}_npart{N}_v1..._v2..._lam{λ}_seed{S}/
 │       ├── iteration_001_20260410_131042.h5
 │       ├── iteration_002_20260410_131215.h5
 │       ├── refinement.yaml
-│       └── refinement.log
+│       ├── refinement.log
+│       └── timing_profile.yaml   # written only when --profile is passed
 ├── analysis/
 │   ├── refinement_optimization_metrics.png
 │   ├── constraint_evolution.png
@@ -162,6 +215,45 @@ and a `refinement.log` with full Phase 2 logs.
 Layout detection (`detect_run_layout()` in `src/pipeline/io.py`) supports
 both this structured layout and the legacy flat layout for backward
 compatibility with older result directories.
+
+### Experiment Directory Layout (Parameter Sweeps)
+
+When using `parameter_sweep.py`, runs are grouped by experiment identity
+(`{surface}_npart{N}`) rather than by sweep invocation:
+
+```
+results/torus_npart10/
+├── experiment_index.yaml                      # auto-maintained index of all runs
+├── run_20260413_120100_..._lam0.5_seed42/     # from sweep "lambda-coarse"
+│   ├── experiment.yaml
+│   ├── solution/
+│   ├── traces/
+│   ├── analysis/                              # auto-generated plots + screenshots
+│   └── logs/
+├── run_20260413_120200_..._lam1.0_seed42/
+│   └── ...
+├── sweeps/                                    # provenance: which sweeps ran here
+│   ├── 20260413_120000_lambda-coarse.yaml     # copy of sweep spec
+│   ├── 20260413_120000_lambda-coarse_summary.csv
+│   └── 20260413_120000_lambda-coarse_run001.yaml  # per-run generated configs
+└── analysis/                                  # experiment-wide analysis plots
+    ├── heatmap_perimeter.png
+    ├── line_perimeter.png
+    ├── convergence_overlay.png
+    └── sensitivity_perimeter.png
+```
+
+`experiment_index.yaml` is the central index listing every run with its
+parameters, status, and key metrics (perimeter, final_energy, initial_N,
+final_N, converged, total_iterations). Perimeter is the primary comparison
+metric because it is resolution-independent (unlike energy, which is
+ε-dependent).
+
+When runs have been profiled with `--profile`, `--mode collect` also extracts
+timing scalars into each run entry: `n_cells`, `n_active_vps`, `n_triple_points`,
+and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callback
+% breakdown, Steiner recomputation totals). These fields are consumed by
+`sweep/timing_analyzer.py` to produce scaling figures.
 
 ### Key Classes and Their Roles
 
@@ -185,6 +277,7 @@ compatibility with older result directories.
 | `SteinerHandler` | `src/partition/steiner_handler.py` | Manages Steiner/triple-point perimeter and area contributions for triangles where 3+ cells meet. |
 | `PartitionArrays` | `src/partition/partition_arrays.py` | Pre-computes sparse Jacobian/Hessian sparsity structure for IPOPT. |
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
+| `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
@@ -224,7 +317,7 @@ Variable points sit on mesh edges. Position: `x = λ * vertices[edge[0]] + (1-λ
 
 ### Migration Types
 
-- **Type 1 (Vertex Collapse):** A VP's λ is near 0 or 1, meaning it has migrated to a mesh vertex. The VP is absorbed and the topology around that vertex is rebuilt via connected-component analysis (`type1_component_analyzer.py`, `one_ring_rebuilder.py`).
+- **Type 1 (Vertex Collapse):** A VP's λ is near 0 or 1, meaning it has migrated to a mesh vertex. Trigger detection (`migration_detector.py`) requires ≥3 incident boundary VPs all approaching the same vertex (with a triple-point safety guard rejecting candidates whose 1-ring intersects an existing Steiner triangle). The vertex is then flipped and its 1-ring is rebuilt edge-by-edge by `one_ring_rebuilder.py` (valence-agnostic).
 - **Type 2 (Triple-Point):** Changes to which cells meet at a Steiner/triple point. Can be a forward migration (new triple-point structure) or a rollback (revert to a prior snapshot). History tracked in `type2_migration_history.py`.
 
 ## Style & Conventions
@@ -271,13 +364,85 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 
 `PerimeterOptimizer` delegates to `PerimeterCalculator`, `AreaCalculator`, and `SteinerHandler` (or their vectorized counterparts). To change the objective or constraints, modify these calculators. The `PartitionArrays` class pre-computes sparsity patterns for IPOPT.
 
+### Running a Parameter Sweep
+
+1. Create a sweep YAML spec (see `sweep/parameters/sweep_torus_lambda.yaml` for examples).
+2. Generate configs and run:
+   ```bash
+   # Preview what will run
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode generate-only
+
+   # Execute sequentially
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml
+
+   # Execute in parallel (4 workers)
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode local-parallel --workers 4
+
+   # Resume an interrupted sweep (skips completed runs)
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --resume
+   ```
+3. After runs complete, `experiment_index.yaml` is updated automatically. To rescan manually:
+   ```bash
+   python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect
+   ```
+4. Generate experiment-wide analysis plots:
+   ```bash
+   python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+   ```
+
+Sweep specs support two combination strategies:
+- `strategy: grid` — Cartesian product of all parameter lists
+- `strategy: paired` — zip together (all lists must have equal length)
+
+Parameters that must scale together (e.g., `n_grid_x` and `n_grid_y`) are placed in a named group — the group's parameters are zipped internally, then the group participates in the cross-strategy as a unit.
+
+### Running on Pelle (UPPMAX Cluster)
+
+**First-time setup:**
+1. Clone the repo to `$HOME`: `git clone <url> ~/surface-partition`
+2. Edit `cluster/pelle_config.sh` — set `PROJECT_ID`, `PROJECT_BASE`, and verify `PYTHON_MODULE`
+3. Create venv on Pelle: see setup instructions in `pelle_config.sh`
+
+Code and scripts live in `$HOME` (small, backed up). Large output data (results, HDF5) goes under `/proj/<allocation>/`.
+
+**Single relaxation job:**
+```bash
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --time 24:00:00 --cpus 8
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --resume-from results/run_.../solution/surface_....h5
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --dry-run
+```
+
+**Single refinement job:**
+```bash
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml --method ipopt --exact-hessian
+```
+
+**Parameter sweep (submits one job per combination):**
+```bash
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml --dry-run
+bash cluster/submit_sweep.sh --sweep sweep/parameters/sweep_torus_lambda.yaml --auto-collect
+```
+
+**Collect results after sweep jobs finish:**
+```bash
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect
+```
+
+**Analyze sweep results:**
+```bash
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+```
+
 ## Gotchas and Known Issues
 
 - **No automated tests.** `testing/` contains only manual CLI diagnostics. `pytest` will find `test_migrations_debug.py` but collect zero test functions.
 - **`docs/` is gitignored.** README references to `docs/PERIMETER_REFINEMENT.md` will be broken for fresh clones.
 - **PyVista is not in requirements.** It must be installed separately for 3D visualization scripts.
 - **Experiment YAML format:** Both scripts accept sectioned YAML (`experiment`/`relaxation`/`surface`/`refinement` keys) and legacy flat YAML (all keys at top level). `from_yaml_dict()` on both config dataclasses handles both formats.
-- **`cluster/submit.sh`** defaults surface to `ring` in the YAML fallback; always pass `--config` with a valid experiment YAML to select the desired surface.
+- **Cluster scripts** target UPPMAX Pelle. Edit `cluster/pelle_config.sh` to set your project ID and paths before first use. Verify the Python module version with `module spider python` on Pelle.
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
 

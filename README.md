@@ -97,7 +97,6 @@ surface-partition/
 │   │   ├── migration_executor.py    # Execute migrations on partition state
 │   │   ├── migration_types.py       # DetectionResult, MigrationResult dataclasses
 │   │   ├── migration_utils.py       # Shared helpers
-│   │   ├── type1_component_analyzer.py  # Connected-component analysis for Type 1
 │   │   ├── type2_migration_io.py    # Type 2 snapshot save/restore
 │   │   ├── type2_migration_history.py   # Type 2 rollback history
 │   │   └── one_ring_rebuilder.py    # One-ring mesh rebuilding after migration

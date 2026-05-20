@@ -433,22 +433,17 @@ def compute_area_hessian_sparse(pa: PartitionArrays,
             H_12 = ((g1_scalar * g2_scalar - (sign * g1_scalar) * (sign * g2_scalar)) / normC
                      + sign * d1xd2_scalar) / 2.0
 
-        cells = pa.btri_cell[m1]
-        vp1_arr = pa.btri_vp1[m1]
-        vp2_arr = pa.btri_vp2[m1]
-
-        for k in range(len(cells)):
-            c = int(cells[k])
-            if c >= n_c:
-                continue
-            mu = multipliers[c]
-            a = int(vp1_arr[k])
-            b = int(vp2_arr[k])
-
-            values[pa.hess_offset_map[(a, a)]] += mu * H_11[k]
-            values[pa.hess_offset_map[(b, b)]] += mu * H_22[k]
-            hi, lo = max(a, b), min(a, b)
-            values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
+        # btri1_cell_active was built from np.flatnonzero(btri_n_inside == 1),
+        # the same ordering as btri_cell[m1] here, so indexing aligns row-for-row.
+        assert pa.btri1_hess_off_aa is not None, \
+            "PartitionArrays missing Phase A Hessian offset fields — call compile_arrays() first"
+        active = pa.btri1_cell_active
+        if np.any(active):
+            cells_active = pa.btri_cell[m1][active]
+            mu = multipliers[cells_active]
+            np.add.at(values, pa.btri1_hess_off_aa[active], mu * H_11[active])
+            np.add.at(values, pa.btri1_hess_off_bb[active], mu * H_22[active])
+            np.add.at(values, pa.btri1_hess_off_ab[active], mu * H_12[active])
 
     # --- 2-inside triangles ---
     m2 = pa.btri_n_inside == 2
@@ -525,22 +520,15 @@ def compute_area_hessian_sparse(pa: PartitionArrays,
             H_22 = H_22_sub1 + H_22_sub2
             H_12 = H_12_sub1
 
-        cells = pa.btri_cell[m2]
-        vp1_arr = pa.btri_vp1[m2]
-        vp2_arr = pa.btri_vp2[m2]
-
-        for k in range(len(cells)):
-            c = int(cells[k])
-            if c >= n_c:
-                continue
-            mu = multipliers[c]
-            a = int(vp1_arr[k])
-            b = int(vp2_arr[k])
-
-            values[pa.hess_offset_map[(a, a)]] += mu * H_11[k]
-            values[pa.hess_offset_map[(b, b)]] += mu * H_22[k]
-            hi, lo = max(a, b), min(a, b)
-            values[pa.hess_offset_map[(hi, lo)]] += mu * H_12[k]
+        assert pa.btri2_hess_off_aa is not None, \
+            "PartitionArrays missing Phase A Hessian offset fields — call compile_arrays() first"
+        active = pa.btri2_cell_active
+        if np.any(active):
+            cells_active = pa.btri_cell[m2][active]
+            mu = multipliers[cells_active]
+            np.add.at(values, pa.btri2_hess_off_aa[active], mu * H_11[active])
+            np.add.at(values, pa.btri2_hess_off_bb[active], mu * H_22[active])
+            np.add.at(values, pa.btri2_hess_off_ab[active], mu * H_12[active])
 
     return values
 

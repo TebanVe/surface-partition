@@ -314,20 +314,38 @@ that can be derived explicitly.
 
 **Impact**: eliminates FD overhead entirely.  Makes the exact Hessian cost
 independent of the number of triple points (up to the O(T) cost of evaluating
-T blocks).
+T blocks).  Empirically removes the O(T) per-iteration cost that scales
+with N.
 
-**Status**: planned in `SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`.
+**Status**: **planned in detail** in
+`docs/ANALYTICAL_STEINER_DERIVATIVES_PLAN.md`.  That plan documents the
+implicit-function-theorem derivation (∂S/∂p_k = M⁻¹ K_k and the chain rule
+to ∂²S/∂p_k∂p_l), Phase A (first derivatives) and Phase B (second
+derivatives), degenerate-case handling, and a validation harness tightening
+the exact-Hessian-vs-FD tolerance to ~1e-10.
 
-#### 2B. Sparse Jacobian assembly
+#### 2B. Sparse Jacobian assembly + vectorised Hessian accumulation
 
 Replace the current dense-then-extract Jacobian path with direct sparse
 assembly.  This avoids allocating an (N−1) × n_vp dense matrix at every
-callback.
+callback.  Vectorise the Python-level accumulation into the sparse Hessian
+`values` array using `np.add.at` and pre-computed offset arrays.
 
 **Impact**: reduces memory from O(N · n_vp) to O(nnz_jac) and avoids
-unnecessary zero-filling.  Most impactful for N > 50.
+unnecessary zero-filling.  The sparse-Jacobian piece is already in the
+codebase; the vectorised Hessian accumulation is the remaining win and is
+most impactful for mid-to-large problems (many segments → many dict
+lookups in the current Python loop).
 
-**Status**: planned in `SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`.
+**Status**:
+- Sparse Jacobian — **implemented**, per
+  `docs/SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md` §2.
+- Vectorised Hessian accumulation + validation harness — **planned in
+  detail** in `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md`.  That
+  plan also specifies `testing/compare_hessian_modes.py` with a
+  per-component profile breakdown (perimeter-H / area-H / Steiner-H /
+  IPOPT linear-solve time) — the primary instrument for deciding when
+  Tier 2 has hit its ceiling and Tier 3 is required.
 
 #### 2C. Hybrid solver strategy (L-BFGS → exact Hessian, or L-BFGS → SLSQP)
 
@@ -487,12 +505,15 @@ Significant implementation effort.
 | ~~Immediate~~ | ~~Benchmark L-BFGS vs exact Hessian on 10-partition~~ | ~~1 hour~~ | ~~Validates Tier 1A~~ | **Done** — 23.8× speedup confirmed; quality trade-offs documented |
 | **Immediate** | Test hybrid L-BFGS → exact Hessian workflow (Tier 2C) on 10-partition | 1–2 hours | Validates combined speed + quality | Pending |
 | **Immediate** | Increase `max_opt_iter` for L-BFGS runs to 2000–3000 | trivial | L-BFGS did not converge in 1000 iters | Pending |
-| **Short-term** | Implement analytical Steiner Hessian (Tier 2A) | 1–2 weeks | Removes dominant per-iter cost for exact Hessian; makes polishing pass affordable at larger N | Pending |
+| **Short-term** | Vectorise Hessian accumulation + validation harness (Tier 2B refactor) — `docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md` | 3–5 days | Removes Python-for-loop in `h()`; adds `compare_hessian_modes.py` with per-component profile breakdown (the primary instrument for deciding when Tier 2 is exhausted and Tier 3 is needed) | Pending |
+| **Short-term** | Implement analytical Steiner Hessian (Tier 2A) — `docs/ANALYTICAL_STEINER_DERIVATIVES_PLAN.md` | 1–2 weeks | At N ~1000 the FD Steiner Hessian is ~O(N²) per iter; analytical Steiner is O(N). Becomes a real perf win (not just accuracy) at scale. Required for the exact-Hessian path at N ≳ 100 | Pending |
 | **Short-term** | Experiment with `acceptable_tol` tuning (Tier 1B) | 1 hour | May cut exact Hessian polishing time by 50%+ | Pending |
-| **Medium-term** | Direct sparse Jacobian (Tier 2B) | 1 week | Needed for N > 50 | Pending |
-| **Medium-term** | Augmented Lagrangian prototype (Tier 3A) | 2–4 weeks | Enables N = 100+ | Pending |
-| **Long-term** | Lloyd CVT initialiser (Tier 3C) | 2–4 weeks | Unlocks N = 1,000+ | Pending |
-| **Research** | Curve-shortening flow (Tier 3D) | months | Theoretically optimal | Pending |
+| ~~**Medium-term**~~ | ~~Direct sparse Jacobian (Tier 2B)~~ | ~~1 week~~ | ~~Needed for N > 50~~ | **Done** — implemented per `docs/SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md` |
+| **Medium-term** | Swap IPOPT linear solver (MUMPS → MA57 / MA97 via HSL) | 1–3 days once Tier 2 profile identifies it as the bottleneck | Attacks the dense Schur complement cost directly; `compare_hessian_modes.py` tells you when this is worthwhile | Pending |
+| **Medium-term** | Augmented Lagrangian prototype (Tier 3A) | 2–4 weeks | Enables N = 100–500 by decomposing the monolithic NLP; per-iter cost becomes independent of N | Pending |
+| **Long-term** | Multigrid / hierarchical coarse-to-fine optimisation (Tier 3B) | 3–6 weeks | Enables N = 100–1,000 by re-using warm starts from coarser partitions | Pending |
+| **Long-term** | Lloyd CVT initialiser (Tier 3C) | 2–4 weeks | Unlocks N = 1,000+. Best used as an initialiser for a Tier 2 polishing pass, not a replacement | Pending |
+| **Research** | Curve-shortening flow with area constraints (Tier 3D) | months | Theoretically optimal; scales to N = 1,000–100,000 in principle; significant implementation effort | Pending |
 
 ---
 
@@ -504,8 +525,25 @@ Significant implementation effort.
   fine meshes but insufficient on coarser ones.  The findings in that
   document directly explain the migration asymmetry observed in the
   benchmark above.
-- **`SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`** — Implementation plan for
-  analytical Steiner Hessian (Tier 2A) and sparse Jacobian (Tier 2B).
+- **`SPARSE_JACOBIAN_AND_EXACT_HESSIAN_PLAN.md`** — Original plan for the
+  sparse-Jacobian and exact-Hessian infrastructure.  Implementation is
+  **done**; serves as the reference for the mathematical derivations.
+- **`EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md`** — Follow-up plan
+  delivering (i) vectorised Hessian accumulation via pre-computed offset
+  arrays and `np.add.at`, (ii) a three-script validation harness
+  (`test_sparse_jacobian_equivalence.py`, `test_exact_hessian_vs_fd.py`,
+  `compare_hessian_modes.py`), and (iii) the per-component profile
+  breakdown in `compare_hessian_modes.py` that identifies which bucket
+  (Python Hessian, Steiner FD, or IPOPT linear solver) to target next.
+  **Required reading** before any further scaling work, because its
+  profile output is the empirical gate for deciding between Tier 2 and
+  Tier 3 investments.
+- **`ANALYTICAL_STEINER_DERIVATIVES_PLAN.md`** — Follow-up plan
+  replacing the FD Steiner derivatives with closed-form analytical
+  formulas derived via the implicit-function theorem from the Fermat-
+  point optimality condition.  At the N ≈ 1000 scale this is a
+  performance unlock (O(N²) → O(N) on the Steiner Hessian
+  contribution), not merely an accuracy / robustness improvement.
 
 ---
 
