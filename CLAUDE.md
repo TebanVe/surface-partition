@@ -20,8 +20,8 @@ pip install -e ".[all]"        # or: core + PyVista + IPOPT + scikit-image
 # Phase 1: Γ-convergence relaxation
 python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
 python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
-python scripts/find_surface_partition.py --config parameters/double_torus_4part.yaml      # requires .[implicit]
-python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_4part.yaml  # requires .[implicit]
+python scripts/find_surface_partition.py --config parameters/double_torus_10part.yaml      # requires .[implicit]
+python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12part.yaml  # requires .[implicit]
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
@@ -126,13 +126,18 @@ scripts/
 ├── visualize_type2_triple_point.py     # Type 2 migration debugging viewer
 └── debug_archive/                # Archived diagnostic scripts
 testing/
-├── README_testing.md             # Test registry documentation
-└── test_migrations_debug.py      # Migration debug CLI
+├── README_testing.md                    # Test registry documentation
+├── test_migrations_debug.py             # Migration debug CLI
+├── test_type1_triple_point_guard.py     # Type 1 triple-point safety-guard smoke test
+├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
+├── test_white_triangle_fix.py           # Zero-length-boundary rendering-fix smoke test
+├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
+└── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/
 ├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
-├── double_torus_4part.yaml       # Double torus, 4 partitions (implicit / marching cubes)
-└── banchoff_chmutov_4part.yaml   # Banchoff-Chmutov order 4, 4 partitions (implicit / marching cubes)
+├── double_torus_10part.yaml      # Double torus, 10 partitions (implicit / marching cubes)
+└── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions (implicit / marching cubes)
 sweep/                              # Parameter sweep tool (independent from core pipeline)
 ├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
 ├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
@@ -144,13 +149,22 @@ cluster/
 ├── pelle_config.sh              # Shared Pelle configuration (project, venv, SLURM defaults)
 ├── submit_relaxation.sh         # Submit Phase 1 job to Pelle
 ├── submit_refinement.sh         # Submit Phase 2 job to Pelle
-└── submit_sweep.sh              # Submit parameter sweep to Pelle (one job per combination)
+├── submit_sweep.sh              # Submit parameter sweep to Pelle (one job per combination)
+└── cleanup_sweep_results.py     # Prune worst sweep runs, keeping the N best by perimeter
 ```
 
-### Math Documentation (`docs/math/`)
+### Documentation (`docs/`)
 
-`docs/` is gitignored (local only).  Mathematical derivations of the quantities
-computed in the codebase are written as LaTeX documents compiled to PDF:
+The `docs/` tree is version-controlled and has three parts:
+
+```
+docs/
+├── math/        ← LaTeX derivations of the quantities computed in the code
+├── plans/       ← design plans for not-yet-implemented work
+└── reference/   ← permanent explanatory docs (methodology, known issues, primers)
+```
+
+**`docs/math/`** — mathematical derivations written as LaTeX, compiled to PDF:
 
 ```
 docs/math/
@@ -159,10 +173,21 @@ docs/math/
 ├── shared/
 │   ├── macros.tex              ← shared notation for all documents
 │   └── references.bib          ← shared bibliography
-└── 01-phase2-derivatives/
-    ├── main.tex
-    └── main.pdf                ← Phase 2 perimeter/area derivatives (analytical + FD)
+├── 01-phase2-derivatives/      ← Phase 2 perimeter/area derivatives (analytical + FD)
+└── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
 ```
+
+Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
+LaTeX build artifacts (`*.aux`, `*.bbl`, …) are ignored via
+`docs/math/.gitignore`; `*.tex`, `*.bib`, `Makefile`, `*.md`, and the
+`main.pdf` outputs are tracked.
+
+**`docs/plans/`** — design plans for work not yet implemented (e.g. the
+exact-Hessian / analytical-Steiner plan, the mesh-cleanup tool).
+
+**`docs/reference/`** — permanent explanatory documents: topology-switch
+methodology, scalability analysis, the optimization-methods primer, and
+recorded known-issue investigations.
 
 **Adding a new math document**: follow `docs/math/AUTHORING_GUIDE.md`.  It
 specifies the directory naming convention, the `main.tex` template, all
@@ -170,6 +195,25 @@ available macros from `shared/macros.tex`, bibliography keys, and the scope
 policy (only derive what is currently implemented — not planned features).
 
 To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/math all`.
+
+**Creating a new document**: use the `/new-doc` skill — it classifies the
+document (plan / reference / math) and supplies the correct template.
+
+### Keeping Documentation in Sync
+
+Documentation must track the codebase. Two standing rules:
+
+- **`docs/` sync** — When a code change is motivated by, or invalidates, a
+  document under `docs/plans/` or `docs/reference/`, update that document in
+  the same change. For a plan: advance its phase status and fold in findings
+  from implementation (constraints, performance results, design decisions not
+  in the original plan); a fully-implemented plan should be deleted or have its
+  lasting explanation moved to `docs/reference/`. For a reference doc: correct
+  whatever the change made inaccurate.
+- **CLAUDE.md sync** — When a change adds, removes, renames, or relocates
+  anything CLAUDE.md describes — a script, a config file, a public class, a
+  directory, a CLI flag, a convention, a dependency — or resolves a documented
+  gotcha, update CLAUDE.md in the same change so it never drifts.
 
 ### Run Output Layout (Structured)
 
@@ -438,8 +482,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 
 ## Gotchas and Known Issues
 
-- **No automated tests.** `testing/` contains only manual CLI diagnostics. `pytest` will find `test_migrations_debug.py` but collect zero test functions.
-- **`docs/` is gitignored.** README references to `docs/PERIMETER_REFINEMENT.md` will be broken for fresh clones.
+- **No automated tests.** `testing/` contains only manual CLI diagnostics (smoke tests run from the command line). `pytest` will discover the `test_*.py` files but collect zero test functions from them.
 - **PyVista is not in requirements.** It must be installed separately for 3D visualization scripts.
 - **Experiment YAML format:** Both scripts accept sectioned YAML (`experiment`/`relaxation`/`surface`/`refinement` keys) and legacy flat YAML (all keys at top level). `from_yaml_dict()` on both config dataclasses handles both formats.
 - **Cluster scripts** target UPPMAX Pelle. Edit `cluster/pelle_config.sh` to set your project ID and paths before first use. Verify the Python module version with `module spider python` on Pelle.
