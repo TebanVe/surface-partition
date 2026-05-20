@@ -18,7 +18,4 @@
 # latexmk artifact
 *-blx.bib
 
-# Build outputs (match repo-root *.pdf/*.log/*.out behaviour under docs/math)
-*.pdf
-*.log
-*.out
+# Build logs / aux outputs remain ignored via repo-root *.log / *.out and patterns above.

@@ -33,6 +33,7 @@ visualizations/
 *.jpg
 *.jpeg
 *.pdf
+!docs/**/*.pdf
 *.out
 
 # Specific files to ignore
@@ -43,10 +44,7 @@ scripts/test_fem_validation.py
 scripts/test_interpolation_methods.py
 scripts/test_area_optimization.py
 scripts/test_stage0_component_analysis.py
-src/core/interpolation_improved.py 
-# docs/: ignore repo-root planning markdown; version LaTeX sources under docs/math/
-docs/*
-!docs/math/
+src/core/interpolation_improved.py
 auxiliary/
 scripts/README_code_to_pdf.md
 scripts/code_to_pdf.py
