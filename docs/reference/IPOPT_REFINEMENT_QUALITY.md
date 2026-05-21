@@ -217,8 +217,8 @@ threshold.
 
 **Change:** Replace the dense Jacobian computation in `IPOPTProblemAdapter.jacobian()`
 with a direct sparse computation.  **This has since been implemented**, together
-with the exact Hessian — see `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`
-§1.1.
+with the exact Hessian — whose derivatives are now fully analytical; see
+`docs/math/01-phase2-derivatives` and `docs/math/03-analytical-steiner-derivatives`.
 
 **Rationale:** While this doesn't directly fix the Hessian approximation issue,
 it removes the 50 MB dense matrix warning and enables scaling to larger problems.

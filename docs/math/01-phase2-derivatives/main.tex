@@ -32,9 +32,11 @@ constraint values $A_k(\Lam)$, their Jacobian $J$, and the
 multiplier-weighted Hessian $\sum_k \mu_k \Hess{A_k}$.  Quantities
 belonging to \emph{regular} boundary segments and triangles are derived in
 closed form.  Quantities involving \emph{Steiner / triple-point} geometry
-are computed by finite differences; the FD schemes are described precisely
-and their limitations noted.  All formulas are cross-referenced to the
-implementing Python functions in \codefile{src/partition/}.
+have analytical forward values; their analytical first and second
+derivatives are derived in the companion document
+\codefile{docs/math/03-analytical-steiner-derivatives}.  All formulas are
+cross-referenced to the implementing Python functions in
+\codefile{src/partition/}.
 \end{abstract}
 
 \tableofcontents
@@ -73,8 +75,9 @@ at each callback.
 \paragraph{Structure of this document.}
 Sections~\ref{sec:notation}--\ref{sec:area} cover the regular (non-Steiner)
 path, which is fully analytical.  Section~\ref{sec:steiner} covers the
-Steiner / triple-point path, where the forward values are analytical but
-\emph{all derivatives are currently computed by finite differences}.
+Steiner / triple-point path; its forward values are analytical and its
+derivatives, also analytical, are derived in the companion document
+\codefile{docs/math/03-analytical-steiner-derivatives}.
 Section~\ref{sec:assembly} describes how the pieces assemble into the
 Lagrangian Hessian and its sparsity pattern.
 
@@ -614,147 +617,35 @@ $A_k^{\mathrm{tp}} = A_{\mathrm{void},k} + A_{\mathrm{corner},k}$.
 \codefile{vectorized\_steiner.py}: \code{compute\_steiner\_areas(pa, steiner\_pts)}
 \end{tcolorbox}
 
-\subsection{Steiner derivatives: finite-difference schemes}
+\subsection{Steiner derivatives}
 \label{sec:steiner-fd}
 
-The Steiner perimeter value \eqref{eq:steiner-perim} and area values are
-smooth functions of $\Lam$; their analytical derivatives involve the
-implicit-function-theorem formula for $\partial\Sv/\partial\lam_i$ (and
-higher-order analogues), which is algebraically complex and not yet
-implemented.  \emph{All Steiner derivatives are currently computed by
-finite differences.}
+The Steiner perimeter and area contributions are smooth functions of $\Lam$
+away from the degenerate $120^\circ$ case.  Their first \emph{and} second
+derivatives are computed in closed form, by applying the implicit-function
+theorem to the Fermat-point optimality condition.  The full derivation ---
+$\partial\Sv/\partial\vp{k}$, $\partial^2\Sv/\partial\vp{k}\partial\vp{l}$,
+and the resulting Steiner perimeter and area gradients and Hessians --- is the
+subject of its own document,
+\codefile{docs/math/03-analytical-steiner-derivatives}.
+
+The earlier finite-difference implementations are retained, renamed with a
+\code{\_fd\_reference} suffix, as the independent regression oracle; the
+public \code{compute\_steiner\_*} derivative functions dispatch to the
+analytical code via the module flag \code{USE\_ANALYTICAL\_STEINER}.
 
 \paragraph{Restricted support.}
 Only VPs in the set \code{pa.tp\_affected\_vps} can have non-zero Steiner
-derivatives.  This set contains the (at most three) VPs at each triple
-point — typically $3 \times T$ entries where $T$ is the number of triple
-points.  All finite-difference loops iterate only over this set.
-
-\subsubsection{Perimeter gradient (forward FD)}
-\label{sec:steiner-grad-fd}
-
-\begin{equation}
-  \pd{\Pst}{\lam_i}
-    \approx \frac{\Pst(\Lam + \varepsilon\,\mathbf{e}_i)
-                  - \Pst(\Lam)}{\varepsilon},
-  \qquad \varepsilon = 10^{-6},
-  \label{eq:steiner-grad-fd}
-\end{equation}
-for each $i \in$ \code{tp\_affected\_vps}.  The unperturbed Steiner point
-\code{compute\_steiner\_points(pa)} is computed once before the loop;
-the perturbed value is recomputed inside the loop.
+derivatives --- the (at most three) VPs at each triple point.
 
 \begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
-                  title={Code: Steiner gradient}, fontupper=\small]
-\codefile{vectorized\_steiner.py}:
-\code{compute\_steiner\_perimeter\_gradient(pa, eps=1e-6)}
+                  title={Code: Steiner derivatives}, fontupper=\small]
+\codefile{vectorized\_steiner.py}: analytical
+\code{compute\_steiner\_perimeter\_gradient}, \code{compute\_steiner\_area\_jacobian},
+\code{compute\_steiner\_perimeter\_hessian}, \code{compute\_steiner\_area\_hessian},
+each with a \code{\_fd\_reference} counterpart.  Full derivation in
+\codefile{docs/math/03-analytical-steiner-derivatives}.
 \end{tcolorbox}
-
-\subsubsection{Area Jacobian (forward FD, sparse output)}
-\label{sec:steiner-area-jac-fd}
-
-\begin{equation}
-  \pd{A_k^{\mathrm{st}}}{\lam_i}
-    \approx \frac{A_k^{\mathrm{st}}(\Lam + \varepsilon\,\mathbf{e}_i)
-                  - A_k^{\mathrm{st}}(\Lam)}{\varepsilon},
-  \qquad \varepsilon = 10^{-7},
-  \label{eq:steiner-jac-fd}
-\end{equation}
-for $k = 0,\ldots,N-2$ and $i \in$ \code{tp\_affected\_vps}.  The result
-is written directly into the sparse Jacobian values array at the
-pre-computed offsets \code{pa.nnz\_lookup[k, i]}.
-
-\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
-                  title={Code: Steiner area Jacobian}, fontupper=\small]
-\codefile{vectorized\_steiner.py}:
-\code{compute\_steiner\_area\_jacobian\_sparse(pa, eps=1e-7)}
-\end{tcolorbox}
-
-\subsubsection{Perimeter Hessian (nested central FD)}
-\label{sec:steiner-perim-hess-fd}
-
-The Hessian is computed by central differences \emph{applied to the
-gradient function} \eqref{eq:steiner-grad-fd}:
-\begin{equation}
-  \pdd{\Pst}{\lam_i}{\lam_j}
-    \approx \frac{g_j(\Lam + \varepsilon_{\mathrm{out}}\,\mathbf{e}_i)
-                  - g_j(\Lam - \varepsilon_{\mathrm{out}}\,\mathbf{e}_i)}
-                 {2\,\varepsilon_{\mathrm{out}}},
-  \label{eq:steiner-hess-fd}
-\end{equation}
-where $g_j(\Lam) \coloneqq \partial\Pst/\partial\lam_j$ is itself
-evaluated by forward FD \eqref{eq:steiner-grad-fd}.  The step sizes are
-\begin{equation}
-  \varepsilon_{\mathrm{out}} = 10^{-5},
-  \qquad
-  \varepsilon_{\mathrm{in}} = \varepsilon_{\mathrm{out}} \times 0.1 = 10^{-6}.
-  \label{eq:steiner-nested-eps}
-\end{equation}
-
-\begin{remark}[Nested FD scale separation]
-\label{rem:nested-fd}
-The inner step $\varepsilon_{\mathrm{in}}$ must be strictly smaller than
-the outer step $\varepsilon_{\mathrm{out}}$.  If both steps are equal, the
-central-difference approximation of the outer derivative measures the
-second-order variation in $\Pst$, but the inner gradient itself contains a
-bias of order $\varepsilon_{\mathrm{in}}$; when
-$\varepsilon_{\mathrm{in}} = \varepsilon_{\mathrm{out}}$ these two sources
-of error interfere destructively and the Hessian approximation is
-\emph{first-order} accurate in $\varepsilon$ rather than second-order.
-Using $\varepsilon_{\mathrm{in}} = 0.1\,\varepsilon_{\mathrm{out}}$
-separates the scales and restores second-order convergence.
-\end{remark}
-
-\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
-                  title={Code: Steiner perimeter Hessian}, fontupper=\small]
-\codefile{vectorized\_steiner.py}:
-\code{compute\_steiner\_perimeter\_hessian\_fd(pa, eps=1e-5)}\\[2pt]
-\texttt{eps\_inner = eps * 0.1}\\
-\texttt{grad\_plus = compute\_steiner\_perimeter\_gradient(pa, eps=eps\_inner)}\\
-\texttt{grad\_minus = compute\_steiner\_perimeter\_gradient(pa, eps=eps\_inner)}\\
-\texttt{hess\_col\_i = (grad\_plus - grad\_minus) / (2.0 * eps)}
-\end{tcolorbox}
-
-\subsubsection{Area Hessian (nested forward FD)}
-\label{sec:steiner-area-hess-fd}
-
-The multiplier-weighted area Hessian is computed by forward differences
-applied to the area Jacobian:
-\begin{equation}
-  \sum_{k=0}^{N-2} \mu_k\,\pdd{A_k^{\mathrm{st}}}{\lam_i}{\lam_j}
-    \approx \sum_{k=0}^{N-2} \mu_k\,
-      \frac{J_{kj}(\Lam + \varepsilon_{\mathrm{out}}\,\mathbf{e}_i)
-            - J_{kj}(\Lam)}{\varepsilon_{\mathrm{out}}},
-  \label{eq:steiner-area-hess-fd}
-\end{equation}
-where $J_{kj}(\Lam) \coloneqq \partial A_k^{\mathrm{st}}/\partial\lam_j$
-is evaluated by forward FD \eqref{eq:steiner-jac-fd}.  The step sizes are
-\begin{equation}
-  \varepsilon_{\mathrm{out}} = 10^{-5},
-  \qquad
-  \varepsilon_{\mathrm{in}}  = 10^{-7}.
-\end{equation}
-Here the inner step is already much smaller than the outer one (a factor
-of $10^2$), so there is no nested-scale accuracy problem analogous to
-Remark~\ref{rem:nested-fd}.
-
-\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
-                  title={Code: Steiner area Hessian}, fontupper=\small]
-\codefile{vectorized\_steiner.py}:
-\code{compute\_steiner\_area\_hessian\_fd(pa, multipliers, eps=1e-5)}
-\end{tcolorbox}
-
-\subsubsection{Precision limitation}
-\label{sec:steiner-precision}
-
-Because the Steiner Hessian involves nested FD, the achievable validation
-tolerance is approximately $10^{-4}$ (absolute), compared with ${\sim}10^{-10}$
-for the fully analytical regular-perimeter and area Hessians.  The residual
-error is dominated by the rounding noise in the inner gradient evaluation.
-Replacing the FD Steiner derivatives with the implicit-function-theorem
-closed-form (documented in \codefile{docs/ANALYTICAL\_STEINER\_DERIVATIVES\_PLAN.md})
-would recover machine-precision accuracy; this is planned but not yet
-implemented.
 
 % =========================================================================
 \section{Lagrangian Hessian Assembly}
@@ -794,14 +685,14 @@ $\Hess{\Preg}$
   & \code{compute\_perimeter\_hessian\_sparse}
   & analytical (§\ref{sec:perimeter-hessian}) \\
 $\Hess{\Pst}$
-  & \code{compute\_steiner\_perimeter\_hessian\_fd}
-  & nested central FD (§\ref{sec:steiner-perim-hess-fd}) \\
+  & \code{compute\_steiner\_perimeter\_hessian}
+  & analytical (§\ref{sec:steiner-fd}; doc 03) \\
 $\sum_k\mu_k\Hess{A_k^{\mathrm{reg}}}$
   & \code{compute\_area\_hessian\_sparse}
   & analytical (§\ref{sec:area-hessian-1inside}, §\ref{sec:area-2inside}) \\
 $\sum_k\mu_k\Hess{A_k^{\mathrm{st}}}$
-  & \code{compute\_steiner\_area\_hessian\_fd}
-  & nested forward FD (§\ref{sec:steiner-area-hess-fd}) \\
+  & \code{compute\_steiner\_area\_hessian}
+  & analytical (§\ref{sec:steiner-fd}; doc 03) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -862,19 +753,17 @@ Perimeter value $P$
   & Analytical \eqref{eq:steiner-perim} \\
 Perimeter gradient $\grad P$
   & Analytical \eqref{eq:grad-P}
-  & Forward FD \eqref{eq:steiner-grad-fd}, $\varepsilon=10^{-6}$ \\
+  & Analytical (doc 03) \\
 Area Jacobian $J$
   & Analytical \eqref{eq:area-jac-1inside}, \eqref{eq:jac2-1}--\eqref{eq:jac2-2}
-  & Forward FD \eqref{eq:steiner-jac-fd}, $\varepsilon=10^{-7}$ \\
+  & Analytical (doc 03) \\
 Perimeter Hessian $\Hess{P}$
   & Analytical \eqref{eq:H_aa}--\eqref{eq:H_ab}
-  & Nested central FD \eqref{eq:steiner-hess-fd},
-    $\varepsilon_{\mathrm{out}}=10^{-5}$, $\varepsilon_{\mathrm{in}}=10^{-6}$ \\
+  & Analytical (doc 03) \\
 Area Hessian $\Hess{A_k}$
   & Analytical \eqref{eq:H11-1inside}--\eqref{eq:H12-1inside},
     \eqref{eq:H11-2inside}--\eqref{eq:H22-sub2}
-  & Nested forward FD \eqref{eq:steiner-area-hess-fd},
-    $\varepsilon_{\mathrm{out}}=10^{-5}$, $\varepsilon_{\mathrm{in}}=10^{-7}$ \\
+  & Analytical (doc 03) \\
 \bottomrule
 \end{tabular}
 \end{center}

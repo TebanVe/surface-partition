@@ -57,7 +57,7 @@ surface:
 # Phase 2: iterative perimeter refinement
 refinement:
   method: ipopt                       # "ipopt", "SLSQP", or "trust-constr"
-  max_iterations: 6                  # topology iteration cycles (optimize → migrate)
+  max_iterations: 8                  # topology iteration cycles (optimize → migrate)
   max_opt_iter: 300                  # optimizer iterations per topology
   tolerance: 1.0e-7                    # optimizer convergence tolerance
   boundary_tol: 0.001                 # λ threshold triggering Type 1 migration

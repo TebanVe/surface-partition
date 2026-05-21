@@ -147,11 +147,11 @@ class IPOPTProblemAdapter:
         pa = self._opt._arrays
 
         perim_hess = vectorized_perimeter.compute_perimeter_hessian_sparse(pa)
-        steiner_perim_hess = vectorized_steiner.compute_steiner_perimeter_hessian_fd(
+        steiner_perim_hess = vectorized_steiner.compute_steiner_perimeter_hessian(
             pa, _prof=self._profile)
 
         area_hess = vectorized_area.compute_area_hessian_sparse(pa, lagrange)
-        steiner_area_hess = vectorized_steiner.compute_steiner_area_hessian_fd(
+        steiner_area_hess = vectorized_steiner.compute_steiner_area_hessian(
             pa, lagrange, _prof=self._profile)
 
         result = (obj_factor * (perim_hess + steiner_perim_hess)
@@ -442,7 +442,8 @@ class PerimeterOptimizer:
                 lbfgs_memory: int = 6,
                 best_iterate: bool = False,
                 exact_hessian: bool = False,
-                profile: Optional[ProfilingState] = None) -> OptimizeResult:
+                profile: Optional[ProfilingState] = None,
+                extra_ipopt_options: Optional[Dict] = None) -> OptimizeResult:
         """
         Run constrained perimeter optimization.
         
@@ -470,7 +471,12 @@ class PerimeterOptimizer:
                 of the Lagrangian instead of L-BFGS approximation.  Gives
                 exact curvature for smoother boundaries.  Ignored for SLSQP /
                 trust-constr.
-            
+            extra_ipopt_options: Optional dict of additional IPOPT options
+                forwarded verbatim to cyipopt.Problem.add_option (e.g.
+                {'print_timing_statistics': 'yes', 'linear_solver': 'ma57'}).
+                Applied after the built-in options, so it can override them.
+                Ignored for SLSQP / trust-constr.
+
         Returns:
             scipy OptimizeResult object
         """
@@ -553,6 +559,10 @@ class PerimeterOptimizer:
             problem.add_option('acceptable_tol', tol * 100)
             problem.add_option('max_iter', max_iter)
             problem.add_option('print_level', 3)
+
+            if extra_ipopt_options:
+                for _opt_key, _opt_val in extra_ipopt_options.items():
+                    problem.add_option(_opt_key, _opt_val)
 
             # cyipopt logs every callback invocation at INFO; raise threshold to
             # WARNING so the per-iteration callback noise is suppressed in normal
