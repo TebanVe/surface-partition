@@ -96,7 +96,7 @@ src/
 │   ├── partition_arrays.py       # PartitionArrays: sparse Jacobian/Hessian sparsity for IPOPT
 │   ├── vectorized_perimeter.py   # Fast vectorized perimeter evaluation
 │   ├── vectorized_area.py        # Fast vectorized area evaluation
-│   └── vectorized_steiner.py     # Fast vectorized Steiner evaluation
+│   └── vectorized_steiner.py     # Steiner forward values + analytical first/second derivatives (FD reference retained)
 ├── migration/
 │   ├── migration_orchestrator.py # MigrationOrchestrator: top-level detect → execute loop
 │   ├── migration_detector.py     # Type 1 + Type 2 trigger detection
@@ -127,6 +127,14 @@ scripts/
 └── debug_archive/                # Archived diagnostic scripts
 testing/
 ├── README_testing.md                    # Test registry documentation
+├── _hessian_test_utils.py               # Shared build_optimizer() helper for the harness below
+├── test_sparse_jacobian_equivalence.py  # Sparse vs dense area-Jacobian equivalence
+├── test_exact_hessian_vs_fd.py          # Analytical Lagrangian Hessian vs Richardson FD
+├── test_exact_hessian_matvec.py         # Hessian-vector-product check (large meshes)
+├── compare_hessian_modes.py             # L-BFGS vs exact-Hessian comparison + breakdown
+├── test_steiner_gradient_analytical.py  # Analytical Steiner first derivatives vs FD
+├── test_steiner_hessian_analytical.py   # Analytical Steiner second derivatives vs FD
+├── test_steiner_degenerate_case.py      # Degenerate (>=120 deg) Steiner branch
 ├── test_migrations_debug.py             # Migration debug CLI
 ├── test_type1_triple_point_guard.py     # Type 1 triple-point safety-guard smoke test
 ├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
@@ -155,11 +163,12 @@ cluster/
 
 ### Documentation (`docs/`)
 
-The `docs/` tree is version-controlled and has three parts:
+The `docs/` tree is version-controlled and has four parts:
 
 ```
 docs/
 ├── math/        ← LaTeX derivations of the quantities computed in the code
+├── guides/      ← LaTeX user guides and professional documents (compiled PDFs)
 ├── plans/       ← design plans for not-yet-implemented work
 └── reference/   ← permanent explanatory docs (methodology, known issues, primers)
 ```
@@ -173,8 +182,9 @@ docs/math/
 ├── shared/
 │   ├── macros.tex              ← shared notation for all documents
 │   └── references.bib          ← shared bibliography
-├── 01-phase2-derivatives/      ← Phase 2 perimeter/area derivatives (analytical + FD)
-└── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
+├── 01-phase2-derivatives/      ← Phase 2 regular perimeter/area derivatives; Steiner forward values
+├── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
+└── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
@@ -182,8 +192,25 @@ LaTeX build artifacts (`*.aux`, `*.bbl`, …) are ignored via
 `docs/math/.gitignore`; `*.tex`, `*.bib`, `Makefile`, `*.md`, and the
 `main.pdf` outputs are tracked.
 
+**`docs/guides/`** — user guides, onboarding documents, and professional
+technical documents that are not purely mathematical derivations:
+
+```
+docs/guides/
+├── Makefile                    ← master build: `make all`
+├── shared/
+│   └── preamble.tex            ← shared packages and styles (listings, tcolorbox, etc.)
+└── 01-pelle-user-guide/        ← step-by-step guide for running on UPPMAX Pelle
+    ├── main.tex
+    └── main.pdf
+```
+
+Guides use the same `NN-slug/` numbering convention as math documents.
+`docs/guides/.gitignore` suppresses LaTeX build artifacts; sources and PDFs
+are tracked. Build with: `make -C docs/guides/NN-slug` or `make -C docs/guides all`.
+
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
-exact-Hessian / analytical-Steiner plan, the mesh-cleanup tool).
+mesh-cleanup tool).
 
 **`docs/reference/`** — permanent explanatory documents: topology-switch
 methodology, scalability analysis, the optimization-methods primer, and
@@ -194,10 +221,15 @@ specifies the directory naming convention, the `main.tex` template, all
 available macros from `shared/macros.tex`, bibliography keys, and the scope
 policy (only derive what is currently implemented — not planned features).
 
-To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/math all`.
+**Adding a new guide**: create `docs/guides/NN-slug/` with a `main.tex`
+that begins with `\input{../shared/preamble}` and a `Makefile` copied from
+an existing sibling.  Update `docs/guides/Makefile` to add the slug to the
+`DOCS` variable.
+
+To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/guides/NN-slug`.
 
 **Creating a new document**: use the `/new-doc` skill — it classifies the
-document (plan / reference / math) and supplies the correct template.
+document (plan / reference / math / guide) and supplies the correct template.
 
 ### Keeping Documentation in Sync
 

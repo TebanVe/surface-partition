@@ -977,6 +977,19 @@ class PartitionContour:
             tp_contrib_vp2 = np.array(tp_cvp2_l, dtype=np.int32)
             tp_contrib_mesh_vertex = np.array(tp_cmv_l, dtype=np.int32)
             tp_affected_vps = np.unique(tp_vp_indices.ravel())
+
+            # Slot decode: map each contribution row's global vp1/vp2 to its
+            # slot (0/1/2) within tp_vp_indices[tp].  The analytical Steiner
+            # derivative code indexes per-triple-point geometry by slot.
+            vps_per_row = tp_vp_indices[tp_contrib_tp_idx]          # (n_rows, 3)
+            tp_contrib_slot1 = (
+                vps_per_row == tp_contrib_vp1[:, None]).argmax(axis=1).astype(np.int32)
+            tp_contrib_slot2 = (
+                vps_per_row == tp_contrib_vp2[:, None]).argmax(axis=1).astype(np.int32)
+            row_ix = np.arange(len(tp_contrib_tp_idx))
+            assert (np.array_equal(vps_per_row[row_ix, tp_contrib_slot1], tp_contrib_vp1)
+                    and np.array_equal(vps_per_row[row_ix, tp_contrib_slot2], tp_contrib_vp2)), \
+                "tp_contrib slot decode inconsistent with tp_vp_indices"
         else:
             dim = self.mesh.vertices.shape[1]
             tp_vp_indices = np.empty((0, 3), dtype=np.int32)
@@ -986,6 +999,8 @@ class PartitionContour:
             tp_contrib_vp2 = np.empty(0, dtype=np.int32)
             tp_contrib_mesh_vertex = np.empty(0, dtype=np.int32)
             tp_affected_vps = np.empty(0, dtype=np.int32)
+            tp_contrib_slot1 = np.empty(0, dtype=np.int32)
+            tp_contrib_slot2 = np.empty(0, dtype=np.int32)
 
         self.logger.info(f"compile_arrays: {n_active} active VPs, "
                         f"{len(seg_vp1)} segments, {n_btri} boundary-triangle rows, "
@@ -1078,6 +1093,19 @@ class PartitionContour:
 
         self.logger.info(f"  Hessian sparsity: {len(hess_row)} non-zeros (lower triangle)")
 
+        # Per-triple-point 3x3-block Hessian offsets for the analytical
+        # Steiner Hessian (loop-free np.add.at scatter of the symmetric block).
+        if n_tp > 0:
+            tp_hess_off = np.empty((n_tp, 3, 3), dtype=np.int32)
+            for t in range(n_tp):
+                vps_t = tp_vp_indices[t]
+                for i in range(3):
+                    for j in range(3):
+                        a, b = int(vps_t[i]), int(vps_t[j])
+                        tp_hess_off[t, i, j] = hess_offset_map[(max(a, b), min(a, b))]
+        else:
+            tp_hess_off = np.empty((0, 3, 3), dtype=np.int32)
+
         # 10. Pre-computed Hessian offsets for fast accumulation
         #     (Phase A of docs/EXACT_HESSIAN_VALIDATION_AND_PERF_PLAN.md).
         #     These let the vectorised Hessian builders scatter per-row
@@ -1138,6 +1166,9 @@ class PartitionContour:
                     btri2_hess_off_aa, btri2_hess_off_bb, btri2_hess_off_ab):
             assert len(arr) == 0 or ((arr >= 0).all() and (arr < n_hess).all()), \
                 "Hessian offset out of range — hess_offset_map build is inconsistent"
+        assert tp_hess_off.size == 0 or ((tp_hess_off >= 0).all()
+                                         and (tp_hess_off < n_hess).all()), \
+            "Triple-point Hessian offset out of range — hess_offset_map inconsistent"
 
         self.logger.info(
             f"  Hessian offset arrays: {len(seg_hess_off_aa)} seg, "
@@ -1172,12 +1203,15 @@ class PartitionContour:
             tp_contrib_vp2=tp_contrib_vp2,
             tp_contrib_mesh_vertex=tp_contrib_mesh_vertex,
             tp_affected_vps=tp_affected_vps,
+            tp_contrib_slot1=tp_contrib_slot1,
+            tp_contrib_slot2=tp_contrib_slot2,
             jac_row=jac_row,
             jac_col=jac_col,
             nnz_lookup=nnz_lookup,
             hess_row=hess_row,
             hess_col=hess_col,
             hess_offset_map=hess_offset_map,
+            tp_hess_off=tp_hess_off,
             seg_hess_off_aa=seg_hess_off_aa,
             seg_hess_off_bb=seg_hess_off_bb,
             seg_hess_off_ab=seg_hess_off_ab,

@@ -13,9 +13,9 @@ Read this document when:
 - You are choosing between `--method slsqp`, `--method ipopt`, and
   `--method ipopt --exact-hessian` and want to know why the options exist
   and what each one does.
-- You are reviewing the planning and reference documents
-  (`docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`,
-  `docs/reference/SCALABILITY_ANALYSIS.md`) and need a non-technical
+- You are reviewing the reference documents
+  (`docs/reference/SCALABILITY_ANALYSIS.md`,
+  `docs/math/03-analytical-steiner-derivatives`) and need a non-technical
   lens for the mathematical statements in them.
 - You are trying to decide whether the bottleneck in your runs is
   Python code, FD computations, or IPOPT internals.
@@ -319,37 +319,37 @@ IPOPT fabricates its own $H$ from the history of gradient evaluations.
 |---|---|---|
 | Perimeter value | analytical | analytical |
 | Perimeter gradient $\nabla P$ | analytical (`vectorized_perimeter.py`) | analytical (closed-form from Fermat construction) |
-| Area Jacobian $J$ | analytical (`vectorized_area.py`) | **FD** (`compute_steiner_area_jacobian_sparse`) |
-| Perimeter Hessian $\nabla^2 P$ | analytical (`vectorized_perimeter.py`) | **FD** (`compute_steiner_perimeter_hessian_fd`) |
-| Area Hessian $\nabla^2 A_k$ | analytical (`vectorized_area.py`) | **FD** (`compute_steiner_area_hessian_fd`) |
+| Area Jacobian $J$ | analytical (`vectorized_area.py`) | analytical (`vectorized_steiner.py`) |
+| Perimeter Hessian $\nabla^2 P$ | analytical (`vectorized_perimeter.py`) | analytical (`vectorized_steiner.py`) |
+| Area Hessian $\nabla^2 A_k$ | analytical (`vectorized_area.py`) | analytical (`vectorized_steiner.py`) |
 
-The three FD entries are what Phases 2–3 of
-`docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md` replace.
+Every entry is now analytical: the closed-form Steiner derivatives are
+derived in `docs/math/03-analytical-steiner-derivatives` (the
+finite-difference versions are retained as `*_fd_reference` regression
+oracles).
 
 ### 4.3 How each mode actually exercises this
 
 **L-BFGS mode** uses only the top four rows of §4.1 (value, gradient,
-constraints, Jacobian). It *does* use the FD Steiner area-Jacobian at
-every iteration, but because the Jacobian is FD over a small set
-(`tp_affected_vps` ≈ 3 × number-of-triple-points), the cost is modest —
-a single pass, no nested FD. Per-iteration cost is dominated by IPOPT
-internals and gradient evaluation, not Hessian work (there is none).
+constraints, Jacobian). The Steiner area-Jacobian it uses every iteration
+is now an analytical closed form, so its cost is negligible.
+Per-iteration cost is dominated by IPOPT internals and gradient
+evaluation, not Hessian work (there is none).
 
 **Exact-Hessian mode** uses everything in §4.2. In particular:
 
 - The bottom three rows apply at every single IPOPT iteration.
-- `compute_steiner_perimeter_hessian_fd` and
-  `compute_steiner_area_hessian_fd` are **nested FD**: outer FD over
-  `tp_affected_vps` × inner gradient that is itself FD. Cost:
-  $\mathcal{O}(T^2)$ per iteration where $T$ is the number of triple
-  points.
+- The Steiner perimeter and area Hessians are now analytical closed
+  forms (`compute_steiner_*_hessian` in `vectorized_steiner.py`),
+  $\mathcal{O}(T)$ per iteration where $T$ is the number of triple
+  points — the earlier nested-FD $\mathcal{O}(T^2)$ cost is gone.
 - The analytical perimeter and area Hessians are vectorised in NumPy
   and accumulate via `np.add.at` on pre-computed offset arrays, so there
   is no Python-level loop left in the Hessian path.
 
-This is why the exact-Hessian path is **much** slower per iteration than
-L-BFGS in your benchmark — it is doing real work every iteration that
-L-BFGS skips entirely.
+With every Hessian piece analytical, the exact-Hessian path is now
+*faster* per iteration than L-BFGS on the 10-partition benchmark, while
+still doing the curvature work L-BFGS skips.
 
 ---
 
@@ -408,24 +408,24 @@ this scale.
 
 ### 5.4 What the analytical-Steiner work buys
 
-The vectorised `np.add.at` Hessian accumulation is already in place; the
-remaining per-iteration optimisation of the exact-Hessian mode is the
-analytical Steiner work, which attacks the $H$ evaluation cost:
+Two per-iteration optimisations of the exact-Hessian mode attacked the
+$H$ evaluation cost; both are now done:
 
-- **Vectorised Hessian accumulation** (done): the Python for-loop
-  accumulation in the analytical perimeter / area Hessian has been
-  replaced by `np.add.at` on pre-computed offset arrays, flattening the
-  `perimeter_hess` / `area_hess` buckets in the per-component profile of
+- **Vectorised Hessian accumulation**: the Python for-loop accumulation
+  in the analytical perimeter / area Hessian was replaced by `np.add.at`
+  on pre-computed offset arrays, flattening the `perimeter_hess` /
+  `area_hess` buckets in the per-component profile of
   `compare_hessian_modes.py`.
-- **Analytical Steiner** (Phases 2–3 of
-  `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`):
-  replaces the $O(T^2)$ FD Steiner Hessian with an $O(T)$ analytical
-  closed-form. At $N = 1000$ this is the single largest per-iteration
-  saving, since $T^2 / T$ is a factor of $\sim 2\,000$.
+- **Analytical Steiner**: the $O(T^2)$ nested-FD Steiner Hessian was
+  replaced by an $O(T)$ analytical closed form
+  (`docs/math/03-analytical-steiner-derivatives`). This was the single
+  largest per-iteration saving — on the 10-partition reference the
+  Steiner Hessian dropped from $\sim 1.5$ s/call to $\sim 1$ ms/call.
 
-After analytical Steiner lands, the per-iteration exact-Hessian work is
+With analytical Steiner done, the per-iteration exact-Hessian work is
 dominated by the **IPOPT KKT linear solve**, not by anything you can do
-in Python.
+in Python — the exact-Hessian solve is now faster per iteration than
+L-BFGS.
 
 ### 5.5 The two walls those plans do *not* break
 
@@ -466,8 +466,7 @@ problem formulation*:
 |---|---|---|---|---|
 | **SLSQP + BFGS** | Dense Sequential QP, classical | Fast at $n < 1000$, impossible beyond | Good | $n \lesssim 1000$ variables, $N \lesssim 10$ cells |
 | **IPOPT + L-BFGS** | Sparse interior-point, curvature approximated from gradient history | Cheap per iter, many iters, sometimes many too many | Rough — misses sharp VP motion, jagged boundaries, few migrations | $N \approx 100$, with caveats |
-| **IPOPT + exact Hessian** (current) | Sparse interior-point, user-supplied $H$ with FD Steiner | Moderate per iter (dominated by FD Steiner), fewer iters | Sharp — full migration triggering, smooth boundaries | $N \approx 30$ practically; slow at $N = 100$ |
-| **IPOPT + exact Hessian** (after analytical Steiner) | Same, but $H$ is now all-analytical and vectorised | Per-iter dominated by IPOPT internal KKT solve | Same as above, plus tight validation guarantees | $N \approx 100$–$300$ practically before Schur / iter-count walls |
+| **IPOPT + exact Hessian** | Sparse interior-point, user-supplied $H$ — now all-analytical and vectorised | Per-iter dominated by IPOPT internal KKT solve; faster per iter than L-BFGS | Sharp — full migration triggering, smooth boundaries, tight validation guarantees | $N \approx 100$–$300$ practically before Schur / iter-count walls |
 | **Tier 3** (multigrid, AL, Lloyd) | Restructures the problem; each sub-solve is one of the above at small $N$ | Per sub-solve is small; global cost scales as $N \log N$ or $N$ | Depends on scheme; polishing pass can recover full quality | **$N \approx 1\,000+$** |
 
 ---
@@ -476,10 +475,10 @@ problem formulation*:
 
 - For **research-scale problems** ($N \lesssim 30$), IPOPT + exact
   Hessian with your current code is correct and adequate. The
-  analytical-Steiner work (Phases 2–3 of the consolidated plan) will
-  make it tighter and mildly faster.
-- For **medium-scale problems** ($N \approx 30$–$300$), those two plans
-  together are necessary. You can probably also get material gains from
+  analytical-Steiner work has made it tighter and faster.
+- For **medium-scale problems** ($N \approx 30$–$300$), the
+  analytical-Steiner work (now done) is necessary but not sufficient —
+  a Tier 3 outer loop is also needed. You can probably also get material gains from
   swapping IPOPT's default MUMPS linear solver for MA57 through HSL —
   that is a few lines of configuration, no code.
 - For **thousands of cells**, none of the four solver × Hessian
@@ -510,13 +509,13 @@ reading order:
 - **`docs/reference/IPOPT_REFINEMENT_QUALITY.md`** — detailed analysis of
   the quality gap between L-BFGS and exact Hessian (jagged boundaries,
   migration deficit, restoration-phase losses) and when each matters.
-- **`docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md`** — the
-  consolidated plan for completing the exact-Hessian path: a validation
-  harness (Phase 1) and analytical Steiner first / second derivatives
-  (Phases 2–3) that replace the FD Steiner derivatives with closed-form
-  formulas ($O(N^2) \to O(N)$ on the Steiner Hessian at $N \approx 1000$).
-  The sparse Jacobian, exact Hessian, and vectorised `np.add.at`
-  accumulation are already implemented.
+- **`docs/math/03-analytical-steiner-derivatives`** — the closed-form
+  derivation of the analytical Steiner first and second derivatives that
+  replaced the FD Steiner code ($O(N^2) \to O(N)$ on the Steiner Hessian
+  at $N \approx 1000$). The exact-Hessian path is now fully analytical;
+  its validation harness is in `testing/` (`compare_hessian_modes.py`,
+  `test_exact_hessian_vs_fd.py`, `test_steiner_gradient_analytical.py`,
+  `test_steiner_hessian_analytical.py`).
 - **`docs/math/01-phase2-derivatives`** — the mathematical derivations of
   every currently-implemented Phase 2 quantity (perimeter / area value,
   gradient, Jacobian, Hessian; Steiner FD schemes; Lagrangian assembly).

@@ -80,6 +80,15 @@ class PartitionArrays:
     # --- Phase 2: Jacobian value-offset lookup ---
     nnz_lookup: Optional[np.ndarray] = None   # int32 (n_cells-1, n_active_vp) — offset or -1
 
+    # --- Analytical Steiner: per-contribution-row slot decode ---
+    # tp_contrib_vp1/vp2 hold *global* active-VP indices; the analytical
+    # Steiner derivative code indexes per-triple-point geometry by *slot*
+    # (0,1,2 — the position within tp_vp_indices[tp]).  These map each
+    # contribution row's vp1/vp2 to its slot so the code never has to
+    # search.  Populated by compile_arrays() with a correctness assertion.
+    tp_contrib_slot1: Optional[np.ndarray] = None   # int32 (3*n_tp,) — slot of vp1
+    tp_contrib_slot2: Optional[np.ndarray] = None   # int32 (3*n_tp,) — slot of vp2
+
     # --- Phase 4: Hessian sparsity (lower triangle only, for IPOPT) ---
     hess_row: Optional[np.ndarray] = None     # int32 (hess_nnz,) — row indices (row >= col)
     hess_col: Optional[np.ndarray] = None     # int32 (hess_nnz,) — col indices
@@ -106,3 +115,10 @@ class PartitionArrays:
     btri2_hess_off_bb: Optional[np.ndarray] = None   # int32 (n_btri_2,)
     btri2_hess_off_ab: Optional[np.ndarray] = None   # int32 (n_btri_2,)
     btri2_cell_active: Optional[np.ndarray] = None   # bool  (n_btri_2,)
+
+    # --- Analytical Steiner Hessian: per-triple-point 3x3-block offsets ---
+    # tp_hess_off[t, i, j] is the flat (hess_nnz,) offset for the lower-
+    # triangle entry of the VP pair (tp_vp_indices[t,i], tp_vp_indices[t,j]).
+    # Lets the analytical Steiner Hessian scatter its symmetric 3x3 block with
+    # np.add.at instead of per-entry hess_offset_map dict lookups.
+    tp_hess_off: Optional[np.ndarray] = None   # int32 (n_tp, 3, 3)

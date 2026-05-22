@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the surface partition project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-05-05 (May 5, 2026) — Test 5 retired after validation
+**Last Updated**: 2026-05-21 (May 21, 2026) — added Tests 10–11 (analytical Steiner first/second derivatives)
 
 ---
 
@@ -528,9 +528,163 @@ The test was written as a one-time refactor validator; its only mechanism was fo
 
 ---
 
+### Tests 6–9: Exact-Hessian / Analytical-Steiner Validation Harness
+
+**Status**: ✅ APPROVED
+
+**Created**: 2026-05-20   **Last updated**: 2026-05-21
+
+This is the regression harness for the analytical-Steiner-derivatives work
+(now fully implemented — see Tests 10–11 and
+`docs/math/03-analytical-steiner-derivatives`). It was built first, against
+the original finite-difference (FD) Steiner derivatives, so it gave an
+independent before/after reference as the FD code was replaced by closed
+forms. A failure in any of these tests indicates a real derivative bug.
+
+All four scripts share `testing/_hessian_test_utils.py`, whose `build_optimizer`
+loads a base solution or refined checkpoint and returns a compiled
+`PerimeterOptimizer` (with `_arrays` populated). Each script prints a
+`RESULT: PASS|FAIL` line and exits 0 on PASS, 1 on FAIL.
+
+**Reference problems** (3-D torus, 10 partitions):
+- Base solution: `results/run_20260411_151003_surftorus_npart10_.../solution/surface_part10_..._20260411_151003.h5`
+- With triple points: the same run's `refinement/ipopt_btol0.001_lbfgs30_partial/iteration_001_20260411_152916.h5` (20 triple points, 1874 active VPs).
+
+---
+
+#### Test 6: `test_sparse_jacobian_equivalence.py`
+
+Verifies that the sparse area Jacobian
+(`compute_area_jacobian_sparse + compute_steiner_area_jacobian_sparse`) equals
+the dense reference (`compute_area_jacobian + compute_steiner_area_jacobian`) at
+the `(jac_row, jac_col)` sparsity positions. Both paths use identical Steiner FD
+code, so the only difference is the scatter pattern — agreement is exact.
+
+```bash
+python testing/test_sparse_jacobian_equivalence.py --solution <path.h5>
+```
+
+Pass criterion: `max |Δ| < 1e-10` (`--atol`). Baseline on the reference
+checkpoint: `max |Δ| = 0.0`.
+
+---
+
+#### Test 7: `test_exact_hessian_vs_fd.py`
+
+Verifies the analytical Lagrangian Hessian assembled by
+`IPOPTProblemAdapter._hessian_impl` against a central-FD reference computed on
+the Lagrangian gradient `∇L = obj_factor·∇f + λᵀ·∇c`. This is the single test
+that can unmask a wrong sign or chain-rule factor in any Hessian piece.
+
+```bash
+python testing/test_exact_hessian_vs_fd.py --solution <path.h5>
+python testing/test_exact_hessian_vs_fd.py --solution <path.h5> --lagrange-mode zero
+```
+
+Three `--lagrange-mode` settings (`zero`, `ones`, `random`) isolate the
+objective vs. constraint Hessian. The FD reference is a Richardson
+extrapolation of central differences (O(eps⁴), ~1e-9) — needed because a
+plain central difference floors at ~1e-4 on stiff short-segment perimeter
+entries. Defaults `--atol 1e-7 --rtol 1e-6`. Progression of `max |Δ|` on the
+reference checkpoint: ~4.4e-4 (Phase 1, FD Steiner) → ~4e-13…3e-8 (Phase 3,
+fully analytical). The dense FD build is O(n²) memory / O(n) gradient calls;
+for `n_active_vp` above `--max-n` (default 2500) the test SKIPs to Test 8.
+
+---
+
+#### Test 8: `test_exact_hessian_matvec.py`
+
+Large-mesh counterpart of Test 7. Instead of the dense (n,n) FD Hessian, it
+verifies `H_ana @ v ≈ central-FD(∇L)·v` for several random unit vectors `v` —
+O(n) memory, no size limit. `H_ana @ v` is built directly from the lower-
+triangle sparse Hessian values.
+
+```bash
+python testing/test_exact_hessian_matvec.py --solution <path.h5> --n-vectors 5
+```
+
+Same tolerance semantics as Test 7. Baseline on the reference checkpoint:
+worst `max |Δ| ≈ 1.2e-5` over 5 probes.
+
+---
+
+#### Test 9: `compare_hessian_modes.py`
+
+Informational (asserts nothing). Runs IPOPT twice on the same problem — L-BFGS
+vs. exact Hessian — and reports end-to-end totals (final perimeter, constraint
+violation, iteration count, wall time) plus a **per-component breakdown** of one
+exact-Hessian run.
+
+```bash
+python testing/compare_hessian_modes.py --solution <path.h5>
+python testing/compare_hessian_modes.py --solution <path.h5> --no-profile
+```
+
+**Reading the per-component breakdown.** The breakdown attributes the
+exact-Hessian wall time across `perimeter_hess`, `area_hess`,
+`steiner_perim_hess`, `steiner_area_hess` (timed by monkey-patching the four
+Hessian kernels), the Python-side sum, IPOPT's `PDSystemSolver` linear-algebra
+time (parsed from `print_timing_statistics`), and an "other" bucket; the
+percentages sum to ~100%. If the **`perimeter_hess` / `area_hess` / Steiner
+rows dominate**, profile with `cProfile` — all four are vectorized analytical
+kernels. If **IPOPT `PDSystemSolver` dominates**, the bottleneck is linear
+algebra, not Python — consider an MA57/MA97 linear solver or Tier 3 of
+`docs/reference/SCALABILITY_ANALYSIS.md`. Phase 1 → Phase 3 progression on the
+reference checkpoint: the FD Steiner Hessians went from ~98% of the
+exact-Hessian cost (~1.5 s/call) to a minor share (~1 ms/call), and the
+exact-Hessian solve is now faster per IPOPT iteration than L-BFGS.
+
+---
+
+### Test 10: `test_steiner_gradient_analytical.py` (analytical Steiner first derivatives)
+
+**Status**: ✅ APPROVED   **Created**: 2026-05-21
+
+Validates the closed-form Steiner perimeter gradient and area Jacobian
+(`compute_steiner_*_analytical`) against a central finite difference of the
+exact analytical forward values. Also runs the module self-check, which
+asserts the translation-invariance identity `Σ_k ∂S/∂p_k = I`.
+
+```bash
+python testing/test_steiner_gradient_analytical.py --solution <path.h5>
+```
+
+Pass criterion: `max |Δ| < 1e-6`. On the reference checkpoint: perimeter
+gradient `4.5e-11`, area Jacobian `2.3e-12`.
+
+---
+
+### Test 11: `test_steiner_hessian_analytical.py` + `test_steiner_degenerate_case.py`
+
+**Status**: ✅ APPROVED   **Created**: 2026-05-21
+
+`test_steiner_hessian_analytical.py` validates the closed-form Steiner second
+derivatives — `∂²S/∂λ²`, the perimeter Hessian, and the multiplier-weighted
+area Hessian — against the central-FD reference, and runs the second-order
+self-checks (`Σ_k ∂²S/∂p_k∂p_l = 0`, mixed-partial symmetry). On the
+reference checkpoint: `∂²S/∂λ²` `7.3e-7`, perimeter Hessian `4.1e-7`, area
+Hessian `4.0e-9`.
+
+`test_steiner_degenerate_case.py` exercises the degenerate (≥120°) branch on a
+hand-built synthetic 125° triple point — no `--solution` needed. It checks
+that `∂S/∂p_k = δ_{k,obtuse}·I`, `∂²S/∂p_k∂p_l = 0`, the analytical gradient
+and Hessians stay finite, and the collapsed Steiner perimeter is zero.
+
+```bash
+python testing/test_steiner_hessian_analytical.py --solution <path.h5>
+python testing/test_steiner_degenerate_case.py
+```
+
+The full derivation behind Tests 10–11 is
+`docs/math/03-analytical-steiner-derivatives`.
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
+
+(none currently)
 
 ---
 
@@ -547,6 +701,8 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-05-21 | Added Tests 10–11 (analytical Steiner first/second derivatives); upgraded Test 7 to a Richardson FD reference | System |
+| 2026-05-20 | Added Tests 6–9 (exact-Hessian / analytical-Steiner validation harness, Phase 1) | System |
 | 2026-05-05 | Added Test 5 (Phase A vectorised Hessian); validated and deleted after removing fallback branches | System |
 | 2026-03-24 | Deleted test_lambda_edge_roundtrip.py (resolved diagnostic); noted broken import in test_self_healing_selection.py; promoted refine_perimeter_iterative.py to APPROVED; added Test 5 (vectorized evaluation) | System |
 | 2026-03-03 | Added Test 4 (migration debug, no opt/export) | System |

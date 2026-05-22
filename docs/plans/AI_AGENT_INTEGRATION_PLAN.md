@@ -625,5 +625,5 @@ For someone new to LangChain/LangGraph, a suggested order:
 | Document | Relationship |
 |---|---|
 | `docs/reference/SCALABILITY_ANALYSIS.md` | **Informs agent decisions.** The agent should know when to switch from exact Hessian to L-BFGS based on partition count, and when to recommend coarser meshes. |
-| `docs/plans/EXACT_HESSIAN_AND_ANALYTICAL_STEINER_PLAN.md` | **Improves compute layer.** Faster, validated IPOPT iterations mean the agent can explore more parameter combinations in the same wall time. |
+| `docs/math/03-analytical-steiner-derivatives` | **Improves compute layer (implemented).** The now-analytical exact-Hessian path gives faster, validated IPOPT iterations, so the agent can explore more parameter combinations in the same wall time. |
 | `sweep/parameter_sweep.py` | **Existing tool to reuse.** The Phase 3 parameter-sweep agent should drive this tool rather than reimplement grid/paired sweep generation, parallel execution, and result collection. |
