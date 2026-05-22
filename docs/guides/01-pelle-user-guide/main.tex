@@ -610,6 +610,118 @@ final energy, mesh size, convergence flag).  Perimeter is the primary
 comparison metric because it is resolution-independent.
 
 % =========================================================================
+\section{Managing Disk Space}
+\label{sec:diskspace}
+% =========================================================================
+
+The project directory \code{/proj/snic2020-15-36/private/} has a finite
+quota that is \textbf{shared by all collaborators}.  A parameter sweep with
+20 combinations can easily generate several gigabytes of HDF5 solution files
+and PGD trace data.  Check usage regularly and prune low-quality runs after
+each sweep.
+
+\subsection{Checking current disk usage}
+
+\begin{lstlisting}[style=shell]
+# Total usage of the shared results directory
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/
+
+# Usage broken down by experiment directory
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/*/
+
+# Usage per individual run inside one experiment
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/run_*/
+
+# Show your project allocation and core-hour balance
+projinfo
+\end{lstlisting}
+
+\subsection{Pruning runs with \code{cleanup\_sweep\_results.py}}
+
+\code{cluster/cleanup\_sweep\_results.py} deletes run directories from a
+sweep experiment, keeping only the $N$ best runs ranked by perimeter (or
+another metric).  It reads \code{experiment\_index.yaml} to rank runs and
+then removes the rest.
+
+\begin{warnbox}
+\textbf{Always run a dry-run preview first.}
+Without \code{--execute} the script only prints what \emph{would} be
+deleted --- no files are touched.  Only add \code{--execute} once you
+have reviewed the output and are satisfied with the selection.
+\end{warnbox}
+
+\textbf{Safe items:} the \code{sweeps/} provenance directory is never
+touched.  A \code{cleanup\_log.yaml} file is written (or appended) in the
+experiment directory with full provenance of every deletion so you can always
+audit what was removed and why.  \code{experiment\_index.yaml} is \emph{not}
+modified; rebuild it by running \code{--mode collect} after cleanup.
+
+\subsubsection{Typical workflow}
+
+\begin{lstlisting}[style=shell]
+# 1. Check how much space the experiment is using
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/
+
+# 2. Preview what would be deleted (no changes made)
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir \
+    /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/
+
+# 3. Execute: delete all but the 10 best runs by perimeter (default)
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir \
+    /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/ \
+    --execute
+
+# 4. Rebuild the experiment index from surviving directories
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml \
+    --mode collect \
+    --output-dir /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results
+\end{lstlisting}
+
+\subsubsection{Available options}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Option & Default & Description \\
+\midrule
+\code{--experiment-dir} \placeholder{path} & (required) &
+  Experiment directory containing \code{experiment\_index.yaml} \\
+\code{--keep} \placeholder{N} & \code{10} &
+  Number of best runs to keep \\
+\code{--metric} \placeholder{name} & \code{perimeter} &
+  Metric to rank by (lower = better) \\
+\code{--execute} & --- &
+  Actually delete.  Without this flag, only a preview is shown. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Further examples}
+
+\textbf{Keep only the 5 best runs:}
+\begin{lstlisting}[style=shell]
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir /proj/.../results/torus_npart10/ \
+    --keep 5 --execute
+\end{lstlisting}
+
+\textbf{Rank by \code{final\_energy} instead of perimeter:}
+\begin{lstlisting}[style=shell]
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir /proj/.../results/torus_npart10/ \
+    --metric final_energy --execute
+\end{lstlisting}
+
+\begin{notebox}
+The dry run also estimates how much disk space would be freed, broken down
+per run directory.  Use this estimate to decide how many runs to keep before
+committing to a deletion.
+\end{notebox}
+
+% =========================================================================
 \section{Retrieving and Analysing Results}
 % =========================================================================
 
@@ -709,9 +821,13 @@ Command & What it does \\
 \code{jobinfo \placeholder{job\_id}} &
   UPPMAX-specific detailed job info \\
 \code{projinfo} &
-  Show your allocation usage \\
+  Show your allocation usage (core-hours + storage) \\
 \code{uquota} &
   Show your home directory disk usage \\
+\code{du -sh \placeholder{dir}} &
+  Summarise disk usage of a directory \\
+\code{du -sh \placeholder{dir}/*/} &
+  Per-subdirectory usage breakdown \\
 \bottomrule
 \end{tabular}
 \end{center}
