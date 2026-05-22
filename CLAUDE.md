@@ -163,11 +163,12 @@ cluster/
 
 ### Documentation (`docs/`)
 
-The `docs/` tree is version-controlled and has three parts:
+The `docs/` tree is version-controlled and has four parts:
 
 ```
 docs/
 ├── math/        ← LaTeX derivations of the quantities computed in the code
+├── guides/      ← LaTeX user guides and professional documents (compiled PDFs)
 ├── plans/       ← design plans for not-yet-implemented work
 └── reference/   ← permanent explanatory docs (methodology, known issues, primers)
 ```
@@ -191,6 +192,23 @@ LaTeX build artifacts (`*.aux`, `*.bbl`, …) are ignored via
 `docs/math/.gitignore`; `*.tex`, `*.bib`, `Makefile`, `*.md`, and the
 `main.pdf` outputs are tracked.
 
+**`docs/guides/`** — user guides, onboarding documents, and professional
+technical documents that are not purely mathematical derivations:
+
+```
+docs/guides/
+├── Makefile                    ← master build: `make all`
+├── shared/
+│   └── preamble.tex            ← shared packages and styles (listings, tcolorbox, etc.)
+└── 01-pelle-user-guide/        ← step-by-step guide for running on UPPMAX Pelle
+    ├── main.tex
+    └── main.pdf
+```
+
+Guides use the same `NN-slug/` numbering convention as math documents.
+`docs/guides/.gitignore` suppresses LaTeX build artifacts; sources and PDFs
+are tracked. Build with: `make -C docs/guides/NN-slug` or `make -C docs/guides all`.
+
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
 mesh-cleanup tool).
 
@@ -203,10 +221,15 @@ specifies the directory naming convention, the `main.tex` template, all
 available macros from `shared/macros.tex`, bibliography keys, and the scope
 policy (only derive what is currently implemented — not planned features).
 
-To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/math all`.
+**Adding a new guide**: create `docs/guides/NN-slug/` with a `main.tex`
+that begins with `\input{../shared/preamble}` and a `Makefile` copied from
+an existing sibling.  Update `docs/guides/Makefile` to add the slug to the
+`DOCS` variable.
+
+To rebuild any PDF: `make -C docs/math/NN-slug` or `make -C docs/guides/NN-slug`.
 
 **Creating a new document**: use the `/new-doc` skill — it classifies the
-document (plan / reference / math) and supplies the correct template.
+document (plan / reference / math / guide) and supplies the correct template.
 
 ### Keeping Documentation in Sync
 

@@ -1,10 +1,10 @@
 # Surface Partition Optimization Framework
 
-This project implements a framework for finding minimal-perimeter partitions on closed triangulated surfaces, based on the optimization method described in "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides a two-phase pipeline: Γ-convergence relaxation followed by direct perimeter refinement.
+This project implements a framework for finding minimal-perimeter partitions on closed triangulated surfaces, based on the method from "Partitions of Minimal Length on Manifolds" by Bogosel and Oudet. The framework supports any triangulated surface (2D or 3D) and provides a two-phase pipeline: Gamma-convergence relaxation followed by direct perimeter refinement.
 
 ## Mathematical Framework
 
-The project uses a Γ-convergence approach with the energy functional:
+The project uses a Gamma-convergence approach with the energy functional:
 
 $$J_ε(u) = ε \int_S |∇_τ u|^2 + \frac{1}{ε} \int_S u^2(1 - u)^2$$
 
@@ -20,33 +20,35 @@ Where $S$ is any triangulated surface and $∇_τ$ denotes the tangential gradie
 
 ## Key Features
 
-### Perimeter Refinement (Phase 2)
-- **Section 5 Implementation**: Direct perimeter minimization on extracted contours
-- **Constrained Optimization**: Equal-area constraints with analytical gradients (SLSQP, trust-constr, or IPOPT)
-- **Steiner Trees**: Optimal handling of triple points (3 regions meet)
-- **Topology Migrations**: Type 1 (vertex collapse) and Type 2 (triple-point) automatic detection and execution
-- **Vectorized Kernels**: Fast perimeter/area/Steiner evaluation paths
+### Surfaces
+Four surface types are implemented:
+- **Torus** (`TorusMeshProvider`) — structured parametric mesh
+- **Ellipsoid** (`EllipsoidMeshProvider`) — parametric spherical-coordinate mesh
+- **Double torus** (`DoubleTorusMeshProvider`) — implicit surface via marching cubes
+- **Banchoff-Chmutov order 4** (`BanchoffChmutovMeshProvider`) — implicit surface via marching cubes
 
-### Surface-Agnostic Design
-- **TriMesh**: Universal triangle mesh class supporting both 2D and 3D surfaces
-- **Surface Providers**: Modular system for different surface types (currently: torus)
-- **P1 FEM Assembly**: Automatic mass and stiffness matrix computation for any triangulation
+### Phase 1: Gamma-Convergence Relaxation
+- Custom Projected Gradient Descent (PGD) with per-step projection onto partition and area constraints
+- FEM-weighted penalty for constant-phase regularization (fixed or adaptive target mode)
+- Armijo backtracking line search
+- Multi-level mesh refinement with nearest-neighbor solution interpolation
+- Automatic refinement triggers based on convergence metrics
 
-### Projected Gradient Descent (PGD) — Phase 1
-- **Custom gradient descent** with per-step projection onto partition and area constraints
-- **FEM-weighted penalty** for constant-phase regularization (fixed or adaptive target mode)
-- **Armijo backtracking** line search
-- **Mesh refinement triggers**: Plateau detection on energy, gradient norm, and feasibility
+### Phase 2: Perimeter Refinement
+- Direct perimeter minimization on extracted contours
+- Equal-area constraints with analytical gradients (SLSQP, trust-constr, or IPOPT)
+- Steiner tree handling for triple points (where 3 regions meet)
+- Automatic topology migrations: Type 1 (vertex collapse) and Type 2 (triple-point)
+- Vectorized kernels for fast perimeter/area/Steiner evaluation
+- Exact analytical Hessian for IPOPT (in addition to L-BFGS)
+- Optional timing profiling via `--profile`
 
-### Mesh Refinement System
-- **Multi-level Optimization**: Progressive mesh refinement with nearest-neighbor solution interpolation
-- **Automatic Refinement**: Smart triggers based on convergence metrics and plateaus
-- **Warm-start Resume**: Continue from a prior solution HDF5 at a higher refinement level
-
-### Analysis & Visualization
-- **Optimization Analyzer**: Multi-level result analysis with energy component and constraint evolution plots
-- **Partition Viewer**: 3D visualization via PyVista (base or refined solutions)
-- **HDF5 Output**: Efficient storage of optimization iterates, solutions, and refined contour checkpoints
+### Parameter Sweeps
+- Grid or paired sweep over arbitrary YAML parameters
+- Local sequential, local parallel, generate-only, and collect modes
+- Automatic `experiment_index.yaml` with per-run metrics
+- Sweep analysis plots (heatmaps, convergence overlays, sensitivity)
+- Timing analysis for profiled runs
 
 ## Installation
 
@@ -54,173 +56,194 @@ Requires Python >= 3.9. The project uses pyenv for environment management.
 
 ```bash
 # Activate the pyenv virtualenv (see .python-version)
-pyenv activate ringtest-3.9
+pyenv activate surface-partition   # or: pyenv activate ringtest-3.9
 
 # Install core dependencies
 pip install -e .
 
-# Or with optional extras:
-pip install -e ".[viz]"       # core + PyVista (3D visualization)
-pip install -e ".[ipopt]"     # core + IPOPT solver
-pip install -e ".[all]"       # core + PyVista + IPOPT
+# Install optional extras
+pip install -e ".[viz]"       # core + PyVista (3D visualisation)
+pip install -e ".[ipopt]"     # core + IPOPT solver (cyipopt)
+pip install -e ".[implicit]"  # core + scikit-image (implicit surfaces)
+pip install -e ".[all]"       # all of the above
+pip install -e ".[dev]"       # adds pytest, black, flake8
 ```
 
 ## Project Structure
 
 ```
 surface-partition/
-├── src/                              # Core library
-│   ├── mesh/                         # Mesh and FEM
-│   │   ├── tri_mesh.py              # TriMesh class (vertices, faces, M, K, v)
-│   │   ├── mesh_topology.py         # Edge/triangle adjacency for migrations
-│   │   └── interpolation.py         # Nearest-neighbor interpolation between levels
-│   ├── surfaces/                     # Surface providers
-│   │   └── torus.py                 # TorusMeshProvider (R3 torus of revolution)
-│   ├── optimization/                 # Optimizers
-│   │   ├── pgd_optimizer.py         # Projected gradient descent (Phase 1)
-│   │   ├── perimeter_optimizer.py   # Constrained perimeter minimization (Phase 2)
-│   │   ├── projection.py           # Iterative constraint projection
-│   │   └── exceptions.py           # RefinementTriggered exception
-│   ├── partition/                    # Contour extraction and partition data
-│   │   ├── find_contours.py         # ContourAnalyzer: HDF5 → indicators → boundary topology
-│   │   ├── contour_partition.py     # PartitionContour, VariablePoint, TriangleSegment
-│   │   ├── perimeter_calculator.py  # Per-segment perimeter with analytical gradients
-│   │   ├── area_calculator.py       # Per-cell FEM area with analytical gradients
-│   │   ├── steiner_handler.py       # Steiner/triple-point perimeter + area contributions
-│   │   ├── partition_arrays.py      # PartitionArrays: sparse Jacobian/Hessian structure
-│   │   ├── vectorized_perimeter.py  # Fast vectorized perimeter evaluation
-│   │   ├── vectorized_area.py       # Fast vectorized area evaluation
-│   │   └── vectorized_steiner.py    # Fast vectorized Steiner evaluation
-│   ├── migration/                    # Topology migration subsystem
-│   │   ├── migration_orchestrator.py # Top-level detect → execute loop
-│   │   ├── migration_detector.py    # Type 1 + Type 2 trigger detection
-│   │   ├── migration_executor.py    # Execute migrations on partition state
-│   │   ├── migration_types.py       # DetectionResult, MigrationResult dataclasses
-│   │   ├── migration_utils.py       # Shared helpers
-│   │   ├── type2_migration_io.py    # Type 2 snapshot save/restore
-│   │   ├── type2_migration_history.py   # Type 2 rollback history
-│   │   └── one_ring_rebuilder.py    # One-ring mesh rebuilding after migration
-│   ├── pipeline/                     # Workflow orchestration
-│   │   ├── relaxation.py           # run_relaxation(): multi-level PGD pipeline
-│   │   ├── pipeline_orchestrator.py # PipelineOrchestrator: iterative refinement loop
-│   │   └── io.py                   # HDF5 loaders (base + refined files)
-│   ├── visualization/               # Plotting helpers
-│   │   ├── plot_utils.py           # Matplotlib utilities
-│   │   └── partition_helpers.py    # Partition-specific viz helpers
-│   └── logging_config.py           # Logging setup with performance decorators
-├── scripts/                          # CLI entry points
-│   ├── find_surface_partition.py    # Phase 1: Γ-convergence relaxation
-│   ├── refine_perimeter.py         # Phase 2: iterative perimeter refinement
-│   ├── optimization_analyzer.py     # Result analysis and plotting
-│   ├── visualize_partition.py       # Original partition viewer — debugging (PyVista)
-│   ├── visualize_partition_fast.py  # Fast partition viewer — production (PyVista, vectorized)
-│   ├── visualize_type1_vertex_collapse.py  # Type 1 migration viewer — debugging
-│   ├── visualize_type2_triple_point.py     # Type 2 migration viewer — debugging
-│   └── debug_archive/              # Archived diagnostic scripts
-├── testing/                          # Test scripts and debug tools
-│   ├── README_testing.md           # Test registry documentation
-│   └── test_migrations_debug.py    # Migration debug CLI
-├── parameters/                       # Experiment configuration files
-│   └── torus_10part.yaml           # Example: 10-partition torus experiment
-├── cluster/                          # HPC job submission
-│   └── submit.sh                   # SLURM script for UPPMAX (Rackham)
-├── pyproject.toml                   # Package config, Black, pytest
-└── requirements.txt                 # Core dependencies
+├── src/                          # Core library
+│   ├── mesh/                     # Mesh and FEM
+│   │   ├── tri_mesh.py           # TriMesh: vertices, faces, FEM matrices (M, K, v)
+│   │   ├── mesh_topology.py      # Edge/triangle adjacency for migrations
+│   │   └── interpolation.py      # Nearest-neighbor interpolation between levels
+│   ├── surfaces/                 # Surface providers
+│   │   ├── base.py               # SurfaceProvider abstract base class
+│   │   ├── torus.py              # TorusMeshProvider
+│   │   ├── ellipsoid.py          # EllipsoidMeshProvider
+│   │   ├── implicit.py           # ImplicitSurfaceProvider (marching-cubes base)
+│   │   ├── double_torus.py       # DoubleTorusMeshProvider
+│   │   └── banchoff_chmutov.py   # BanchoffChmutovMeshProvider
+│   ├── optimization/             # Optimizers
+│   │   ├── pgd_optimizer.py      # Phase 1: Projected Gradient Descent
+│   │   ├── perimeter_optimizer.py # Phase 2: constrained perimeter minimization
+│   │   ├── projection.py         # Iterative constraint projection
+│   │   └── exceptions.py         # RefinementTriggered exception
+│   ├── partition/                # Contour extraction and partition data
+│   │   ├── find_contours.py      # ContourAnalyzer: HDF5 → boundary topology
+│   │   ├── contour_partition.py  # PartitionContour, VariablePoint, TriangleSegment
+│   │   ├── perimeter_calculator.py # Per-segment perimeter with analytical gradients
+│   │   ├── area_calculator.py    # Per-cell FEM area with analytical gradients
+│   │   ├── steiner_handler.py    # Steiner/triple-point contributions
+│   │   ├── partition_arrays.py   # Sparse Jacobian/Hessian sparsity (IPOPT)
+│   │   ├── vectorized_perimeter.py
+│   │   ├── vectorized_area.py
+│   │   └── vectorized_steiner.py # Analytical first and second Steiner derivatives
+│   ├── migration/                # Topology migration subsystem
+│   │   ├── migration_orchestrator.py
+│   │   ├── migration_detector.py
+│   │   ├── migration_executor.py
+│   │   ├── migration_types.py
+│   │   ├── migration_utils.py
+│   │   ├── type2_migration_io.py
+│   │   ├── type2_migration_history.py
+│   │   └── one_ring_rebuilder.py
+│   ├── pipeline/                 # Workflow orchestration
+│   │   ├── relaxation.py         # run_relaxation(): multi-level PGD pipeline
+│   │   ├── pipeline_orchestrator.py # Phase 2 iterative refinement loop
+│   │   └── io.py                 # HDF5 loaders, run-layout detection
+│   ├── visualization/            # Plotting helpers
+│   │   ├── plot_utils.py
+│   │   ├── partition_helpers.py
+│   │   └── partition_screenshots.py
+│   ├── profiling.py              # ProfilingState: opt-in timing accumulator
+│   └── logging_config.py         # Logging setup, @log_performance decorator
+├── scripts/                      # CLI entry points
+│   ├── find_surface_partition.py # Phase 1: Gamma-convergence relaxation
+│   ├── refine_perimeter.py       # Phase 2: iterative perimeter refinement
+│   ├── optimization_analyzer.py  # Per-run analysis and plotting
+│   ├── visualize_partition_fast.py # Fast production viewer (PyVista, vectorized)
+│   ├── visualize_partition.py    # Original viewer — debugging (PyVista)
+│   ├── visualize_type1_vertex_collapse.py
+│   ├── visualize_type2_triple_point.py
+│   └── debug_archive/
+├── testing/                      # CLI diagnostic tools (not pytest)
+│   ├── README_testing.md
+│   └── test_*.py / diagnose_*.py / compare_*.py
+├── parameters/                   # Experiment configuration files
+│   ├── torus_10part.yaml
+│   ├── ellipsoid_6part.yaml
+│   ├── double_torus_10part.yaml
+│   └── banchoff_chmutov_12part.yaml
+├── sweep/                        # Parameter sweep tool
+│   ├── parameter_sweep.py        # Sweep orchestrator
+│   ├── sweep_analyzer.py         # Experiment-wide analysis plots
+│   ├── timing_analyzer.py        # Scaling figures from profiled runs
+│   └── parameters/
+│       ├── sweep_torus_lambda.yaml
+│       └── sweep_double_torus_lambda.yaml
+├── cluster/                      # HPC job submission (UPPMAX Pelle)
+│   ├── pelle_config.sh           # Shared config — edit REPO_DIR and VENV_DIR
+│   ├── submit_relaxation.sh      # Submit Phase 1 job
+│   ├── submit_refinement.sh      # Submit Phase 2 job
+│   ├── submit_sweep.sh           # Submit parameter sweep (one job per combination)
+│   └── cleanup_sweep_results.py  # Prune worst sweep runs
+├── docs/                         # Documentation
+│   ├── math/                     # LaTeX derivations (compiled PDFs)
+│   ├── guides/                   # LaTeX user guides (compiled PDFs)
+│   ├── plans/                    # Design plans for future work
+│   └── reference/                # Permanent explanatory documents
+└── pyproject.toml                # Package config, Black, pytest
 ```
 
 ## Usage
 
-### Phase 1: Γ-Convergence Relaxation
+### Phase 1: Gamma-Convergence Relaxation
 
 ```bash
 # Run from experiment config
 python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
+python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
+python scripts/find_surface_partition.py --config parameters/double_torus_10part.yaml
+python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12part.yaml
 
-# Custom output directory
-python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --solution-dir results/my_run
-
-# Warm-start from a prior solution (must increase refinement_levels in YAML)
-python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --resume-from results/prior/solution.h5
+# Warm-start from a prior solution (increase refinement_levels in YAML first)
+python scripts/find_surface_partition.py \
+    --config parameters/torus_10part.yaml \
+    --resume-from results/prior/solution/surface_....h5
 ```
 
 ### Phase 2: Perimeter Refinement
 
-After obtaining a relaxed solution, refine the contours to get accurate perimeter values:
-
 ```bash
-# Fresh run from experiment config (reads refinement: section)
+# Default run (reads refinement: section from config)
 python scripts/refine_perimeter.py \
     --solution results/run_xyz/solution/surface_....h5 \
     --config parameters/torus_10part.yaml
 
-# CLI-only (--max-iterations required if not in --config)
+# Override solver and iteration count
 python scripts/refine_perimeter.py \
     --solution results/run_xyz/solution/surface_....h5 \
     --max-iterations 10 --method ipopt --exact-hessian
 
-# Resume from checkpoint (auto-detected)
+# Resume from checkpoint (auto-detected by the pipeline)
 python scripts/refine_perimeter.py \
-    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_003_20260410_120523.h5 \
+    --solution results/run_xyz/refinement/slsqp_btol0.001/iteration_003_....h5 \
     --config parameters/torus_10part.yaml
 
-# Save all intermediate checkpoints
+# Enable timing profiling (writes timing_profile.yaml per campaign)
 python scripts/refine_perimeter.py \
     --solution results/run_xyz/solution/surface_....h5 \
-    --config parameters/torus_10part.yaml --save-iterations
+    --config parameters/torus_10part.yaml --profile
 ```
 
-### Analysis and Visualization
+### Analysis and Visualisation
 
 ```bash
-# Analyze optimization results
-python scripts/optimization_analyzer.py --results-dir results/run_20250101_120000_surftorus_npart2_...
+# Analyse a single run
+python scripts/optimization_analyzer.py --results-dir results/run_<timestamp>_...
 
-# Visualize partition — fast renderer (vectorized, scales to fine meshes)
-python scripts/visualize_partition_fast.py --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 --show-steiner
+# Visualise partition — fast renderer (production, scales to fine meshes)
+python scripts/visualize_partition_fast.py \
+    --solution results/run_xyz/refinement/slsqp_btol0.001/iteration_005_....h5 \
+    --show-steiner
 
-# Visualize partition — original renderer (slower on fine meshes, useful for debugging)
+# Visualise partition — original renderer (debugging)
 python scripts/visualize_partition.py --solution results/run_xyz/solution/surface_....h5
 
-# Visualize Type 1 migration (vertex collapse) — debugging tool
+# Migration debugging viewers
 python scripts/visualize_type1_vertex_collapse.py \
-    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 \
-    --region 2 --state before --show-vps --show-steiner
-
-# Visualize Type 2 migration (triple-point) — debugging tool
+    --solution results/run_xyz/refinement/slsqp_btol0.001/iteration_005_....h5 \
+    --region 2
 python scripts/visualize_type2_triple_point.py \
-    --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5 \
-    --region 2 --state before --show-vps --show-steiner
-
-# Debug migrations step-by-step
-python testing/test_migrations_debug.py --solution results/run_xyz/refinement/ipopt_btol0.001/iteration_002_20260410_131215.h5
+    --solution results/run_xyz/refinement/slsqp_btol0.001/iteration_005_....h5 \
+    --region 2
 ```
 
-All visualization scripts require PyVista. The fast renderer (`visualize_partition_fast.py`) uses vectorized NumPy indexing for interior triangles and is the recommended choice for fine meshes. The original renderer and the two migration viewers (`visualize_type1_vertex_collapse.py`, `visualize_type2_triple_point.py`) are slower but invaluable for testing and debugging topology switches at small scales.
+### Parameter Sweeps
 
-### Visualization Flags
+```bash
+# Preview what will run (no jobs submitted)
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml --mode generate-only
 
-```
---region N             Highlight a specific cell
---show-steiner         Show Steiner points and void triangles
---show-vps             Show all variable points
---use-initial          Visualize x0 instead of x_opt (base solutions only)
---opacity 0.8          Cell color opacity
---save <path>          Save image to file (otherwise interactive window)
---no-fill / --no-mesh  Toggle filled partitions or mesh overlay (2D)
---color-partition       Light per-face region colors with strong contour lines (3D)
-```
+# Run sequentially
+python sweep/parameter_sweep.py --sweep sweep/parameters/sweep_torus_lambda.yaml
 
-### Torus Configuration
+# Run in parallel (4 workers)
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml --mode local-parallel --workers 4
 
-Torus-specific YAML parameters (used when `--surface torus`):
+# Collect results and build experiment_index.yaml
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml --mode collect
 
-```yaml
-n_theta: 80          # samples along major circle
-n_phi: 66            # samples along tube circle
-R: 1.0               # major radius
-r: 0.6               # minor radius
-n_theta_increment: 62 # resolution increase per refinement level (major)
-n_phi_increment: 58   # resolution increase per refinement level (minor)
+# Experiment-wide analysis plots
+python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
+
+# Timing analysis (for --profile runs)
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
 ```
 
 ## Configuration
@@ -232,21 +255,35 @@ Each experiment is defined by a single YAML file (e.g. `parameters/torus_10part.
 - **`surface`**: geometry parameters keyed by surface name (e.g. `torus: {n_theta, n_phi, R, r}`)
 - **`refinement`**: Phase 2 parameters (`method`, `max_iterations`, `boundary_tol`, IPOPT options, etc.)
 
-Both scripts accept `--config <experiment.yaml>`. CLI flags override YAML values.
-A verbatim copy of the config is saved as `experiment.yaml` in the run directory for reproducibility.
+Both scripts accept `--config <experiment.yaml>`. CLI flags override YAML values. A verbatim copy of the config is saved as `experiment.yaml` in the run directory for reproducibility.
 
-Legacy flat YAML files (all keys at the top level) are still supported for backward compatibility.
+## Cluster Support (UPPMAX Pelle)
 
-## Cluster Support
+The cluster submission scripts target UPPMAX Pelle. See `docs/guides/01-pelle-user-guide/main.pdf` for the full collaborator guide, including first-time setup, directory conventions, and all submission options.
 
-The SLURM submission script targets UPPMAX (Rackham) but can be adapted:
+Quick reference:
 
 ```bash
-bash cluster/submit.sh --config parameters/torus_10part.yaml --surface torus
-bash cluster/submit.sh --config parameters/torus_10part.yaml --time 24:00:00 --solution-dir /proj/.../SOLUTIONS
+# Edit cluster/pelle_config.sh first: set REPO_DIR and VENV_DIR to your username
+
+# Phase 1 relaxation
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml \
+    --time 24:00:00 --cpus 8
+
+# Phase 2 refinement
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../solution/surface_....h5 \
+    --config parameters/torus_10part.yaml
+
+# Parameter sweep (one SLURM job per combination)
+bash cluster/submit_sweep.sh \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml --auto-collect
 ```
+
+Note: IPOPT is not available on Pelle. Phase 2 on the cluster uses `--method slsqp` (default) or `--method trust-constr`.
 
 ## References
 
 - Bogosel, B., & Oudet, É. "Partitions of Minimal Length on Manifolds"
-- Γ-convergence theory for surface partitioning problems
+- Wächter, A., & Biegler, L.T. "On the Implementation of an Interior-Point Filter Line-Search Algorithm for Large-Scale Nonlinear Programming" (IPOPT)
