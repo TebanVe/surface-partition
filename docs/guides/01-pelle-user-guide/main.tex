@@ -258,6 +258,195 @@ mkdir -p ~/projects/surface-partition/slurm_logs
 \end{lstlisting}
 
 % =========================================================================
+\section{Experiment Configuration Files}
+\label{sec:config-yaml}
+% =========================================================================
+
+Every experiment is driven by a single YAML file that configures both
+Phase~1 and Phase~2.  The \code{parameters/} directory ships four
+ready-to-use configs (Appendix~B).  For a new experiment, copy the
+closest one and adapt it.
+
+\subsection{File naming convention}
+
+Config files follow the pattern \code{\{surface\}\_\{npart\}part.yaml}.
+Examples from the repository:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+File & Experiment \\
+\midrule
+\code{torus\_10part.yaml} & Torus, 10 partitions \\
+\code{ellipsoid\_6part.yaml} & Ellipsoid, 6 partitions \\
+\code{double\_torus\_10part.yaml} & Double torus, 10 partitions \\
+\code{banchoff\_chmutov\_12part.yaml} & Banchoff-Chmutov order~4, 12 partitions \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tipbox}
+To start a new experiment, copy the config whose surface type matches yours
+and rename it following the convention above:
+\begin{lstlisting}[style=shell]
+cp parameters/torus_10part.yaml parameters/torus_6part.yaml
+nano parameters/torus_6part.yaml   # or your preferred editor
+\end{lstlisting}
+\end{tipbox}
+
+\subsection{Top-level structure}
+
+Every config has four top-level sections:
+
+\begin{lstlisting}[style=shell]
+experiment:         # run identity
+  name: torus-10-partitions
+  surface: torus    # surface identifier (see table below)
+
+relaxation:         # Phase 1: Gamma-convergence PGD
+  n_partitions: 10
+  lambda_penalty: 3.25
+  seed: 13001502
+  ...
+
+surface:            # mesh geometry, keyed by the surface identifier
+  torus:
+    n_theta: 80
+    n_phi: 66
+    R: 1.0
+    r: 0.6
+    ...
+
+refinement:         # Phase 2: perimeter optimizer
+  method: slsqp
+  max_iterations: 8
+  ...
+\end{lstlisting}
+
+The value of \code{experiment.surface} must match the key used inside the
+\code{surface:} block.  Valid identifiers are:
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+Identifier & Surface \\
+\midrule
+\code{torus} & Parametric torus of revolution \\
+\code{ellipsoid} & Parametric ellipsoid \\
+\code{double\_torus} & Implicit double torus (marching cubes) \\
+\code{banchoff\_chmutov} & Implicit Banchoff-Chmutov order~4 (marching cubes) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Phase~1 relaxation parameters}
+\label{sec:relaxation-params}
+
+The \code{relaxation:} block controls the Projected Gradient Descent
+optimiser.  The parameters most commonly tuned when setting up a new
+experiment are:
+
+\begin{center}
+\begin{tabular}{lp{2.2cm}p{7cm}}
+\toprule
+Parameter & Typical value & Description \\
+\midrule
+\code{n\_partitions} & 6--12 &
+  Number of regions to partition the surface into. \\[4pt]
+\code{lambda\_penalty} & 2.0--5.0 &
+  Weight of the $\Gamma$-convergence penalty term.
+  \textbf{Most impactful parameter.}
+  Too small $\Rightarrow$ fuzzy, overlapping boundaries.
+  Too large $\Rightarrow$ stalled convergence.
+  Start from the nearest existing config; use a parameter sweep
+  (Section~\ref{sec:sweeps}) to find the best value. \\[4pt]
+\code{seed} & any integer &
+  Random seed for the initial density field.
+  Different seeds reach different local optima.
+  Running several seeds in a sweep is the standard way to find a
+  good partition. \\[4pt]
+\code{max\_iter} & 15\,000--25\,000 &
+  Maximum PGD iterations per refinement level.
+  Increase if the energy is still decreasing when the run ends. \\[4pt]
+\code{refinement\_levels} & 2--5 &
+  Number of multi-level mesh refinement steps.
+  Each step adds the surface increment values to the current resolution.
+  More levels produce finer boundaries at the cost of longer runtimes. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+The remaining \code{relaxation:} parameters (\code{pgd\_step0},
+\code{pgd\_armijo\_c}, \code{penalty\_target\_mode}, and the
+\code{refine\_trigger\_*} thresholds) control low-level PGD behaviour.
+The shipped defaults are stable across all surfaces and rarely need
+to be changed.
+\end{notebox}
+
+\subsection{Surface geometry parameters}
+\label{sec:surface-params}
+
+The \code{surface:} block specifies the mesh geometry.
+
+\textbf{Parametric surfaces} (\code{torus}, \code{ellipsoid}) define a
+base-level grid resolution and an increment added at each refinement level:
+
+\begin{center}
+\begin{tabular}{lp{4.6cm}p{4.8cm}}
+\toprule
+Surface & Key parameters & Notes \\
+\midrule
+\code{torus} &
+  \code{n\_theta}, \code{n\_phi} (base) \newline
+  \code{R}, \code{r} (radii) \newline
+  \code{n\_theta\_increment} \newline
+  \code{n\_phi\_increment} &
+  \code{n\_theta}: samples along the major circle.
+  \code{n\_phi}: samples along the tube.
+  Increments are added per refinement level. \\[4pt]
+\code{ellipsoid} &
+  \code{n\_theta}, \code{n\_phi} (base) \newline
+  \code{a}, \code{b}, \code{c} (semi-axes) \newline
+  increments &
+  The shipped config uses $a=b=1,\ c=0.7$ (oblate spheroid).
+  Adjust the semi-axes to change the shape. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Implicit surfaces} (\code{double\_torus}, \code{banchoff\_chmutov})
+use a 3-D Cartesian grid for marching-cubes meshing:
+
+\begin{center}
+\begin{tabular}{lp{4.6cm}p{4.8cm}}
+\toprule
+Surface & Key parameters & Notes \\
+\midrule
+\code{double\_torus} &
+  \code{n\_grid\_x}, \code{n\_grid\_y}, \newline
+  \code{n\_grid\_z} (base) \newline
+  \code{c} (tube thickness) \newline
+  \code{n\_grid\_x\_increment} \newline
+  \code{n\_grid\_y\_increment} &
+  Default \code{c=0.03}.
+  Only \code{x} and \code{y} increments are used;
+  \code{z} scales proportionally.
+  Maintain the ratio $x:y:z \approx 8:6:3$ from the shipped
+  config to avoid degenerate triangles. \\[4pt]
+\code{banchoff\_chmutov} &
+  \code{n\_grid\_x}, \code{n\_grid\_y}, \newline
+  \code{n\_grid\_z} (base) \newline
+  \code{n\_grid\_x\_increment} \newline
+  \code{n\_grid\_y\_increment} &
+  The largest connected component is kept automatically.
+  Scale all three base dimensions proportionally when
+  changing resolution. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =========================================================================
 \section{Running Phase~1: Relaxation}
 % =========================================================================
 
@@ -462,8 +651,97 @@ and tolerances, for example \code{slsqp\_btol0.001/} or
 snapshot and \code{refinement.log} are written inside each campaign directory.
 \end{notebox}
 
+\subsection{Phase~2 refinement parameters}
+\label{sec:refinement-params}
+
+The \code{refinement:} block in the experiment YAML configures the
+perimeter minimiser.  CLI flags passed to \code{submit\_refinement.sh}
+override YAML values for individual runs.
+
+\begin{center}
+\begin{tabular}{lp{2.6cm}p{6.8cm}}
+\toprule
+Parameter & Values / range & Description \\
+\midrule
+\code{method} &
+  \code{slsqp} \newline \code{trust-constr} &
+  Solver to use on Pelle.  \code{slsqp} is faster and the recommended
+  default; \code{trust-constr} can be more robust on difficult topologies.
+  (\code{ipopt} requires a system-level installation not present on UPPMAX;
+  use it locally after transferring results.) \\[4pt]
+\code{max\_iterations} & 2--10 &
+  Number of topology cycles (optimize $\to$ detect migrations $\to$
+  migrate).  Increase if migrations are still occurring at the
+  last cycle. \\[4pt]
+\code{max\_opt\_iter} & 200--1\,000 &
+  Solver calls per topology cycle.  Increase if the perimeter is still
+  decreasing when the optimizer terminates. \\[4pt]
+\code{tolerance} & \code{1e-6}--\code{1e-7} &
+  Solver convergence tolerance.  Tighter values give more precision
+  at the cost of longer runtimes. \\[4pt]
+\code{boundary\_tol} & \code{0.001}--\code{0.01} &
+  Type~1 migration threshold: a variable point whose parameter $\lambda$
+  is within this distance of 0 or 1 triggers a vertex-collapse migration. \\[4pt]
+\code{lbfgs\_memory} & 20--50 &
+  L-BFGS history length.  Larger values can improve convergence on
+  well-conditioned problems but use more memory. \\[4pt]
+\code{save\_iterations} & \code{true}/\code{false} &
+  Save an HDF5 checkpoint after every topology cycle.
+  Strongly recommended \code{true} on the cluster so any cycle
+  can be resumed from the last checkpoint. \\[4pt]
+\code{allow\_partial\_}%
+\code{convergence} & \code{true}/\code{false} &
+  If \code{true}, proceed to migration detection even if the solver
+  hit \code{max\_opt\_iter} without converging.  Useful for long runs
+  where some progress per cycle is better than none. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+\code{exact\_hessian} and \code{best\_iterate} are IPOPT-specific
+options that are silently ignored by \code{slsqp} and \code{trust-constr}.
+\end{notebox}
+
+\subsection{Timing profiling}
+\label{sec:profiling}
+
+Add \code{--profile} to any \code{submit\_refinement.sh} call to record
+per-callback wall-clock times during Phase~2:
+
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../solution/surface_....h5 \
+    --config parameters/torus_10part.yaml \
+    --profile
+\end{lstlisting}
+
+When profiling is active, a \code{timing\_profile.yaml} file is written
+inside the campaign directory after each run.  It records:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Total wall-clock time and total iteration count.
+  \item Per-callback percentage breakdown: objective evaluation,
+        gradient evaluation, Steiner recomputation, and other callbacks.
+  \item Raw Steiner recomputation counts.
+\end{itemize}
+
+After a sweep where \code{--profile} was used, transfer results locally
+and run the timing analyser to generate scaling figures:
+
+\begin{lstlisting}[style=shell]
+python sweep/timing_analyzer.py \
+    --experiment-dir ~/local-results/torus_npart10/
+\end{lstlisting}
+
+\begin{tipbox}
+Profiling uses standard-library timers only and adds negligible overhead.
+It can safely be left on for all cluster runs without affecting runtime.
+\end{tipbox}
+
 % =========================================================================
 \section{Parameter Sweeps}
+\label{sec:sweeps}
 % =========================================================================
 
 The sweep tool submits a grid (or paired) array of Phase~1 jobs in one
@@ -480,6 +758,65 @@ the surface, partitions, and the parameters to vary.  Examples:
   \item \code{sweep/parameters/sweep\_double\_torus\_lambda.yaml} --- grouped
         grid sweep over $\lambda$ and mesh resolution.
 \end{itemize}
+
+\subsection{Sweep YAML structure}
+\label{sec:sweep-yaml}
+
+A sweep file has four top-level keys:
+
+\begin{lstlisting}[style=shell]
+name: lambda-seed        # short label; appears in output filenames
+base_config: parameters/torus_10part.yaml  # path from repo root
+
+sweep:
+  relaxation.lambda_penalty: [2.5, 3.0, 3.25, 3.5, 4.0]
+  relaxation.seed: [13131313, 84172851, 52698790]
+  relaxation.refinement_levels: [5]
+
+strategy: grid    # "grid" (Cartesian product) or "paired" (zip)
+\end{lstlisting}
+
+Keys inside \code{sweep:} use \textbf{dot notation} to address nested
+keys from the base config: \code{relaxation.lambda\_penalty} sets
+\code{lambda\_penalty} inside the \code{relaxation:} block.
+Each value is a list; the strategy determines how the lists are combined:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{strategy: grid} --- Cartesian product of all lists.
+        The example above produces $5 \times 3 \times 1 = 15$ runs.
+  \item \code{strategy: paired} --- zips lists together element-by-element
+        (all lists must be the same length).  Produces one run per element.
+\end{itemize}
+
+\textbf{Grouped parameters.}  Parameters that must always scale together
+--- such as the $x$ and $y$ grid dimensions of an implicit surface ---
+are placed in a named group.  The group's lists are zipped internally;
+the group then participates in the outer Cartesian product as a single
+unit:
+
+\begin{lstlisting}[style=shell]
+sweep:
+  relaxation.lambda_penalty: [1.0, 2.0, 3.0]
+  resolution:                   # named group -- lists are zipped
+    surface.double_torus.n_grid_x: [54, 64, 74]
+    surface.double_torus.n_grid_y: [40, 50, 60]
+
+strategy: grid   # 3 lambdas x 3 resolution pairs = 9 runs
+\end{lstlisting}
+
+\textbf{Naming convention for sweep files:}
+\code{sweep\_\{surface\}\_\{what\}.yaml}, placed under
+\code{sweep/parameters/}.  For example,
+\code{sweep\_torus\_lambda.yaml} sweeps $\lambda$ and seed on the torus;
+\code{sweep\_double\_torus\_lambda.yaml} sweeps $\lambda$ and resolution
+on the double torus.
+
+\begin{tipbox}
+To create a new sweep, copy the closest existing sweep file and update
+\code{name}, \code{base\_config}, and the \code{sweep:} block.  Run
+with \code{--dry-run} first to confirm the number and parameters of the
+generated runs before submitting.
+\end{tipbox}
 
 \subsection{Submitting a sweep}
 
