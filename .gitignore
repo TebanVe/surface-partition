@@ -21,6 +21,7 @@ Thumbs.db
 
 # Project-specific directories (generated files, logs, results)
 results/
+prompts/
 .cursor/
 legacy/
 logs/
