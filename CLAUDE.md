@@ -39,6 +39,12 @@ python scripts/visualize_partition.py --solution <path_to_solution.h5>
 python scripts/visualize_type1_vertex_collapse.py --solution <path_to_refined.h5> --region 2
 python scripts/visualize_type2_triple_point.py --solution <path_to_refined.h5> --region 2
 
+# Export finalised partition to link-list-torus HDF5 schema
+python scripts/export_partition.py \
+ --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
+ --config parameters/torus_10part.yaml \
+ --output results/<run>/partition/torus_partition_<run-id>.h5
+
 # Analysis
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
 
@@ -110,6 +116,10 @@ src/
 │   ├── relaxation.py             # run_relaxation(): multi-level PGD pipeline (Phase 1)
 │   ├── pipeline_orchestrator.py  # PipelineOrchestrator, RefinementConfig, derive_output_paths (Phase 2)
 │   └── io.py                     # HDF5 loaders, detect_run_layout(), find_base_solution_path()
+├── export/
+│   ├── __init__.py              # public API: export_partition()
+│   ├── rep3_builder.py          # builds subdivided mesh (Representation 3)
+│   └── writer.py                # assembles and writes the export HDF5
 ├── visualization/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
@@ -124,6 +134,7 @@ scripts/
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
 ├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
 ├── visualize_type2_triple_point.py     # Type 2 migration debugging viewer
+├── export_partition.py           # Export finalised partition to link-list-torus schema
 └── debug_archive/                # Archived diagnostic scripts
 testing/
 ├── README_testing.md                    # Test registry documentation
