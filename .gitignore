@@ -35,7 +35,8 @@ visualizations/
 *.jpg
 *.jpeg
 *.pdf
-!docs/**/*.pdf
+docs/
+CLAUDE.md
 *.out
 
 # Specific files to ignore
