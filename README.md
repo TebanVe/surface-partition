@@ -42,6 +42,7 @@ Four surface types are implemented:
 - Vectorized kernels for fast perimeter/area/Steiner evaluation
 - Exact analytical Hessian for IPOPT (in addition to L-BFGS)
 - Optional timing profiling via `--profile`
+- Export of finalised partitions to the link-list-torus HDF5 schema (`export_partition.py`)
 
 ### Parameter Sweeps
 - Grid or paired sweep over arbitrary YAML parameters
@@ -113,6 +114,10 @@ surface-partition/
 │   │   ├── relaxation.py         # run_relaxation(): multi-level PGD pipeline
 │   │   ├── pipeline_orchestrator.py # Phase 2 iterative refinement loop
 │   │   └── io.py                 # HDF5 loaders, run-layout detection
+│   ├── export/                   # Partition export to link-list-torus schema
+│   │   ├── __init__.py           # public API: export_partition()
+│   │   ├── rep3_builder.py       # builds subdivided mesh (Representation 3)
+│   │   └── writer.py             # assembles and writes the export HDF5
 │   ├── visualization/            # Plotting helpers
 │   │   ├── plot_utils.py
 │   │   ├── partition_helpers.py
@@ -127,6 +132,7 @@ surface-partition/
 │   ├── visualize_partition.py    # Original viewer — debugging (PyVista)
 │   ├── visualize_type1_vertex_collapse.py
 │   ├── visualize_type2_triple_point.py
+│   ├── export_partition.py       # Export finalised partition to link-list-torus schema
 │   └── debug_archive/
 ├── testing/                      # CLI diagnostic tools (not pytest)
 │   ├── README_testing.md
@@ -196,6 +202,22 @@ python scripts/refine_perimeter.py \
 python scripts/refine_perimeter.py \
     --solution results/run_xyz/solution/surface_....h5 \
     --config parameters/torus_10part.yaml --profile
+```
+
+### Export
+
+```bash
+# Export a finalised Phase-2 checkpoint to the link-list-torus HDF5 schema.
+# Output is written to <run_dir>/partition/torus_partition_<run-id>.h5 by default.
+python scripts/export_partition.py \
+    --solution results/run_xyz/refinement/ipopt_btol0.001_lbfgs30_hess_bestiter_partial/iteration_016_....h5 \
+    --config results/run_xyz/experiment.yaml
+
+# Override the output path
+python scripts/export_partition.py \
+    --solution results/run_xyz/refinement/.../iteration_016_....h5 \
+    --config results/run_xyz/experiment.yaml \
+    --output /path/to/torus_partition.h5
 ```
 
 ### Analysis and Visualisation
