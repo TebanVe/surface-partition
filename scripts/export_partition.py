@@ -75,6 +75,8 @@ def main() -> int:
     base_solution_path = find_base_solution_path(checkpoint_path, verbose=True)
     with h5py.File(base_solution_path, "r") as f:
         seed = int(f.attrs["seed"])
+        n_theta_final = int(f.attrs["var1"])
+        n_phi_final = int(f.attrs["var2"])
 
     mesh, partition = load_partition_from_refined_file(checkpoint_path, verbose=True)
     steiner_handler = SteinerHandler(mesh, partition)
@@ -97,6 +99,8 @@ def main() -> int:
         seed=seed,
         final_perimeter=final_perimeter,
         pending_migration=pending_migration,
+        n_theta_final=n_theta_final,
+        n_phi_final=n_phi_final,
         strict=args.strict,
     )
 

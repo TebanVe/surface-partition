@@ -50,6 +50,8 @@ def export_partition(
     seed: int,
     final_perimeter: float,
     pending_migration: bool,
+    n_theta_final: int,
+    n_phi_final: int,
     strict: bool = False,
 ) -> None:
     """Export a finalised torus partition to the link-list-torus HDF5 schema.
@@ -57,6 +59,12 @@ def export_partition(
     All inputs are already-loaded Python objects; this function does not open
     any input files. It builds Representation 3, packages the canonical
     snapshot, and writes one self-contained HDF5 file at ``output_path``.
+
+    ``n_theta_final`` and ``n_phi_final`` are the structured-grid dimensions
+    of the actual mesh in ``mesh.vertices`` after Phase-1 multi-level
+    refinement. They are sourced from the base-solution HDF5 (attrs ``var1``
+    and ``var2``) by the caller, not from the experiment config (which holds
+    only the pre-refinement initial values).
 
     The ``finalised`` flag is set to ``not pending_migration``. When
     ``pending_migration`` is True, a warning is emitted (or, with
@@ -77,8 +85,8 @@ def export_partition(
     torus_cfg = config["surface"]["torus"]
     R = float(torus_cfg["R"])
     r = float(torus_cfg["r"])
-    n_theta = int(torus_cfg["n_theta"])
-    n_phi = int(torus_cfg["n_phi"])
+    n_theta = int(n_theta_final)
+    n_phi = int(n_phi_final)
 
     active_vps = [vp for vp in partition.variable_points if vp.active]
     n_vp = len(active_vps)
@@ -87,6 +95,14 @@ def export_partition(
 
     vertex_labels = partition.indicator_functions.argmax(axis=1).astype(np.int32)
     V = mesh.vertices.shape[0]
+
+    if n_theta * n_phi != V:
+        raise ValueError(
+            f"grid_shape inconsistency: n_theta_final * n_phi_final = "
+            f"{n_theta} * {n_phi} = {n_theta * n_phi}, but mesh.vertices has "
+            f"{V} rows. The structured grid dimensions must match the actual "
+            f"mesh stored in /mesh/vertices."
+        )
 
     sub_vertices, sub_faces, face_labels = build_representation_3(
         partition, mesh, active_vps, steiner_handler

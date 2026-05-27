@@ -680,6 +680,38 @@ The full derivation behind Tests 10–11 is
 
 ---
 
+### Test 12: `test_export_grid_shape.py` (export grid_shape invariant)
+
+**Status**: ✅ APPROVED   **Created**: 2026-05-27
+
+Verifies the documented external contract on the consolidated partition export:
+the freshly written `/mesh.attrs["grid_shape"]` must satisfy
+`grid_shape[0] * grid_shape[1] == /mesh/vertices.shape[0]`. Guards against
+regressions where the writer sources its dimensions from the experiment YAML
+(pre-refinement initial values) rather than from the actual post-refinement
+mesh stored in the file.
+
+The test runs the full export on a Phase-2 checkpoint to a temporary HDF5
+(no side effects on the run directory), then re-opens the result and asserts
+the invariant.
+
+```bash
+python testing/test_export_grid_shape.py \
+    --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
+    --config parameters/torus_10part.yaml
+```
+
+Pass criterion: `gs[0] * gs[1] == V` over `/mesh/vertices`, and `V` equals the
+input mesh size loaded from the checkpoint.
+
+**Dependencies**:
+- `src/export/writer.py` (`export_partition`)
+- `src/pipeline/io.py` (`find_base_solution_path`, `load_partition_from_refined_file`)
+- `src/partition/steiner_handler.py`
+- `h5py`, `pyyaml`
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -701,6 +733,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-05-27 | Added Test 12 (export grid_shape invariant smoke test) | System |
 | 2026-05-21 | Added Tests 10–11 (analytical Steiner first/second derivatives); upgraded Test 7 to a Richardson FD reference | System |
 | 2026-05-20 | Added Tests 6–9 (exact-Hessian / analytical-Steiner validation harness, Phase 1) | System |
 | 2026-05-05 | Added Test 5 (Phase A vectorised Hessian); validated and deleted after removing fallback branches | System |
