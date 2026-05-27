@@ -134,7 +134,7 @@ def export_partition(
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with h5py.File(output_path, "w") as f:
-        f.attrs["schema_version"] = "1.0"
+        f.attrs["schema_version"] = "1.1"
         f.attrs["surface"] = "torus"
         f.attrs["n_cells"] = n_cells
         f.attrs["R"] = R

@@ -23,6 +23,10 @@ from typing import List, Tuple
 import numpy as np
 
 
+def _triangle_area(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray) -> float:
+    return 0.5 * float(np.linalg.norm(np.cross(p1 - p0, p2 - p0)))
+
+
 def build_representation_3(
     partition,
     mesh,
@@ -97,22 +101,69 @@ def build_representation_3(
             face_labels.append(label_pair)
             continue
 
-        # triple-point triangle
+        # triple-point triangle: 6 sub-faces (1 corner + 1 central per cell)
         tp = triple_lookup[tri_idx]
         steiner_idx = steiner_global_idx[tri_idx]
+        face_verts = (a, b, c)
+        face_lbls = (la, lb, lc)
+        tp_sub_faces_start = len(sub_faces)
         for c_k in tp.cell_indices:
-            pair = [
-                vp_global_idx[id(partition.variable_points[vi])]
-                for vi in tp.var_point_indices
-                if c_k in partition.variable_points[vi].belongs_to_cells
-            ]
-            if len(pair) != 2:
+            if c_k not in face_lbls:
                 raise ValueError(
-                    f"Triple point at triangle {tri_idx}: cell {c_k} bounded by "
-                    f"{len(pair)} VPs, expected 2"
+                    f"Triple point at triangle {tri_idx}: cell {c_k} from "
+                    f"cell_indices is not present in vertex_labels of the "
+                    f"original triangle ({face_lbls})"
                 )
-            sub_faces.append((pair[0], pair[1], steiner_idx))
+            corner_pos = face_lbls.index(c_k)
+            V_X = face_verts[corner_pos]
+            V_next = face_verts[(corner_pos + 1) % 3]
+            V_prev = face_verts[(corner_pos + 2) % 3]
+            edge_to_next = frozenset((V_X, V_next))
+            edge_to_prev = frozenset((V_prev, V_X))
+
+            vp_to_next_idx = None
+            vp_to_prev_idx = None
+            for vi in tp.var_point_indices:
+                vp = partition.variable_points[vi]
+                if c_k not in vp.belongs_to_cells:
+                    continue
+                vp_edge_set = frozenset(vp.edge)
+                gi = vp_global_idx[id(vp)]
+                if vp_edge_set == edge_to_next:
+                    vp_to_next_idx = gi
+                elif vp_edge_set == edge_to_prev:
+                    vp_to_prev_idx = gi
+            if vp_to_next_idx is None or vp_to_prev_idx is None:
+                raise ValueError(
+                    f"Triple point at triangle {tri_idx}: could not locate both "
+                    f"VPs bounding cell {c_k} on the edges incident to corner "
+                    f"V_X={V_X} (next={vp_to_next_idx}, prev={vp_to_prev_idx})"
+                )
+
+            sub_faces.append((V_X, vp_to_next_idx, vp_to_prev_idx))
             face_labels.append(c_k)
+            sub_faces.append((vp_to_prev_idx, vp_to_next_idx, steiner_idx))
+            face_labels.append(c_k)
+
+        emitted = len(sub_faces) - tp_sub_faces_start
+        if emitted != 6:
+            raise ValueError(
+                f"Triple point at triangle {tri_idx}: emitted {emitted} sub-faces, "
+                f"expected 6"
+            )
+
+        parent_area = _triangle_area(vertices[a], vertices[b], vertices[c])
+        child_area = 0.0
+        for sf in sub_faces[tp_sub_faces_start:]:
+            child_area += _triangle_area(
+                sub_vertices[sf[0]], sub_vertices[sf[1]], sub_vertices[sf[2]]
+            )
+        if abs(parent_area - child_area) > 1e-9 * parent_area:
+            raise ValueError(
+                f"Triple point at triangle {tri_idx}: parent area {parent_area:.6e} "
+                f"!= sum of 6 child areas {child_area:.6e} "
+                f"(relative error {abs(parent_area - child_area) / parent_area:.3e})"
+            )
 
     sub_faces_arr = np.array(sub_faces, dtype=np.int32)
     face_labels_arr = np.array(face_labels, dtype=np.int32)

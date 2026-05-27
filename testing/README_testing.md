@@ -680,6 +680,42 @@ The full derivation behind Tests 10–11 is
 
 ---
 
+### Test 13: `test_export_triple_point_subdivision.py` (export triple-point sub-face subdivision)
+
+**Status**: ✅ APPROVED   **Created**: 2026-05-27
+
+Verifies that the consolidated partition export subdivides every triple-point
+triangle into exactly **six** sub-faces in `/partition/sub_faces` — three
+corner sub-triangles `(V_X, vp_to_next, vp_to_prev)` and three central
+sub-triangles `(vp_to_prev, vp_to_next, S)`. Before the fix the exporter
+emitted only the three central sub-faces, leaving a hole at every triple
+point that broke the surface area invariant by roughly the missing corner
+area (~7×10⁻⁴ on the 18-TP reference torus).
+
+The test runs the full export on a Phase-2 checkpoint to a temporary HDF5
+and asserts:
+
+1. **Per-TP**: exactly six sub-faces in the closed star of each triple-point
+   triangle, tiling its parent area to `1e-9` relative tolerance, with cell
+   labels forming a permutation of `cell_triple[k]` with each cell appearing
+   twice (once as corner, once as central).
+2. **Global count**: `F_sub == F_singletons + 3·n_2 + 6·n_tp`.
+3. `/.attrs["schema_version"] == "1.1"`.
+
+```bash
+python testing/test_export_triple_point_subdivision.py \
+    --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
+    --config parameters/torus_10part.yaml
+```
+
+**Dependencies**:
+- `src/export/rep3_builder.py` (`build_representation_3`)
+- `src/export/writer.py` (`export_partition`)
+- `src/pipeline/io.py`, `src/partition/steiner_handler.py`
+- `h5py`, `numpy`, `pyyaml`
+
+---
+
 ### Test 12: `test_export_grid_shape.py` (export grid_shape invariant)
 
 **Status**: ✅ APPROVED   **Created**: 2026-05-27
@@ -733,6 +769,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-05-27 | Added Test 13 (triple-point sub-face subdivision smoke test) | System |
 | 2026-05-27 | Added Test 12 (export grid_shape invariant smoke test) | System |
 | 2026-05-21 | Added Tests 10–11 (analytical Steiner first/second derivatives); upgraded Test 7 to a Richardson FD reference | System |
 | 2026-05-20 | Added Tests 6–9 (exact-Hessian / analytical-Steiner validation harness, Phase 1) | System |
