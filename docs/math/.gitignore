@@ -1,0 +1,21 @@
+# LaTeX / BibTeX build products (sources: *.tex *.bib Makefile *.md remain tracked)
+*.aux
+*.bbl
+*.blg
+*.bcf
+*.fdb_latexmk
+*.fls
+*.run.xml
+*.synctex.gz
+*.synctex.gz(busy)
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+
+# latexmk artifact
+*-blx.bib
+
+# Build logs / aux outputs remain ignored via repo-root *.log / *.out and patterns above.

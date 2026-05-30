@@ -1,0 +1,776 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 2 Optimization Derivatives},
+  pdfauthor  = {surface-partition project}
+}
+
+% =========================================================================
+\title{%
+  \textbf{Phase~2 Optimization Derivatives}\\[0.5em]
+  \large Perimeter and Area Quantities Implemented in \codefile{surface-partition}
+}
+\author{}
+\date{May 2026}
+% =========================================================================
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document derives every quantity that the Phase~2 perimeter-refinement
+optimizer evaluates during an IPOPT iteration: the perimeter objective
+$P(\Lam)$, its gradient $\grad P$, and its Hessian $\Hess{P}$; the area
+constraint values $A_k(\Lam)$, their Jacobian $J$, and the
+multiplier-weighted Hessian $\sum_k \mu_k \Hess{A_k}$.  Quantities
+belonging to \emph{regular} boundary segments and triangles are derived in
+closed form.  Quantities involving \emph{Steiner / triple-point} geometry
+have analytical forward values; their analytical first and second
+derivatives are derived in the companion document
+\codefile{docs/math/03-analytical-steiner-derivatives}.  All formulas are
+cross-referenced to the implementing Python functions in
+\codefile{src/partition/}.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Overview}
+% =========================================================================
+
+Phase~2 of the \codefile{surface-partition} pipeline solves the constrained
+nonlinear program
+\begin{equation}
+  \min_{\Lam \in \mathbb{R}^n}\; P(\Lam)
+  \quad\text{subject to}\quad
+  A_k(\Lam) = \Atgt,\quad k = 0,\ldots,N-2,
+  \label{eq:nlp}
+\end{equation}
+where
+\begin{itemize}[noitemsep]
+  \item $\Lam = (\lam_1,\ldots,\lam_n)^\top$ collects the scalar parameters
+        of all active Variable Points (VPs),
+  \item $P(\Lam)$ is the total boundary perimeter,
+  \item $A_k(\Lam)$ is the surface area of cell $k$, and
+  \item $\Atgt = A_{\mathrm{total}}/N$ is the equal-area target.
+\end{itemize}
+The solver used is IPOPT~\cite{wachter2006ipopt} (Interior-Point OPTimizer).
+At each iteration IPOPT requires the Lagrangian Hessian
+\begin{equation}
+  H = \objfac\,\Hess{P} + \sum_{k=0}^{N-2} \mu_k\,\Hess{A_k},
+  \label{eq:lag-hess}
+\end{equation}
+in addition to gradients and Jacobians.  The scalar $\objfac$ (objective
+scaling factor) and the Lagrange multipliers $\mu_k$ are supplied by IPOPT
+at each callback.
+
+\paragraph{Structure of this document.}
+Sections~\ref{sec:notation}--\ref{sec:area} cover the regular (non-Steiner)
+path, which is fully analytical.  Section~\ref{sec:steiner} covers the
+Steiner / triple-point path; its forward values are analytical and its
+derivatives, also analytical, are derived in the companion document
+\codefile{docs/math/03-analytical-steiner-derivatives}.
+Section~\ref{sec:assembly} describes how the pieces assemble into the
+Lagrangian Hessian and its sparsity pattern.
+
+% =========================================================================
+\section{Notation and Setup}
+\label{sec:notation}
+% =========================================================================
+
+\subsection{The mesh}
+
+The surface is represented as a triangulated mesh $(\V, \F)$, where
+$\V \in \mathbb{R}^{M \times 3}$ is the vertex position matrix and $\F$
+is the face array.  The mesh lives in $\mathbb{R}^3$; all cross-product
+formulas are three-dimensional unless otherwise noted.
+
+\subsection{Variable Points and the $\lambda$ convention}
+\label{sec:lambda-convention}
+
+A \emph{Variable Point} (VP) $i$ sits on a mesh edge $(v_{1,i},\, v_{2,i})$
+with the convention $v_{1,i} < v_{2,i}$ (smaller index first).  Its
+three-dimensional position is the affine combination
+\begin{equation}
+  \vp{i}(\lam_i)
+    \coloneqq \lam_i\, \V[v_{1,i}] + (1 - \lam_i)\, \V[v_{2,i}],
+  \qquad \lam_i \in [0,1].
+  \label{eq:vp-position}
+\end{equation}
+\begin{itemize}[noitemsep]
+  \item $\lam_i = 1$: VP is at the vertex with the \emph{smaller} index.
+  \item $\lam_i = 0$: VP is at the vertex with the \emph{larger} index.
+\end{itemize}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: VP position}, fontupper=\small]
+\codefile{vectorized\_perimeter.py}:
+\code{\_compute\_vp\_positions(pa)}\\[2pt]
+\texttt{p[i] = pa.vp\_lambda[i] * V[pa.vp\_edge\_v1[i]]\\
+\phantom{p[i] = }+ (1 - pa.vp\_lambda[i]) * V[pa.vp\_edge\_v2[i]]}
+\end{tcolorbox}
+
+\subsection{The edge direction identity}
+\label{sec:edge-direction}
+
+Define the \emph{edge direction} of VP $i$:
+\begin{equation}
+  \ed{i} \coloneqq \V[v_{1,i}] - \V[v_{2,i}] \in \mathbb{R}^3.
+  \label{eq:edge-dir}
+\end{equation}
+Differentiating \eqref{eq:vp-position} with respect to $\lam_i$ gives the
+fundamental identity used throughout all derivative calculations:
+\begin{equation}
+  \boxed{\pd{\vp{i}}{\lam_i} = \ed{i}, \qquad
+  \pdd{\vp{i}}{\lam_i}{\lam_i} = \mathbf{0}.}
+  \label{eq:vp-deriv}
+\end{equation}
+The position is \emph{affine} in $\lam_i$, so all second derivatives of
+$\vp{i}$ vanish.  This dramatically simplifies the Hessian calculations
+in Sections~\ref{sec:perimeter} and~\ref{sec:area}: every second-order
+term that would involve $\partial^2 \vp{i}/\partial\lam_i^2$ is zero.
+
+% =========================================================================
+\section{Regular Perimeter}
+\label{sec:perimeter}
+% =========================================================================
+
+\subsection{Perimeter value}
+\label{sec:perimeter-value}
+
+The boundary between cells is represented as a collection of
+\emph{segments}, each connecting two VPs.  Let segment $s$ connect VP $a$
+and VP $b$, and let $w_s$ be its multiplicity weight:
+\begin{equation}
+  w_s = \begin{cases} 2 & \text{if the segment separates two distinct cells
+                            ($\mathrm{cell}_a \neq \mathrm{cell}_b$),} \\
+                       1 & \text{otherwise (fallback: triple-point void
+                            segment, $\mathrm{cell}_a = \mathrm{cell}_b$).}
+        \end{cases}
+  \label{eq:weight}
+\end{equation}
+The weight $w_s = 2$ reflects the double-counting convention: each proper
+inter-cell boundary edge is shared by exactly two cells and therefore
+counted once in each cell's perimeter.  The total regular perimeter is
+\begin{equation}
+  \Preg(\Lam)
+    = \sum_s w_s\, \norm{\vp{a(s)} - \vp{b(s)}}.
+  \label{eq:perimeter}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: regular perimeter value}, fontupper=\small]
+\codefile{vectorized\_perimeter.py}: \code{compute\_total\_perimeter(pa)}
+\end{tcolorbox}
+
+\subsection{Perimeter gradient}
+\label{sec:perimeter-gradient}
+
+For a single segment $s$ with endpoints $\vp{a}$ and $\vp{b}$, define
+\begin{equation}
+  \boldsymbol{\Delta}_s \coloneqq \vp{a} - \vp{b}, \qquad
+  r_s \coloneqq \norm{\boldsymbol{\Delta}_s}, \qquad
+  \Dhat_s \coloneqq \boldsymbol{\Delta}_s / r_s.
+\end{equation}
+The contribution of $s$ to the perimeter is $L_s = w_s r_s$.  Applying the
+chain rule with identity \eqref{eq:vp-deriv}:
+\begin{align}
+  \pd{L_s}{\lam_a}
+    &= w_s \, \frac{\boldsymbol{\Delta}_s \cdot \ed{a}}{r_s},
+  \label{eq:dL-da} \\
+  \pd{L_s}{\lam_b}
+    &= w_s \, \frac{-\boldsymbol{\Delta}_s \cdot \ed{b}}{r_s}.
+  \label{eq:dL-db}
+\end{align}
+The sign difference arises because $\partial\boldsymbol{\Delta}_s/\partial\lam_a =
+\ed{a}$ but $\partial\boldsymbol{\Delta}_s/\partial\lam_b = -\ed{b}$.
+
+The total gradient accumulates over all segments:
+\begin{equation}
+  \pd{\Preg}{\lam_i}
+    = \sum_{\substack{s:\, a(s)=i}} w_s\,
+        \frac{\boldsymbol{\Delta}_s \cdot \ed{i}}{r_s}
+    + \sum_{\substack{s:\, b(s)=i}} w_s\,
+        \frac{-\boldsymbol{\Delta}_s \cdot \ed{i}}{r_s}.
+  \label{eq:grad-P}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: perimeter gradient}, fontupper=\small]
+\codefile{vectorized\_perimeter.py}: \code{compute\_perimeter\_gradient(pa)}\\[2pt]
+\texttt{grad\_vp1[s] = sum(diff * dv1, axis=1) / lengths[s]}\\
+\texttt{grad\_vp2[s] = sum(-diff * dv2, axis=1) / lengths[s]}
+\end{tcolorbox}
+
+\subsection{Perimeter Hessian}
+\label{sec:perimeter-hessian}
+
+We compute $\partial^2 L_s / \partial\lam_i\,\partial\lam_j$ for the same
+single segment.  The key tool is the Hessian of the Euclidean norm
+$g(\boldsymbol{\Delta}) = \norm{\boldsymbol{\Delta}}$:
+\begin{equation}
+  \frac{\partial^2 \norm{\boldsymbol{\Delta}}}{\partial \Delta_m\,\partial \Delta_n}
+  = \frac{\delta_{mn}}{r} - \frac{\Delta_m \Delta_n}{r^3}
+  = \frac{1}{r}\Proj{\Dhat}_{mn},
+  \label{eq:norm-hessian}
+\end{equation}
+where $\Proj{\Dhat} = \mathbf{I} - \Dhat\Dhat^\top$ is the projection onto
+the subspace perpendicular to $\boldsymbol{\Delta}$.
+
+Since $\partial\boldsymbol{\Delta}/\partial\lam_a = \ed{a}$ and
+$\partial\boldsymbol{\Delta}/\partial\lam_b = -\ed{b}$, the chain rule gives:
+\begin{align}
+  H^{(s)}_{aa}
+    &= w_s\,\ed{a}^\top \,\frac{\Proj{\Dhat_s}}{r_s}\, \ed{a}
+     = \frac{w_s}{r_s}\!\left(\norm{\ed{a}}^2 - (\ed{a}\cdot\Dhat_s)^2\right),
+  \label{eq:H_aa} \\[4pt]
+  H^{(s)}_{bb}
+    &= w_s\,\ed{b}^\top \,\frac{\Proj{\Dhat_s}}{r_s}\, \ed{b}
+     = \frac{w_s}{r_s}\!\left(\norm{\ed{b}}^2 - (\ed{b}\cdot\Dhat_s)^2\right),
+  \label{eq:H_bb} \\[4pt]
+  H^{(s)}_{ab}
+    &= w_s\,\ed{a}^\top \,\frac{\Proj{\Dhat_s}}{r_s}\, (-\ed{b})
+     = -\frac{w_s}{r_s}\!\left(\ed{a}\cdot\ed{b}
+         - (\ed{a}\cdot\Dhat_s)(\ed{b}\cdot\Dhat_s)\right).
+  \label{eq:H_ab}
+\end{align}
+
+\begin{remark}
+The factor $\Proj{\Dhat_s}/r_s$ is the projection perpendicular to the
+segment direction, divided by the segment length.  When $\ed{i}$ is
+\emph{parallel} to $\boldsymbol{\Delta}_s$, the entry is zero — moving
+along the segment does not change its length to first order, which the
+gradient already captures.  When $\ed{i}$ is \emph{perpendicular}, the
+entry equals $w_s\norm{\ed{i}}^2/r_s$ (maximum curvature).
+\end{remark}
+
+The full perimeter Hessian is the sum over all segments:
+\begin{equation}
+  \pdd{\Preg}{\lam_i}{\lam_j}
+    = \sum_s H^{(s)}_{ij}\,\mathbf{1}[\{i,j\}\subseteq\{a(s),b(s)\}].
+  \label{eq:hess-P}
+\end{equation}
+Only pairs $(i,j)$ that are both endpoints of a common segment contribute;
+the pattern is determined at compile time from \code{pa.seg\_vp1} and
+\code{pa.seg\_vp2}.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: perimeter Hessian}, fontupper=\small]
+\codefile{vectorized\_perimeter.py}: \code{compute\_perimeter\_hessian\_sparse(pa)}\\[2pt]
+\texttt{H\_aa = w * (da\_dot\_da - da\_dot\_dh**2) / r}\\
+\texttt{H\_bb = w * (db\_dot\_db - db\_dot\_dh**2) / r}\\
+\texttt{H\_ab = -w * (da\_dot\_db - da\_dot\_dh * db\_dot\_dh) / r}\\
+Accumulated with \texttt{np.add.at} into the pre-allocated sparse values
+array at offsets \code{pa.seg\_hess\_off\_aa}, \code{pa.seg\_hess\_off\_bb},
+\code{pa.seg\_hess\_off\_ab}.
+\end{tcolorbox}
+
+% =========================================================================
+\section{Regular Cell Area}
+\label{sec:area}
+% =========================================================================
+
+A mesh triangle $T$ is a \emph{boundary triangle} if the cell boundary
+crosses it — that is, if its three vertices do not all belong to the same
+cell.  Each boundary triangle contributes to the area of exactly one cell.
+There are two structural cases depending on how many of the triangle's
+mesh vertices lie \emph{inside} the cell (Fig.~\ref{fig:btri}).
+
+\begin{figure}[h]
+\centering
+\begin{tabular}{cc}
+\begin{minipage}{0.45\textwidth}
+\centering
+\textit{1-inside:}\\[4pt]
+Triangle $T = (v_\mathrm{in},\, v_\mathrm{out1},\, v_\mathrm{out2})$.\\
+VPs: $\mathrm{pc}_1$ on edge $(v_\mathrm{in}, v_\mathrm{out1})$,\\
+\phantom{VPs: }$\mathrm{pc}_2$ on edge $(v_\mathrm{in}, v_\mathrm{out2})$.\\[4pt]
+Cell fragment $= \triangle(p_\mathrm{in},\, \mathrm{pc}_1,\, \mathrm{pc}_2)$.
+\end{minipage}
+&
+\begin{minipage}{0.45\textwidth}
+\centering
+\textit{2-inside:}\\[4pt]
+Triangle $T = (v_{\mathrm{in}1},\, v_{\mathrm{in}2},\, v_\mathrm{out})$.\\
+VPs: $\mathrm{pc}_1$ on edge $(v_{\mathrm{in}1}, v_\mathrm{out})$,\\
+\phantom{VPs: }$\mathrm{pc}_2$ on edge $(v_{\mathrm{in}2}, v_\mathrm{out})$.\\[4pt]
+Cell fragment $= \mathrm{quad}(p_{\mathrm{in}1},\, \mathrm{pc}_1,\,
+                               \mathrm{pc}_2,\, p_{\mathrm{in}2})$.
+\end{minipage}
+\end{tabular}
+\caption{The two boundary-triangle cases.  Filled circles mark vertices
+inside the cell; open circles mark vertices outside.  Stars mark Variable
+Points (VPs) on the crossing edges.}
+\label{fig:btri}
+\end{figure}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: area arrays}, fontupper=\small]
+Arrays \code{pa.btri\_n\_inside}, \code{pa.btri\_v\_in}, \code{pa.btri\_vp1},
+\code{pa.btri\_vp2}, \code{pa.btri\_cell} fully characterize each boundary
+triangle.
+\end{tcolorbox}
+
+\subsection{1-inside case}
+\label{sec:area-1inside}
+
+Let $p_\mathrm{in} = \V[v_\mathrm{in}]$ (fixed mesh vertex),
+$\mathrm{pc}_1 = \vp{1}(\lam_1)$, $\mathrm{pc}_2 = \vp{2}(\lam_2)$.
+Define
+\begin{equation}
+  \mathbf{u} \coloneqq \mathrm{pc}_1 - p_\mathrm{in},\qquad
+  \mathbf{v} \coloneqq \mathrm{pc}_2 - p_\mathrm{in}.
+\end{equation}
+
+\subsubsection{Area value}
+
+\begin{equation}
+  A = \tfrac{1}{2}\norm{\mathbf{u} \times \mathbf{v}}.
+  \label{eq:area-1inside}
+\end{equation}
+Let $\mathbf{C} \coloneqq \mathbf{u} \times \mathbf{v}$,
+$\norm{\mathbf{C}} = 2A$, and $\nhat \coloneqq \mathbf{C}/\norm{\mathbf{C}}$.
+
+\subsubsection{Area Jacobian}
+
+Differentiating \eqref{eq:area-1inside} with respect to $\lam_1$ and
+$\lam_2$, and using $\partial\mathbf{u}/\partial\lam_1 = \ed{1}$,
+$\partial\mathbf{v}/\partial\lam_1 = \mathbf{0}$,
+$\partial\mathbf{u}/\partial\lam_2 = \mathbf{0}$,
+$\partial\mathbf{v}/\partial\lam_2 = \ed{2}$:
+\begin{equation}
+  \pd{A}{\lam_1}
+    = \tfrac{1}{2}\,\nhat \cdot (\ed{1} \times \mathbf{v}),
+  \qquad
+  \pd{A}{\lam_2}
+    = \tfrac{1}{2}\,\nhat \cdot (\mathbf{u} \times \ed{2}).
+  \label{eq:area-jac-1inside}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: 1-inside Jacobian}, fontupper=\small]
+\codefile{vectorized\_area.py}: \code{compute\_area\_jacobian\_analytical},
+1-inside branch:\\[2pt]
+\texttt{dA\_dl1 = 0.5 * np.sum(n\_hat * np.cross(d1, v), axis=1)}\\
+\texttt{dA\_dl2 = 0.5 * np.sum(n\_hat * np.cross(u, d2), axis=1)}
+\end{tcolorbox}
+
+\subsubsection{Area Hessian}
+\label{sec:area-hessian-1inside}
+
+Introduce the auxiliary cross products
+\begin{equation}
+  \mathbf{g}_1 \coloneqq \ed{1} \times \mathbf{v}
+    = \pd{\mathbf{C}}{\lam_1},
+  \qquad
+  \mathbf{g}_2 \coloneqq \mathbf{u} \times \ed{2}
+    = \pd{\mathbf{C}}{\lam_2}.
+\end{equation}
+Differentiating the unit-normal identity $A = \tfrac{1}{2}\norm{\mathbf{C}}$
+a second time, using the standard formula for the derivative of a unit
+vector, and noting that $\partial^2 \mathbf{C}/\partial\lam_1^2 =
+\partial^2\mathbf{C}/\partial\lam_2^2 = \mathbf{0}$ (because
+$\partial^2\vp{i}/\partial\lam_i^2 = \mathbf{0}$):
+\begin{align}
+  \pdd{A}{\lam_1}{\lam_1}
+    &= \frac{\norm{\mathbf{g}_1}^2 - (\nhat\cdot\mathbf{g}_1)^2}
+            {2\norm{\mathbf{C}}},
+  \label{eq:H11-1inside} \\[4pt]
+  \pdd{A}{\lam_2}{\lam_2}
+    &= \frac{\norm{\mathbf{g}_2}^2 - (\nhat\cdot\mathbf{g}_2)^2}
+            {2\norm{\mathbf{C}}},
+  \label{eq:H22-1inside} \\[4pt]
+  \pdd{A}{\lam_1}{\lam_2}
+    &= \frac{\mathbf{g}_1\cdot\mathbf{g}_2
+             - (\nhat\cdot\mathbf{g}_1)(\nhat\cdot\mathbf{g}_2)}
+            {2\norm{\mathbf{C}}}
+       + \frac{\nhat \cdot (\ed{1} \times \ed{2})}{2}.
+  \label{eq:H12-1inside}
+\end{align}
+
+The off-diagonal term \eqref{eq:H12-1inside} has two parts:
+\begin{itemize}[noitemsep]
+  \item The first fraction arises from differentiating $\nhat$ — it
+        projects $\mathbf{g}_1$ and $\mathbf{g}_2$ perpendicular to $\nhat$.
+  \item The second term $\nhat\cdot(\ed{1}\times\ed{2})/2$ arises from
+        $\partial\mathbf{g}_1/\partial\lam_2 = \ed{1}\times\ed{2}$
+        (differentiating $\mathbf{g}_1 = \ed{1}\times\mathbf{v}$ with
+        respect to $\lam_2$, since $\partial\mathbf{v}/\partial\lam_2 = \ed{2}$).
+\end{itemize}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: 1-inside Hessian}, fontupper=\small]
+\codefile{vectorized\_area.py}: \code{compute\_area\_hessian\_sparse},
+1-inside branch:\\[2pt]
+\texttt{g1 = np.cross(d1, v) \# $\partial C/\partial\lambda_1$}\\
+\texttt{g2 = np.cross(u, d2) \# $\partial C/\partial\lambda_2$}\\
+\texttt{d1xd2 = np.cross(d1, d2)}\\
+\texttt{H\_11 = (g1\_dot\_g1 - n\_dot\_g1**2) / (2.0 * normC)}\\
+\texttt{H\_22 = (g2\_dot\_g2 - n\_dot\_g2**2) / (2.0 * normC)}\\
+\texttt{H\_12 = ((g1\_dot\_g2 - n\_dot\_g1 * n\_dot\_g2) / normC}\\
+\texttt{\phantom{H\_12 = (}+ n\_dot\_d1xd2) / 2.0}
+\end{tcolorbox}
+
+\subsection{2-inside case}
+\label{sec:area-2inside}
+
+Let $p_{\mathrm{in}1} = \V[v_{\mathrm{in}1}]$,
+$p_{\mathrm{in}2} = \V[v_{\mathrm{in}2}]$ (fixed mesh vertices),
+$\mathrm{pc}_1 = \vp{1}(\lam_1)$, $\mathrm{pc}_2 = \vp{2}(\lam_2)$.
+
+\subsubsection{Area value}
+
+The cell's contribution is the quadrilateral area, split into two
+sub-triangles:
+\begin{equation}
+  A = A_1 + A_2,
+\end{equation}
+where
+\begin{align}
+  A_1 &= \tfrac{1}{2}\norm{(\mathrm{pc}_1 - p_{\mathrm{in}1})
+                   \times (\mathrm{pc}_2 - p_{\mathrm{in}1})},
+  \label{eq:A1-2inside} \\
+  A_2 &= \tfrac{1}{2}\norm{(\mathrm{pc}_2 - p_{\mathrm{in}1})
+                   \times (p_{\mathrm{in}2} - p_{\mathrm{in}1})}.
+  \label{eq:A2-2inside}
+\end{align}
+
+Introduce the sub-triangle vectors:
+\begin{alignat}{2}
+  \mathbf{u}_1 &= \mathrm{pc}_1 - p_{\mathrm{in}1}, &\quad
+  \mathbf{v}_1 &= \mathrm{pc}_2 - p_{\mathrm{in}1}, \\
+  \mathbf{u}_2 &= \mathrm{pc}_2 - p_{\mathrm{in}1}, &\quad
+  \mathbf{v}_2 &= p_{\mathrm{in}2} - p_{\mathrm{in}1}.
+\end{alignat}
+Note that $\mathbf{v}_2$ is \emph{constant} (both vertices are fixed).
+
+\subsubsection{Area Jacobian}
+
+VP~1 appears only in $A_1$ (through $\mathrm{pc}_1 = \mathbf{u}_1 +
+p_{\mathrm{in}1}$).  VP~2 appears in both $A_1$ and $A_2$ (through
+$\mathrm{pc}_2$):
+\begin{align}
+  \pd{A}{\lam_1}
+    &= \pd{A_1}{\lam_1}
+     = \tfrac{1}{2}\,\hat{\mathbf{n}}_1 \cdot (\ed{1} \times \mathbf{v}_1),
+  \label{eq:jac2-1} \\[4pt]
+  \pd{A}{\lam_2}
+    &= \pd{A_1}{\lam_2} + \pd{A_2}{\lam_2}
+     = \tfrac{1}{2}\,\hat{\mathbf{n}}_1 \cdot (\mathbf{u}_1 \times \ed{2})
+       + \tfrac{1}{2}\,\hat{\mathbf{n}}_2 \cdot (\ed{2} \times \mathbf{v}_2),
+  \label{eq:jac2-2}
+\end{align}
+where $\hat{\mathbf{n}}_1$, $\hat{\mathbf{n}}_2$ are the unit normals of
+sub-triangles 1 and 2 respectively.
+
+\subsubsection{Area Hessian}
+
+Define auxiliary cross products for each sub-triangle following the same
+pattern as Section~\ref{sec:area-hessian-1inside}:
+\begin{alignat}{2}
+  \mathbf{g}_{1,1} &= \ed{1} \times \mathbf{v}_1, &\qquad
+  \mathbf{g}_{2,1} &= \mathbf{u}_1 \times \ed{2},
+  \quad\text{(sub-triangle 1)} \\
+  \mathbf{g}_{2,2} &= \ed{2} \times \mathbf{v}_2.
+  \qquad\text{(sub-triangle 2)}
+\end{alignat}
+
+Sub-triangle 2 does not involve $\lam_1$, so its only contribution to the
+Hessian is to $\partial^2 A / \partial\lam_2^2$.  The full Hessian entries
+are:
+\begin{align}
+  \pdd{A}{\lam_1}{\lam_1} &= H^{(1)}_{11},
+  \label{eq:H11-2inside} \\[4pt]
+  \pdd{A}{\lam_2}{\lam_2} &= H^{(1)}_{22} + H^{(2)}_{22},
+  \label{eq:H22-2inside} \\[4pt]
+  \pdd{A}{\lam_1}{\lam_2} &= H^{(1)}_{12},
+  \label{eq:H12-2inside}
+\end{align}
+where $H^{(j)}_{mn}$ denotes the Hessian entry from sub-triangle $j$,
+computed by the formulas \eqref{eq:H11-1inside}--\eqref{eq:H12-1inside}
+with the appropriate sub-triangle vectors substituted.  Explicitly:
+\begin{align}
+  H^{(2)}_{22}
+    &= \frac{\norm{\mathbf{g}_{2,2}}^2
+             - (\hat{\mathbf{n}}_2\cdot\mathbf{g}_{2,2})^2}
+            {2\norm{\mathbf{C}_2}},
+  \label{eq:H22-sub2}
+\end{align}
+where $\mathbf{C}_2 = \mathbf{u}_2 \times \mathbf{v}_2$ and $\norm{\mathbf{C}_2}
+= 2A_2$.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: 2-inside Hessian}, fontupper=\small]
+\codefile{vectorized\_area.py}: \code{compute\_area\_hessian\_sparse},
+2-inside branch:\\[2pt]
+\texttt{H\_11 = H\_11\_sub1}\\
+\texttt{H\_22 = H\_22\_sub1 + H\_22\_sub2}\\
+\texttt{H\_12 = H\_12\_sub1}
+\end{tcolorbox}
+
+% =========================================================================
+\section{Steiner / Triple-Point Contributions}
+\label{sec:steiner}
+% =========================================================================
+
+A \emph{triple point} (also called a Steiner point) arises at a mesh
+triangle where three or more cells meet.  The boundary does not pass
+cleanly through two VP positions; instead the three boundary segments at
+the triple point are required to meet at a shared interior point $\Sv$,
+the \emph{Fermat--Torricelli point} of the three VPs
+\cite{kuhn1974steiner}.
+
+\subsection{The Fermat--Torricelli point (forward formula)}
+\label{sec:steiner-point}
+
+At one triple point let the three VPs be $\vp{1}$, $\vp{2}$, $\vp{3}$
+(ordered by the convention stored in \code{pa.tp\_vp\_indices}).
+
+\paragraph{Non-degenerate case (all angles $< 120^\circ$).}
+Let
+\begin{equation}
+  a = \norm{\vp{2}-\vp{3}},\quad
+  b = \norm{\vp{1}-\vp{3}},\quad
+  c = \norm{\vp{1}-\vp{2}}
+\end{equation}
+be the side lengths, and let
+$A$, $B$, $C$ be the angles of the triangle at $\vp{1}$, $\vp{2}$,
+$\vp{3}$ respectively (via the law of cosines).  The barycentric weights
+\begin{equation}
+  w_i = \frac{a_i}{\sin(A_i + \pi/3)},
+  \quad i \in \{1,2,3\},
+  \label{eq:steiner-weights}
+\end{equation}
+(where $a_1 = a$, $a_2 = b$, $a_3 = c$, and $A_i$ is the angle at vertex
+$i$) give the Fermat--Torricelli point as the weighted barycentre
+\begin{equation}
+  \Sv = \frac{w_1\vp{1} + w_2\vp{2} + w_3\vp{3}}{w_1+w_2+w_3}.
+  \label{eq:steiner-bary}
+\end{equation}
+
+\paragraph{Degenerate case (some angle $\geq 120^\circ$).}
+When the angle at vertex $i$ is $\geq 2\pi/3$, the total distance
+$\sum_j\norm{\vp{j}-\Sv}$ is minimized by placing $\Sv$ at that vertex:
+\begin{equation}
+  \Sv = \vp{k}, \qquad k = \arg\max_i A_i
+  \quad\text{if } A_k \geq 2\pi/3.
+  \label{eq:steiner-degen}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Steiner point}, fontupper=\small]
+\codefile{vectorized\_steiner.py}: \code{compute\_steiner\_points(pa)}
+\end{tcolorbox}
+
+\subsection{Steiner perimeter value}
+\label{sec:steiner-perim-value}
+
+At one triple point with Steiner point $\Sv$, each of the three cells $k$
+(indexed by its pair of adjacent VPs $\vp{a}$, $\vp{b}$) contributes a
+perimeter value
+\begin{equation}
+  P_k^{\mathrm{tp}}
+    = \norm{\vp{a} - \Sv} + \norm{\vp{b} - \Sv} - \norm{\vp{a} - \vp{b}}.
+  \label{eq:steiner-perim-per-cell}
+\end{equation}
+The total Steiner perimeter is
+\begin{equation}
+  \Pst(\Lam)
+    = \sum_{\text{(tp, cell)}} P_k^{\mathrm{tp}}.
+  \label{eq:steiner-perim}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Steiner perimeter value}, fontupper=\small]
+\codefile{vectorized\_steiner.py}: \code{compute\_steiner\_perimeter(pa, steiner\_pts)}\\[2pt]
+Arrays \code{pa.tp\_contrib\_vp1}, \code{pa.tp\_contrib\_vp2},
+\code{pa.tp\_contrib\_tp\_idx} enumerate the (tp, cell) pairs.
+\end{tcolorbox}
+
+\subsection{Steiner area value}
+\label{sec:steiner-area-value}
+
+Each cell $k$ at a triple point is assigned a \emph{void area} and a
+\emph{corner area}:
+\begin{align}
+  A_{\mathrm{void},k}   &= \mathrm{area}\!\left(\vp{a},\, \vp{b},\, \Sv\right),
+  \label{eq:steiner-void-area} \\
+  A_{\mathrm{corner},k} &= \mathrm{area}\!\left(\V[v_\mathrm{mesh}],\,
+                                                 \vp{a},\, \vp{b}\right),
+  \label{eq:steiner-corner-area}
+\end{align}
+where $\V[v_\mathrm{mesh}]$ is the mesh vertex of the triple-point triangle
+that belongs to cell $k$, stored in \code{pa.tp\_contrib\_mesh\_vertex}.
+The Steiner area contribution for cell $k$ is
+$A_k^{\mathrm{tp}} = A_{\mathrm{void},k} + A_{\mathrm{corner},k}$.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Steiner area values}, fontupper=\small]
+\codefile{vectorized\_steiner.py}: \code{compute\_steiner\_areas(pa, steiner\_pts)}
+\end{tcolorbox}
+
+\subsection{Steiner derivatives}
+\label{sec:steiner-fd}
+
+The Steiner perimeter and area contributions are smooth functions of $\Lam$
+away from the degenerate $120^\circ$ case.  Their first \emph{and} second
+derivatives are computed in closed form, by applying the implicit-function
+theorem to the Fermat-point optimality condition.  The full derivation ---
+$\partial\Sv/\partial\vp{k}$, $\partial^2\Sv/\partial\vp{k}\partial\vp{l}$,
+and the resulting Steiner perimeter and area gradients and Hessians --- is the
+subject of its own document,
+\codefile{docs/math/03-analytical-steiner-derivatives}.
+
+The earlier finite-difference implementations are retained, renamed with a
+\code{\_fd\_reference} suffix, as the independent regression oracle; the
+public \code{compute\_steiner\_*} derivative functions dispatch to the
+analytical code via the module flag \code{USE\_ANALYTICAL\_STEINER}.
+
+\paragraph{Restricted support.}
+Only VPs in the set \code{pa.tp\_affected\_vps} can have non-zero Steiner
+derivatives --- the (at most three) VPs at each triple point.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Steiner derivatives}, fontupper=\small]
+\codefile{vectorized\_steiner.py}: analytical
+\code{compute\_steiner\_perimeter\_gradient}, \code{compute\_steiner\_area\_jacobian},
+\code{compute\_steiner\_perimeter\_hessian}, \code{compute\_steiner\_area\_hessian},
+each with a \code{\_fd\_reference} counterpart.  Full derivation in
+\codefile{docs/math/03-analytical-steiner-derivatives}.
+\end{tcolorbox}
+
+% =========================================================================
+\section{Lagrangian Hessian Assembly}
+\label{sec:assembly}
+% =========================================================================
+
+\subsection{The Lagrangian}
+
+IPOPT minimizes the augmented objective by maintaining the Lagrangian
+\begin{equation}
+  \Lagr(\Lam, \mu) = P(\Lam) + \sum_{k=0}^{N-2} \mu_k
+                     \bigl(A_k(\Lam) - \Atgt\bigr),
+\end{equation}
+where $\mu_k$ are Lagrange multipliers supplied by IPOPT at each
+iteration.
+
+\subsection{Hessian assembly}
+
+IPOPT's Hessian callback receives the current $\Lam$, the multipliers
+$\mu_k$, and an objective scaling factor $\objfac$ (used when the objective
+is rescaled internally).  The callback must return
+\begin{equation}
+  H = \objfac\,\Hess{\Preg} + \objfac\,\Hess{\Pst}
+      + \sum_{k=0}^{N-2} \mu_k\,\Hess{A_k^{\mathrm{reg}}}
+      + \sum_{k=0}^{N-2} \mu_k\,\Hess{A_k^{\mathrm{st}}}.
+  \label{eq:H-assembly}
+\end{equation}
+Each of the four terms is computed by a separate function and then
+summed in the flat sparse-values array:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Term & Function & Method \\
+\midrule
+$\Hess{\Preg}$
+  & \code{compute\_perimeter\_hessian\_sparse}
+  & analytical (§\ref{sec:perimeter-hessian}) \\
+$\Hess{\Pst}$
+  & \code{compute\_steiner\_perimeter\_hessian}
+  & analytical (§\ref{sec:steiner-fd}; doc 03) \\
+$\sum_k\mu_k\Hess{A_k^{\mathrm{reg}}}$
+  & \code{compute\_area\_hessian\_sparse}
+  & analytical (§\ref{sec:area-hessian-1inside}, §\ref{sec:area-2inside}) \\
+$\sum_k\mu_k\Hess{A_k^{\mathrm{st}}}$
+  & \code{compute\_steiner\_area\_hessian}
+  & analytical (§\ref{sec:steiner-fd}; doc 03) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Hessian callback}, fontupper=\small]
+\codefile{perimeter\_optimizer.py}: \code{IPOPTProblemAdapter.hessian()}\\[2pt]
+\texttt{return (obj\_factor * (perim\_hess + steiner\_perim\_hess)}\\
+\texttt{\phantom{return (}+ area\_hess + steiner\_area\_hess)}
+\end{tcolorbox}
+
+\subsection{Lower-triangle convention}
+\label{sec:lower-tri}
+
+IPOPT requires only the \emph{lower triangle} of the symmetric matrix $H$,
+i.e.\ entries $(i,j)$ with $i \geq j$.  All Hessian functions return a
+flat array of values at positions $(\code{pa.hess\_row},\,
+\code{pa.hess\_col})$ satisfying \code{hess\_row[k] >= hess\_col[k]}
+for all $k$.
+
+\subsection{Sparsity structure}
+\label{sec:sparsity}
+
+The non-zero pattern of $H$ (lower triangle) is the union of contributions
+from three sources, determined at compile time in
+\code{PartitionContour.compile\_arrays()}:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Perimeter segments.}  Each segment $(a,b)$ contributes the
+        three entries $(a,a)$, $(b,b)$, $(\max(a,b),\min(a,b))$.
+        Source: \code{pa.seg\_vp1}, \code{pa.seg\_vp2}.
+
+  \item \textbf{Boundary triangles.}  Each triangle with VPs
+        $(\mathrm{vp}_1,\mathrm{vp}_2)$ contributes the same three
+        entries.  Because the same pair of VPs defines both the perimeter
+        segment and the bounding triangle, the perimeter and area patterns
+        are identical — no new entries are added.
+        Source: \code{pa.btri\_vp1}, \code{pa.btri\_vp2}.
+
+  \item \textbf{Triple points.}  Each triple point has three VPs, giving
+        up to six off-diagonal entries (all pairs within the triple point)
+        plus three diagonal entries.  Source:
+        \code{pa.tp\_vp\_indices}.
+\end{enumerate}
+
+% =========================================================================
+\section*{Summary table}
+% =========================================================================
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{p{4.2cm}p{4.5cm}p{4.5cm}}
+\toprule
+\textbf{Quantity} & \textbf{Regular} & \textbf{Steiner / triple-point} \\
+\midrule
+Perimeter value $P$
+  & Analytical \eqref{eq:perimeter}
+  & Analytical \eqref{eq:steiner-perim} \\
+Perimeter gradient $\grad P$
+  & Analytical \eqref{eq:grad-P}
+  & Analytical (doc 03) \\
+Area Jacobian $J$
+  & Analytical \eqref{eq:area-jac-1inside}, \eqref{eq:jac2-1}--\eqref{eq:jac2-2}
+  & Analytical (doc 03) \\
+Perimeter Hessian $\Hess{P}$
+  & Analytical \eqref{eq:H_aa}--\eqref{eq:H_ab}
+  & Analytical (doc 03) \\
+Area Hessian $\Hess{A_k}$
+  & Analytical \eqref{eq:H11-1inside}--\eqref{eq:H12-1inside},
+    \eqref{eq:H11-2inside}--\eqref{eq:H22-sub2}
+  & Analytical (doc 03) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =========================================================================
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+% =========================================================================
+
+\end{document}

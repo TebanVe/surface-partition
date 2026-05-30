@@ -1,0 +1,105 @@
+% shared/preamble.tex
+% Shared packages and style definitions for surface-partition guide documents.
+% Include with: \input{../shared/preamble}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\geometry{a4paper, margin=2.5cm, headheight=14pt}
+
+% -------------------------------------------------------------------------
+% Colour palette
+% -------------------------------------------------------------------------
+\definecolor{shellbg}{RGB}{246,246,241}
+\definecolor{shellrule}{RGB}{110,110,110}
+\definecolor{notebg}{RGB}{234,244,255}
+\definecolor{noterule}{RGB}{40,90,200}
+\definecolor{warnbg}{RGB}{255,247,222}
+\definecolor{warnrule}{RGB}{190,110,0}
+\definecolor{tipbg}{RGB}{236,252,238}
+\definecolor{tiprule}{RGB}{30,140,60}
+
+% -------------------------------------------------------------------------
+% Shell / terminal listing style
+% -------------------------------------------------------------------------
+\lstset{
+  extendedchars    = true,
+  inputencoding    = utf8,
+  literate         =
+    {└}{{+}}1
+    {├}{{|}}1
+    {│}{{|}}1
+    {─}{{-}}1,
+}
+
+\lstdefinestyle{shell}{
+  backgroundcolor  = \color{shellbg},
+  basicstyle       = \ttfamily\small,
+  frame            = leftline,
+  framerule        = 3pt,
+  rulecolor        = \color{shellrule},
+  breaklines       = true,
+  keepspaces       = true,
+  columns          = fullflexible,
+  showstringspaces = false,
+  xleftmargin      = 8pt,
+  xrightmargin     = 4pt,
+  aboveskip        = 8pt,
+  belowskip        = 4pt,
+  extendedchars    = true,
+  inputencoding    = utf8,
+}
+
+% -------------------------------------------------------------------------
+% Inline helpers
+% -------------------------------------------------------------------------
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\placeholder}[1]{\textit{\texttt{<#1>}}}
+
+% -------------------------------------------------------------------------
+% Callout boxes
+% -------------------------------------------------------------------------
+\tcbuselibrary{skins,breakable}
+
+\newtcolorbox{notebox}[1][]{
+  colback=notebg, colframe=noterule,
+  title={\small\textbf{Note}}, fonttitle=\bfseries,
+  left=5pt, right=5pt, top=4pt, bottom=4pt,
+  breakable, #1
+}
+
+\newtcolorbox{warnbox}[1][]{
+  colback=warnbg, colframe=warnrule,
+  title={\small\textbf{Important}}, fonttitle=\bfseries,
+  left=5pt, right=5pt, top=4pt, bottom=4pt,
+  breakable, #1
+}
+
+\newtcolorbox{tipbox}[1][]{
+  colback=tipbg, colframe=tiprule,
+  title={\small\textbf{Tip}}, fonttitle=\bfseries,
+  left=5pt, right=5pt, top=4pt, bottom=4pt,
+  breakable, #1
+}
+
+% -------------------------------------------------------------------------
+% Page style
+% -------------------------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{surface-partition}}
+\fancyhead[R]{\small\textit{\nouppercase{\leftmark}}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}

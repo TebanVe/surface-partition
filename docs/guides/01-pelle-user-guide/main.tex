@@ -1,0 +1,1275 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/preamble}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {surface-partition on Pelle: Collaborator Guide},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{%
+  \textbf{Running surface-partition on Pelle}\\[0.5em]
+  \large A Step-by-Step Guide for New Collaborators
+}
+\author{}
+\date{May 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+This guide covers everything a new collaborator needs to go from zero to running
+\textbf{surface-partition} jobs on UPPMAX Pelle: obtaining cluster access,
+setting up the Python environment, cloning and configuring the repository,
+submitting Phase~1 relaxation jobs and Phase~2 refinement jobs, running
+parameter sweeps, and retrieving results for local analysis.
+No prior experience with Pelle or SLURM is assumed.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Prerequisites}
+% =========================================================================
+
+Before starting, make sure you have the following:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{UPPMAX account.}  Request one via the SUPR portal
+        (\url{https://supr.naiss.se}).  Ask the project PI to add you to the
+        allocation \code{uppmax2025-2-534} once your account is active.
+
+  \item \textbf{SSH client.}  On Linux and macOS the built-in \code{ssh}
+        command is sufficient.  On Windows, use Git Bash, WSL, or PuTTY.
+
+  \item \textbf{Repository access.}  You need read access to the GitHub
+        repository.  Ask the PI for the URL and confirm you can clone it
+        before your first login to Pelle.
+
+  \item \textbf{Basic command-line familiarity.}  You should be comfortable
+        navigating directories, editing text files, and running commands in a
+        Linux shell.  No prior HPC or SLURM experience is required.
+\end{itemize}
+
+% =========================================================================
+\section{Logging in to Pelle}
+% =========================================================================
+
+Pelle is UPPMAX's newest cluster.  Connect with SSH, replacing
+\placeholder{your\_username} with your UPPMAX username:
+
+\begin{lstlisting}[style=shell]
+ssh <your_username>@pelle.uppmax.uu.se
+\end{lstlisting}
+
+The first connection will ask you to confirm the host fingerprint --- type
+\code{yes} and press Enter.
+
+\begin{tipbox}
+\textbf{SSH key authentication.}
+Password prompts can get tedious.  Set up key-based login once:
+\begin{lstlisting}[style=shell]
+# On your local machine
+ssh-keygen -t ed25519 -C "pelle"
+ssh-copy-id <your_username>@pelle.uppmax.uu.se
+\end{lstlisting}
+After this, \code{ssh pelle.uppmax.uu.se} logs you in without a password.
+\end{tipbox}
+
+% =========================================================================
+\section{Directory Layout on Pelle}
+\label{sec:dirs}
+% =========================================================================
+
+UPPMAX uses a two-tier storage model.  Understanding it now prevents
+confusion later about where files end up.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Location & Quota & Notes \\
+\midrule
+\code{\textasciitilde/} & 32\,GB & Home directory.  Backed up.  Personal to each user. \\
+\code{/proj/snic2020-15-36/private/} & Large & Project directory.  \textbf{Shared} by all
+                             project members. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The conventions used by this project are:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Code, configuration, scripts} --- live in your home directory
+        under \code{\textasciitilde/projects/surface-partition/}.
+        Each collaborator has their own copy.
+  \item \textbf{Python virtual environment} --- lives in your home directory
+        under \code{\textasciitilde/venvs/surface-partition/}.
+        Each collaborator has their own environment.
+  \item \textbf{Computation results} (HDF5 solution files, refinement
+        checkpoints, traces) --- written to the shared project directory at
+        \code{/proj/snic2020-15-36/private/LINKED\_LST\_MANIFOLD/results/}.
+        All collaborators share this directory.
+  \item \textbf{SLURM log files} --- written inside the repository at
+        \code{\textasciitilde/projects/surface-partition/slurm\_logs/}.
+        Personal to each user.
+\end{itemize}
+
+\begin{warnbox}
+The shared project directory \code{/proj/snic2020-15-36/private/} is
+\textbf{not backed up}.  Do not use it as the only copy of important data.
+Transfer final results to your local machine or a backed-up location.
+\end{warnbox}
+
+% =========================================================================
+\section{First-Time Setup}
+\label{sec:setup}
+% =========================================================================
+
+Perform these steps once on your first login.  They take about ten minutes.
+
+\subsection{Create the directory structure}
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/projects
+mkdir -p ~/venvs
+\end{lstlisting}
+
+\subsection{Clone the repository}
+
+Clone the repository from GitHub:
+
+\begin{lstlisting}[style=shell]
+cd ~/projects
+git clone git@github.com:TebanVe/surface-partition.git surface-partition
+\end{lstlisting}
+
+\begin{notebox}
+This uses SSH-based cloning, which requires your SSH public key to be
+registered on GitHub.  If you have not done this yet, go to
+\url{https://github.com/settings/keys} and add the public key from Pelle
+(\code{\textasciitilde/.ssh/id\_ed25519.pub} or similar).  Alternatively,
+use the HTTPS URL
+\code{https://github.com/TebanVe/surface-partition.git} and authenticate
+with a personal access token.
+\end{notebox}
+
+This creates \code{\textasciitilde/projects/surface-partition/} with the full
+repository contents.
+
+\subsection{Load the Python module}
+
+Pelle uses the \emph{module} system to manage software.  Load Python with:
+
+\begin{lstlisting}[style=shell]
+module load Python/3.11.5-GCCcore-13.3.0
+\end{lstlisting}
+
+\begin{notebox}
+To see which Python versions are available: \code{module spider Python}.
+The project currently targets \code{Python/3.11.5-GCCcore-13.3.0}.
+If it is unavailable, contact the PI for an updated module name and update
+\code{cluster/pelle\_config.sh} accordingly.
+\end{notebox}
+
+\subsection{Create the Python virtual environment}
+
+\begin{lstlisting}[style=shell]
+python -m venv ~/venvs/surface-partition
+source ~/venvs/surface-partition/bin/activate
+pip install --upgrade pip
+\end{lstlisting}
+
+\subsection{Install the project and its dependencies}
+
+\begin{lstlisting}[style=shell]
+cd ~/projects/surface-partition
+pip install -e ".[viz,implicit]"
+\end{lstlisting}
+
+This installs:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Core}: \code{numpy}, \code{scipy}, \code{pyyaml}, \code{matplotlib},
+        \code{h5py}, \code{tqdm}
+  \item \textbf{viz}: \code{pyvista} (3D visualisation --- used by scripts with
+        \code{--save} for headless image output)
+  \item \textbf{implicit}: \code{scikit-image} (marching-cubes meshing for
+        double-torus and Banchoff-Chmutov surfaces)
+\end{itemize}
+
+\begin{warnbox}
+\textbf{IPOPT is not available on Pelle.}
+The \code{cyipopt} package requires a system-level IPOPT installation which is
+not present on UPPMAX.  Phase~2 refinement on the cluster uses
+\code{--method slsqp} (default) or \code{--method trust-constr}.
+The full IPOPT workflow (including exact-Hessian mode) is available on your
+local machine once the results are transferred.
+\end{warnbox}
+
+\subsection{Verify the installation}
+
+\begin{lstlisting}[style=shell]
+python -c "import numpy, scipy, h5py, yaml, pyvista; print('OK')"
+\end{lstlisting}
+
+If this prints \code{OK} without errors, the environment is ready.
+
+\subsection{Configure the submission scripts}
+\label{sec:config}
+
+The file \code{cluster/pelle\_config.sh} is the single place where
+user-specific paths are set.  Open it with your favourite editor:
+
+\begin{lstlisting}[style=shell]
+nano ~/projects/surface-partition/cluster/pelle_config.sh
+\end{lstlisting}
+
+Find and update these two lines, replacing \code{teban66} with your own
+UPPMAX username:
+
+\begin{lstlisting}[style=shell]
+REPO_DIR="/home/<your_username>/projects/surface-partition"
+VENV_DIR="/home/<your_username>/venvs/surface-partition"
+\end{lstlisting}
+
+Leave all other lines unchanged --- they refer to the shared project
+allocation and storage paths that are identical for every collaborator.
+
+\begin{tipbox}
+After editing \code{pelle\_config.sh}, prevent accidental commits of
+your personal paths by running once:
+\begin{lstlisting}[style=shell]
+cd ~/projects/surface-partition
+git update-index --assume-unchanged cluster/pelle_config.sh
+\end{lstlisting}
+Git will then ignore local changes to that file when staging commits.
+\end{tipbox}
+
+\subsection{Create the SLURM log directory}
+
+The submission scripts write job output here.  Create it once:
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/projects/surface-partition/slurm_logs
+\end{lstlisting}
+
+% =========================================================================
+\section{Experiment Configuration Files}
+\label{sec:config-yaml}
+% =========================================================================
+
+Every experiment is driven by a single YAML file that configures both
+Phase~1 and Phase~2.  The \code{parameters/} directory ships four
+ready-to-use configs (Appendix~B).  For a new experiment, copy the
+closest one and adapt it.
+
+\subsection{File naming convention}
+
+Config files follow the pattern \code{\{surface\}\_\{npart\}part.yaml}.
+Examples from the repository:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+File & Experiment \\
+\midrule
+\code{torus\_10part.yaml} & Torus, 10 partitions \\
+\code{ellipsoid\_6part.yaml} & Ellipsoid, 6 partitions \\
+\code{double\_torus\_10part.yaml} & Double torus, 10 partitions \\
+\code{banchoff\_chmutov\_12part.yaml} & Banchoff-Chmutov order~4, 12 partitions \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tipbox}
+To start a new experiment, copy the config whose surface type matches yours
+and rename it following the convention above:
+\begin{lstlisting}[style=shell]
+cp parameters/torus_10part.yaml parameters/torus_6part.yaml
+nano parameters/torus_6part.yaml   # or your preferred editor
+\end{lstlisting}
+\end{tipbox}
+
+\subsection{Top-level structure}
+
+Every config has four top-level sections:
+
+\begin{lstlisting}[style=shell]
+experiment:         # run identity
+  name: torus-10-partitions
+  surface: torus    # surface identifier (see table below)
+
+relaxation:         # Phase 1: Gamma-convergence PGD
+  n_partitions: 10
+  lambda_penalty: 3.25
+  seed: 13001502
+  ...
+
+surface:            # mesh geometry, keyed by the surface identifier
+  torus:
+    n_theta: 80
+    n_phi: 66
+    R: 1.0
+    r: 0.6
+    ...
+
+refinement:         # Phase 2: perimeter optimizer
+  method: slsqp
+  max_iterations: 8
+  ...
+\end{lstlisting}
+
+The value of \code{experiment.surface} must match the key used inside the
+\code{surface:} block.  Valid identifiers are:
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+Identifier & Surface \\
+\midrule
+\code{torus} & Parametric torus of revolution \\
+\code{ellipsoid} & Parametric ellipsoid \\
+\code{double\_torus} & Implicit double torus (marching cubes) \\
+\code{banchoff\_chmutov} & Implicit Banchoff-Chmutov order~4 (marching cubes) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Phase~1 relaxation parameters}
+\label{sec:relaxation-params}
+
+The \code{relaxation:} block controls the Projected Gradient Descent
+optimiser.  The parameters most commonly tuned when setting up a new
+experiment are:
+
+\begin{center}
+\begin{tabular}{lp{2.2cm}p{7cm}}
+\toprule
+Parameter & Typical value & Description \\
+\midrule
+\code{n\_partitions} & 6--12 &
+  Number of regions to partition the surface into. \\[4pt]
+\code{lambda\_penalty} & 2.0--5.0 &
+  Weight of the $\Gamma$-convergence penalty term.
+  \textbf{Most impactful parameter.}
+  Too small $\Rightarrow$ fuzzy, overlapping boundaries.
+  Too large $\Rightarrow$ stalled convergence.
+  Start from the nearest existing config; use a parameter sweep
+  (Section~\ref{sec:sweeps}) to find the best value. \\[4pt]
+\code{seed} & any integer &
+  Random seed for the initial density field.
+  Different seeds reach different local optima.
+  Running several seeds in a sweep is the standard way to find a
+  good partition. \\[4pt]
+\code{max\_iter} & 15\,000--25\,000 &
+  Maximum PGD iterations per refinement level.
+  Increase if the energy is still decreasing when the run ends. \\[4pt]
+\code{refinement\_levels} & 2--5 &
+  Number of multi-level mesh refinement steps.
+  Each step adds the surface increment values to the current resolution.
+  More levels produce finer boundaries at the cost of longer runtimes. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+The remaining \code{relaxation:} parameters (\code{pgd\_step0},
+\code{pgd\_armijo\_c}, \code{penalty\_target\_mode}, and the
+\code{refine\_trigger\_*} thresholds) control low-level PGD behaviour.
+The shipped defaults are stable across all surfaces and rarely need
+to be changed.
+\end{notebox}
+
+\subsection{Surface geometry parameters}
+\label{sec:surface-params}
+
+The \code{surface:} block specifies the mesh geometry.
+
+\textbf{Parametric surfaces} (\code{torus}, \code{ellipsoid}) define a
+base-level grid resolution and an increment added at each refinement level:
+
+\begin{center}
+\begin{tabular}{lp{4.6cm}p{4.8cm}}
+\toprule
+Surface & Key parameters & Notes \\
+\midrule
+\code{torus} &
+  \code{n\_theta}, \code{n\_phi} (base) \newline
+  \code{R}, \code{r} (radii) \newline
+  \code{n\_theta\_increment} \newline
+  \code{n\_phi\_increment} &
+  \code{n\_theta}: samples along the major circle.
+  \code{n\_phi}: samples along the tube.
+  Increments are added per refinement level. \\[4pt]
+\code{ellipsoid} &
+  \code{n\_theta}, \code{n\_phi} (base) \newline
+  \code{a}, \code{b}, \code{c} (semi-axes) \newline
+  increments &
+  The shipped config uses $a=b=1,\ c=0.7$ (oblate spheroid).
+  Adjust the semi-axes to change the shape. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Implicit surfaces} (\code{double\_torus}, \code{banchoff\_chmutov})
+use a 3-D Cartesian grid for marching-cubes meshing:
+
+\begin{center}
+\begin{tabular}{lp{4.6cm}p{4.8cm}}
+\toprule
+Surface & Key parameters & Notes \\
+\midrule
+\code{double\_torus} &
+  \code{n\_grid\_x}, \code{n\_grid\_y}, \newline
+  \code{n\_grid\_z} (base) \newline
+  \code{c} (tube thickness) \newline
+  \code{n\_grid\_x\_increment} \newline
+  \code{n\_grid\_y\_increment} &
+  Default \code{c=0.03}.
+  Only \code{x} and \code{y} increments are used;
+  \code{z} scales proportionally.
+  Maintain the ratio $x:y:z \approx 8:6:3$ from the shipped
+  config to avoid degenerate triangles. \\[4pt]
+\code{banchoff\_chmutov} &
+  \code{n\_grid\_x}, \code{n\_grid\_y}, \newline
+  \code{n\_grid\_z} (base) \newline
+  \code{n\_grid\_x\_increment} \newline
+  \code{n\_grid\_y\_increment} &
+  The largest connected component is kept automatically.
+  Scale all three base dimensions proportionally when
+  changing resolution. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =========================================================================
+\section{Running Phase~1: Relaxation}
+% =========================================================================
+
+Phase~1 performs Gamma-convergence relaxation (Projected Gradient Descent)
+on the surface mesh.  It produces an HDF5 solution file used as input for
+Phase~2.
+
+\subsection{How the submission script works}
+
+\code{cluster/submit\_relaxation.sh} generates a SLURM job script on the
+fly from the parameters in \code{cluster/pelle\_config.sh} and the
+experiment YAML you provide, then submits it with \code{sbatch}.  The
+running job:
+\begin{enumerate}[leftmargin=1.5em]
+  \item Loads the Python module and activates the virtual environment.
+  \item Changes to \code{PROJECT\_BASE} so results land in the shared
+        directory.
+  \item Runs \code{scripts/find\_surface\_partition.py} with your config.
+\end{enumerate}
+
+Results are written to \code{/proj/snic2020-15-36/private/LINKED\_LST\_MANIFOLD/results/}.
+
+\subsection{Basic usage}
+
+From inside the repository directory:
+
+\begin{lstlisting}[style=shell]
+cd ~/projects/surface-partition
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
+\end{lstlisting}
+
+\subsection{Available options}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Option & Default & Description \\
+\midrule
+\code{--config} \placeholder{yaml} & (required) & Experiment YAML file \\
+\code{--time} \placeholder{HH:MM:SS} & \code{12:00:00} & Wall-clock time limit \\
+\code{--cpus} \placeholder{N} & \code{4} & Number of CPU cores \\
+\code{--mem} \placeholder{XG} & \code{16G} & Memory per job \\
+\code{--resume-from} \placeholder{h5} & --- & Warm-start from a prior solution \\
+\code{--solution-dir} \placeholder{dir} & --- & Override output directory \\
+\code{--dry-run} & --- & Print SLURM script without submitting \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Example commands}
+
+\textbf{Torus, 10 partitions (default config):}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
+\end{lstlisting}
+
+\textbf{Ellipsoid, 6 partitions with longer time limit:}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_relaxation.sh \
+    --config parameters/ellipsoid_6part.yaml \
+    --time 24:00:00 --cpus 8
+\end{lstlisting}
+
+\textbf{Double torus, 10 partitions (implicit surface):}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_relaxation.sh \
+    --config parameters/double_torus_10part.yaml
+\end{lstlisting}
+
+\textbf{Warm-start from a prior solution at a higher refinement level:}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_relaxation.sh \
+    --config parameters/torus_10part.yaml \
+    --resume-from /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/ \
+        run_20260510_120000_.../solution/surface_....h5
+\end{lstlisting}
+
+\textbf{Preview the SLURM script without submitting:}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_relaxation.sh \
+    --config parameters/torus_10part.yaml --dry-run
+\end{lstlisting}
+
+\subsection{Monitoring your job}
+
+\begin{lstlisting}[style=shell]
+# List all your running and queued jobs
+squeue -u <your_username>
+
+# Watch the queue (refreshes every 5 seconds)
+watch -n 5 squeue -u <your_username>
+
+# Cancel a job
+scancel <job_id>
+
+# Show detailed accounting for a finished job
+sacct -j <job_id> --format=JobID,Elapsed,CPUTime,MaxRSS,State
+
+# UPPMAX convenience tool for detailed job info
+jobinfo <job_id>
+\end{lstlisting}
+
+\subsection{Reading the job output}
+
+SLURM captures \code{stdout} and \code{stderr} in the log directory:
+
+\begin{lstlisting}[style=shell]
+ls ~/projects/surface-partition/slurm_logs/
+# Files are named: <job_name>_<job_id>.out  and  <job_name>_<job_id>.err
+
+# Follow the live output of a running job
+tail -f ~/projects/surface-partition/slurm_logs/<job_name>_<job_id>.out
+\end{lstlisting}
+
+% =========================================================================
+\section{Running Phase~2: Perimeter Refinement}
+% =========================================================================
+
+Phase~2 takes the HDF5 solution from Phase~1 and minimises the total
+boundary perimeter subject to equal-area constraints.  It requires a
+completed Phase~1 run.
+
+\subsection{Locating the Phase~1 solution}
+
+After Phase~1 finishes, find the solution file:
+
+\begin{lstlisting}[style=shell]
+ls /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/
+# Each run is in a directory named:
+# run_<timestamp>_surf<surface>_npart<N>_..._lam<lambda>_seed<seed>/
+
+ls /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/ \
+   run_<your_run>/solution/
+# The HDF5 file is: surface_part<N>_surf<surface>_..._<timestamp>.h5
+\end{lstlisting}
+
+\subsection{Basic usage}
+
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/ \
+        run_<your_run>/solution/surface_....h5 \
+    --config parameters/torus_10part.yaml
+\end{lstlisting}
+
+\subsection{Available options}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Option & Default & Description \\
+\midrule
+\code{--solution} \placeholder{h5} & (required) & Phase~1 solution or checkpoint \\
+\code{--config} \placeholder{yaml} & (required) & Experiment YAML \\
+\code{--time} \placeholder{HH:MM:SS} & \code{24:00:00} & Wall-clock time limit \\
+\code{--cpus} \placeholder{N} & \code{4} & CPU cores \\
+\code{--mem} \placeholder{XG} & \code{16G} & Memory per job \\
+\code{--method} \placeholder{name} & \code{slsqp} & Solver: \code{slsqp} or \code{trust-constr} \\
+\code{--max-iterations} \placeholder{N} & from YAML & Migration loop iterations \\
+\code{--max-opt-iter} \placeholder{N} & from YAML & Solver iterations per loop step \\
+\code{--tolerance} \placeholder{val} & from YAML & Solver convergence tolerance \\
+\code{--boundary-tol} \placeholder{val} & from YAML & Type~1 migration threshold \\
+\code{--lbfgs-memory} \placeholder{N} & from YAML & L-BFGS history length \\
+\code{--save-iterations} & --- & Save every intermediate checkpoint \\
+\code{--best-iterate} & --- & Keep best-perimeter iterate \\
+\code{--allow-partial} & --- & Continue past constraint violations \\
+\code{--dry-run} & --- & Print script without submitting \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Example commands}
+
+\textbf{Standard run using config defaults (SLSQP):}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../solution/surface_....h5 \
+    --config parameters/torus_10part.yaml
+\end{lstlisting}
+
+\textbf{Trust-region constrained solver, 20 iterations:}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../solution/surface_....h5 \
+    --config parameters/torus_10part.yaml \
+    --method trust-constr --max-iterations 20
+\end{lstlisting}
+
+\textbf{Resume from a checkpoint (auto-detected by the pipeline):}
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../refinement/slsqp_btol0.001/ \
+        iteration_003_20260510_140000.h5 \
+    --config parameters/torus_10part.yaml
+\end{lstlisting}
+
+\begin{notebox}
+Phase~2 refinement campaigns are stored under
+\code{results/run\ldots/refinement/} inside a subdirectory named by solver
+and tolerances, for example \code{slsqp\_btol0.001/} or
+\code{trust-constr\_btol0.001\_lbfgs30/}.  A \code{refinement.yaml} config
+snapshot and \code{refinement.log} are written inside each campaign directory.
+\end{notebox}
+
+\subsection{Phase~2 refinement parameters}
+\label{sec:refinement-params}
+
+The \code{refinement:} block in the experiment YAML configures the
+perimeter minimiser.  CLI flags passed to \code{submit\_refinement.sh}
+override YAML values for individual runs.
+
+\begin{center}
+\begin{tabular}{lp{2.6cm}p{6.8cm}}
+\toprule
+Parameter & Values / range & Description \\
+\midrule
+\code{method} &
+  \code{slsqp} \newline \code{trust-constr} &
+  Solver to use on Pelle.  \code{slsqp} is faster and the recommended
+  default; \code{trust-constr} can be more robust on difficult topologies.
+  (\code{ipopt} requires a system-level installation not present on UPPMAX;
+  use it locally after transferring results.) \\[4pt]
+\code{max\_iterations} & 2--10 &
+  Number of topology cycles (optimize $\to$ detect migrations $\to$
+  migrate).  Increase if migrations are still occurring at the
+  last cycle. \\[4pt]
+\code{max\_opt\_iter} & 200--1\,000 &
+  Solver calls per topology cycle.  Increase if the perimeter is still
+  decreasing when the optimizer terminates. \\[4pt]
+\code{tolerance} & \code{1e-6}--\code{1e-7} &
+  Solver convergence tolerance.  Tighter values give more precision
+  at the cost of longer runtimes. \\[4pt]
+\code{boundary\_tol} & \code{0.001}--\code{0.01} &
+  Type~1 migration threshold: a variable point whose parameter $\lambda$
+  is within this distance of 0 or 1 triggers a vertex-collapse migration. \\[4pt]
+\code{lbfgs\_memory} & 20--50 &
+  L-BFGS history length.  Larger values can improve convergence on
+  well-conditioned problems but use more memory. \\[4pt]
+\code{save\_iterations} & \code{true}/\code{false} &
+  Save an HDF5 checkpoint after every topology cycle.
+  Strongly recommended \code{true} on the cluster so any cycle
+  can be resumed from the last checkpoint. \\[4pt]
+\code{allow\_partial\_}%
+\code{convergence} & \code{true}/\code{false} &
+  If \code{true}, proceed to migration detection even if the solver
+  hit \code{max\_opt\_iter} without converging.  Useful for long runs
+  where some progress per cycle is better than none. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{notebox}
+\code{exact\_hessian} and \code{best\_iterate} are IPOPT-specific
+options that are silently ignored by \code{slsqp} and \code{trust-constr}.
+\end{notebox}
+
+\subsection{Timing profiling}
+\label{sec:profiling}
+
+Add \code{--profile} to any \code{submit\_refinement.sh} call to record
+per-callback wall-clock times during Phase~2:
+
+\begin{lstlisting}[style=shell]
+bash cluster/submit_refinement.sh \
+    --solution /proj/.../results/run_.../solution/surface_....h5 \
+    --config parameters/torus_10part.yaml \
+    --profile
+\end{lstlisting}
+
+When profiling is active, a \code{timing\_profile.yaml} file is written
+inside the campaign directory after each run.  It records:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Total wall-clock time and total iteration count.
+  \item Per-callback percentage breakdown: objective evaluation,
+        gradient evaluation, Steiner recomputation, and other callbacks.
+  \item Raw Steiner recomputation counts.
+\end{itemize}
+
+After a sweep where \code{--profile} was used, transfer results locally
+and run the timing analyser to generate scaling figures:
+
+\begin{lstlisting}[style=shell]
+python sweep/timing_analyzer.py \
+    --experiment-dir ~/local-results/torus_npart10/
+\end{lstlisting}
+
+\begin{tipbox}
+Profiling uses standard-library timers only and adds negligible overhead.
+It can safely be left on for all cluster runs without affecting runtime.
+\end{tipbox}
+
+% =========================================================================
+\section{Parameter Sweeps}
+\label{sec:sweeps}
+% =========================================================================
+
+The sweep tool submits a grid (or paired) array of Phase~1 jobs in one
+command, collects results into a shared index, and produces analysis plots.
+
+\subsection{Sweep specification files}
+
+Sweep specs live under \code{sweep/parameters/}.  Each YAML file defines
+the surface, partitions, and the parameters to vary.  Examples:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{sweep/parameters/sweep\_torus\_lambda.yaml} --- grid sweep over
+        $\lambda$ values and random seeds for the torus.
+  \item \code{sweep/parameters/sweep\_double\_torus\_lambda.yaml} --- grouped
+        grid sweep over $\lambda$ and mesh resolution.
+\end{itemize}
+
+\subsection{Sweep YAML structure}
+\label{sec:sweep-yaml}
+
+A sweep file has four top-level keys:
+
+\begin{lstlisting}[style=shell]
+name: lambda-seed        # short label; appears in output filenames
+base_config: parameters/torus_10part.yaml  # path from repo root
+
+sweep:
+  relaxation.lambda_penalty: [2.5, 3.0, 3.25, 3.5, 4.0]
+  relaxation.seed: [13131313, 84172851, 52698790]
+  relaxation.refinement_levels: [5]
+
+strategy: grid    # "grid" (Cartesian product) or "paired" (zip)
+\end{lstlisting}
+
+Keys inside \code{sweep:} use \textbf{dot notation} to address nested
+keys from the base config: \code{relaxation.lambda\_penalty} sets
+\code{lambda\_penalty} inside the \code{relaxation:} block.
+Each value is a list; the strategy determines how the lists are combined:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{strategy: grid} --- Cartesian product of all lists.
+        The example above produces $5 \times 3 \times 1 = 15$ runs.
+  \item \code{strategy: paired} --- zips lists together element-by-element
+        (all lists must be the same length).  Produces one run per element.
+\end{itemize}
+
+\textbf{Grouped parameters.}  Parameters that must always scale together
+--- such as the $x$ and $y$ grid dimensions of an implicit surface ---
+are placed in a named group.  The group's lists are zipped internally;
+the group then participates in the outer Cartesian product as a single
+unit:
+
+\begin{lstlisting}[style=shell]
+sweep:
+  relaxation.lambda_penalty: [1.0, 2.0, 3.0]
+  resolution:                   # named group -- lists are zipped
+    surface.double_torus.n_grid_x: [54, 64, 74]
+    surface.double_torus.n_grid_y: [40, 50, 60]
+
+strategy: grid   # 3 lambdas x 3 resolution pairs = 9 runs
+\end{lstlisting}
+
+\textbf{Naming convention for sweep files:}
+\code{sweep\_\{surface\}\_\{what\}.yaml}, placed under
+\code{sweep/parameters/}.  For example,
+\code{sweep\_torus\_lambda.yaml} sweeps $\lambda$ and seed on the torus;
+\code{sweep\_double\_torus\_lambda.yaml} sweeps $\lambda$ and resolution
+on the double torus.
+
+\begin{tipbox}
+To create a new sweep, copy the closest existing sweep file and update
+\code{name}, \code{base\_config}, and the \code{sweep:} block.  Run
+with \code{--dry-run} first to confirm the number and parameters of the
+generated runs before submitting.
+\end{tipbox}
+
+\subsection{Submitting a sweep}
+
+\begin{lstlisting}[style=shell]
+# Preview: see how many jobs will be submitted (no jobs submitted)
+bash cluster/submit_sweep.sh \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml --dry-run
+
+# Submit all combinations as separate SLURM jobs
+bash cluster/submit_sweep.sh \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml
+
+# Submit with a 24-hour time limit and auto-collect when done
+bash cluster/submit_sweep.sh \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml \
+    --time 24:00:00 --auto-collect
+\end{lstlisting}
+
+When \code{--auto-collect} is given, a final SLURM job is submitted with
+a dependency on all sweep jobs.  It runs automatically after the last run
+finishes, scans the results, and writes \code{experiment\_index.yaml} plus
+summary CSV files.
+
+\subsection{Collecting results manually}
+
+If you did not use \code{--auto-collect}, run the collector once all jobs
+have finished:
+
+\begin{lstlisting}[style=shell]
+# Recommended: index + matplotlib analysis plots (no PyVista screenshots)
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml \
+    --mode collect --collect-skip-screenshots \
+    --output-dir /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results
+
+# Index and CSV only (fastest):
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml \
+    --mode collect --collect-metadata-only \
+    --output-dir /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results
+\end{lstlisting}
+
+\begin{notebox}
+The collector must be run from inside the repository:
+\begin{lstlisting}[style=shell]
+cd ~/projects/surface-partition
+source ~/venvs/surface-partition/bin/activate
+module load Python/3.11.5-GCCcore-13.3.0
+\end{lstlisting}
+You can run the collector interactively on a login node for short sweeps;
+for sweeps with many runs or large meshes, submit it as a job instead.
+\end{notebox}
+
+% =========================================================================
+\section{Output Directory Structure}
+% =========================================================================
+
+\subsection{Home directory (SLURM logs)}
+
+\begin{lstlisting}[style=shell]
+~/projects/surface-partition/
+└── slurm_logs/
+    ├── relax_torus_npart10_..._<job_id>.out
+    ├── relax_torus_npart10_..._<job_id>.err
+    └── ...
+\end{lstlisting}
+
+These files contain the console output of each SLURM job.  The \code{.out}
+file mirrors the Python logger output; \code{.err} captures unexpected
+errors.
+
+\subsection{Shared project directory (run results)}
+
+All computation results go here:
+
+\begin{lstlisting}[style=shell]
+/proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/
+\end{lstlisting}
+
+\subsection{Per-run directory layout}
+
+Each Phase~1 run produces a self-contained directory:
+
+\begin{lstlisting}[style=shell]
+results/
+└── run_<timestamp>_surf<surface>_npart<N>_..._lam<lambda>_seed<seed>/
+    ├── experiment.yaml          # verbatim copy of the input config
+    ├── solution/
+    │   ├── surface_part<N>_..._<timestamp>.h5   # Phase 1 output
+    │   └── metadata.yaml
+    ├── traces/                  # PGD internal data per refinement level
+    ├── refinement/
+    │   ├── slsqp_btol0.001/     # one subdirectory per Phase 2 campaign
+    │   │   ├── iteration_001_<timestamp>.h5
+    │   │   ├── refinement.yaml  # config snapshot for reproducibility
+    │   │   └── refinement.log
+    │   └── trust-constr_btol0.001_lbfgs30/
+    │       └── ...
+    ├── analysis/                # energy and constraint plots
+    └── logs/
+        └── relaxation.log
+\end{lstlisting}
+
+\subsection{Experiment directory layout (parameter sweeps)}
+
+Sweep runs are grouped by surface and partition count:
+
+\begin{lstlisting}[style=shell]
+results/
+└── torus_npart10/
+    ├── experiment_index.yaml              # auto-maintained index of all runs
+    ├── run_<timestamp>_..._lam0.5_seed42/
+    │   └── ...                            # same per-run layout as above
+    ├── run_<timestamp>_..._lam1.0_seed42/
+    │   └── ...
+    ├── sweeps/                            # sweep provenance records
+    │   ├── <timestamp>_<sweep_name>.yaml
+    │   └── <timestamp>_<sweep_name>_summary.csv
+    └── analysis/                          # experiment-wide comparison plots
+        ├── heatmap_perimeter.png
+        ├── line_perimeter.png
+        └── convergence_overlay.png
+\end{lstlisting}
+
+The \code{experiment\_index.yaml} file is the central record.  It lists
+every run with its parameters, status, and key metrics (perimeter,
+final energy, mesh size, convergence flag).  Perimeter is the primary
+comparison metric because it is resolution-independent.
+
+% =========================================================================
+\section{Managing Disk Space}
+\label{sec:diskspace}
+% =========================================================================
+
+The project directory \code{/proj/snic2020-15-36/private/} has a finite
+quota that is \textbf{shared by all collaborators}.  A parameter sweep with
+20 combinations can easily generate several gigabytes of HDF5 solution files
+and PGD trace data.  Check usage regularly and prune low-quality runs after
+each sweep.
+
+\subsection{Checking current disk usage}
+
+\begin{lstlisting}[style=shell]
+# Total usage of the shared results directory
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/
+
+# Usage broken down by experiment directory
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/*/
+
+# Usage per individual run inside one experiment
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/run_*/
+
+# Show your project allocation and core-hour balance
+projinfo
+\end{lstlisting}
+
+\subsection{Pruning runs with \code{cleanup\_sweep\_results.py}}
+
+\code{cluster/cleanup\_sweep\_results.py} deletes run directories from a
+sweep experiment, keeping only the $N$ best runs ranked by perimeter (or
+another metric).  It reads \code{experiment\_index.yaml} to rank runs and
+then removes the rest.
+
+\begin{warnbox}
+\textbf{Always run a dry-run preview first.}
+Without \code{--execute} the script only prints what \emph{would} be
+deleted --- no files are touched.  Only add \code{--execute} once you
+have reviewed the output and are satisfied with the selection.
+\end{warnbox}
+
+\textbf{Safe items:} the \code{sweeps/} provenance directory is never
+touched.  A \code{cleanup\_log.yaml} file is written (or appended) in the
+experiment directory with full provenance of every deletion so you can always
+audit what was removed and why.  \code{experiment\_index.yaml} is \emph{not}
+modified; rebuild it by running \code{--mode collect} after cleanup.
+
+\subsubsection{Typical workflow}
+
+\begin{lstlisting}[style=shell]
+# 1. Check how much space the experiment is using
+du -sh /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/
+
+# 2. Preview what would be deleted (no changes made)
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir \
+    /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/
+
+# 3. Execute: delete all but the 10 best runs by perimeter (default)
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir \
+    /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results/torus_npart10/ \
+    --execute
+
+# 4. Rebuild the experiment index from surviving directories
+python sweep/parameter_sweep.py \
+    --sweep sweep/parameters/sweep_torus_lambda.yaml \
+    --mode collect \
+    --output-dir /proj/snic2020-15-36/private/LINKED_LST_MANIFOLD/results
+\end{lstlisting}
+
+\subsubsection{Available options}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Option & Default & Description \\
+\midrule
+\code{--experiment-dir} \placeholder{path} & (required) &
+  Experiment directory containing \code{experiment\_index.yaml} \\
+\code{--keep} \placeholder{N} & \code{10} &
+  Number of best runs to keep \\
+\code{--metric} \placeholder{name} & \code{perimeter} &
+  Metric to rank by (lower = better) \\
+\code{--execute} & --- &
+  Actually delete.  Without this flag, only a preview is shown. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Further examples}
+
+\textbf{Keep only the 5 best runs:}
+\begin{lstlisting}[style=shell]
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir /proj/.../results/torus_npart10/ \
+    --keep 5 --execute
+\end{lstlisting}
+
+\textbf{Rank by \code{final\_energy} instead of perimeter:}
+\begin{lstlisting}[style=shell]
+python cluster/cleanup_sweep_results.py \
+    --experiment-dir /proj/.../results/torus_npart10/ \
+    --metric final_energy --execute
+\end{lstlisting}
+
+\begin{notebox}
+The dry run also estimates how much disk space would be freed, broken down
+per run directory.  Use this estimate to decide how many runs to keep before
+committing to a deletion.
+\end{notebox}
+
+% =========================================================================
+\section{Retrieving and Analysing Results}
+% =========================================================================
+
+\subsection{Transferring files to your local machine}
+
+Use \code{rsync} to copy results efficiently (only transfers changed files):
+
+\begin{lstlisting}[style=shell]
+# Copy a single run directory
+rsync -avz --progress \
+    <your_username>@pelle.uppmax.uu.se:/proj/snic2020-15-36/private/ \
+    LINKED_LST_MANIFOLD/results/run_<your_run>/ \
+    ~/local-results/run_<your_run>/
+
+# Copy an entire experiment directory (e.g. torus_npart10)
+rsync -avz --progress \
+    <your_username>@pelle.uppmax.uu.se:/proj/snic2020-15-36/private/ \
+    LINKED_LST_MANIFOLD/results/torus_npart10/ \
+    ~/local-results/torus_npart10/
+
+# Transfer only solution HDF5 files (skip large trace data)
+rsync -avz --progress --include="*.h5" --include="*/" \
+    --exclude="traces/**" \
+    <your_username>@pelle.uppmax.uu.se:/proj/snic2020-15-36/private/ \
+    LINKED_LST_MANIFOLD/results/run_<your_run>/ \
+    ~/local-results/run_<your_run>/
+\end{lstlisting}
+
+\begin{notebox}
+\code{rsync} preserves directory structure and skips files that have not
+changed since the last transfer.  Run it again at any time to pull
+updates without re-downloading everything.
+\end{notebox}
+
+\subsection{Local analysis (on your laptop)}
+
+Once the files are on your local machine, activate your local environment
+and run the analysis scripts from the repository root:
+
+\begin{lstlisting}[style=shell]
+# Activate pyenv environment (see .python-version)
+pyenv activate surface-partition
+
+# Analyse a single run
+python scripts/optimization_analyzer.py \
+    --results-dir ~/local-results/run_<your_run>/
+
+# Sweep-wide analysis (reads experiment_index.yaml)
+python sweep/sweep_analyzer.py \
+    --experiment-dir ~/local-results/torus_npart10/
+
+# Timing analysis (only for runs with --profile flag)
+python sweep/timing_analyzer.py \
+    --experiment-dir ~/local-results/torus_npart10/
+\end{lstlisting}
+
+\subsection{Visualising partitions (requires PyVista)}
+
+Visualisation scripts require a local PyVista install (\code{pip install -e ".[viz]"}).
+On the cluster they can only produce saved images (no interactive window).
+
+\begin{lstlisting}[style=shell]
+# Fast production viewer (recommended for fine meshes)
+python scripts/visualize_partition_fast.py \
+    --solution ~/local-results/run_.../solution/surface_....h5
+
+# Visualise a Phase 2 refined checkpoint
+python scripts/visualize_partition_fast.py \
+    --solution ~/local-results/run_.../refinement/slsqp_btol0.001/ \
+        iteration_005_<timestamp>.h5 \
+    --show-steiner
+
+# Save an image instead of opening an interactive window
+python scripts/visualize_partition_fast.py \
+    --solution ... --save partition.png
+\end{lstlisting}
+
+% =========================================================================
+\section{Useful SLURM Commands}
+% =========================================================================
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Command & What it does \\
+\midrule
+\code{squeue -u \placeholder{username}} &
+  List your running and pending jobs \\
+\code{squeue -u \placeholder{username} -t R} &
+  List only running jobs \\
+\code{scancel \placeholder{job\_id}} &
+  Cancel a job \\
+\code{scancel -u \placeholder{username}} &
+  Cancel \emph{all} your jobs \\
+\code{sacct -j \placeholder{job\_id} --format=Elapsed,MaxRSS,State} &
+  Job runtime, memory, and exit state \\
+\code{jobinfo \placeholder{job\_id}} &
+  UPPMAX-specific detailed job info \\
+\code{projinfo} &
+  Show your allocation usage (core-hours + storage) \\
+\code{uquota} &
+  Show your home directory disk usage \\
+\code{du -sh \placeholder{dir}} &
+  Summarise disk usage of a directory \\
+\code{du -sh \placeholder{dir}/*/} &
+  Per-subdirectory usage breakdown \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =========================================================================
+\section{Troubleshooting}
+% =========================================================================
+
+\paragraph{``Virtual environment not found'' at job startup.}
+The job cannot find \code{VENV\_DIR}.  Check that you:
+\begin{itemize}[leftmargin=1.5em]
+  \item Updated \code{VENV\_DIR} in \code{cluster/pelle\_config.sh} to your
+        own username (Section~\ref{sec:config}).
+  \item Ran the setup steps in Section~\ref{sec:setup} on Pelle (not just
+        locally).
+  \item Did not delete or move the venv directory.
+\end{itemize}
+
+\paragraph{``ModuleNotFoundError: No module named \ldots'' in the job log.}
+The Python module was loaded but the package is not in the venv.
+Re-run the install step:
+\begin{lstlisting}[style=shell]
+module load Python/3.11.5-GCCcore-13.3.0
+source ~/venvs/surface-partition/bin/activate
+cd ~/projects/surface-partition
+pip install -e ".[viz,implicit]"
+\end{lstlisting}
+
+\paragraph{Job fails immediately with exit code 1.}
+Check the \code{.err} log file in \code{slurm\_logs/}.  Common causes:
+\begin{itemize}[leftmargin=1.5em]
+  \item Config YAML file path not found --- use an absolute path or ensure
+        the path is correct relative to \code{PROJECT\_BASE}.
+  \item HDF5 solution file not found --- check the \code{--solution} path.
+  \item Permission denied on \code{/proj/snic2020-15-36/} --- confirm with
+        the PI that you have been added to the storage project.
+\end{itemize}
+
+\paragraph{``Permission denied'' writing to the results directory.}
+You need to be a member of the storage allocation
+\code{snic2020-15-36}.  Ask the PI to add you via SUPR.
+
+\paragraph{The job is queued for a long time.}
+Check allocation usage with \code{projinfo}.  If the core-hour balance is
+exhausted the queue priority drops.  Reduce \code{--cpus} and \code{--time}
+to the minimum needed for your run.
+
+\paragraph{I cannot find my results after the job finishes.}
+Results are written to \code{PROJECT\_BASE/results/}, which is
+\code{/proj/snic2020-15-36/private/LINKED\_LST\_MANIFOLD/results/} ---
+not to your home directory.  Use \code{ls} there and look for a
+\code{run\_<timestamp>\_\ldots} directory with a recent timestamp.
+
+% =========================================================================
+\appendix
+\section{pelle\_config.sh Quick Reference}
+% =========================================================================
+
+The table below lists every variable in \code{cluster/pelle\_config.sh}
+and whether collaborators need to edit it.
+
+\begin{center}
+\begin{tabular}{llp{5.5cm}}
+\toprule
+Variable & Edit? & Description \\
+\midrule
+\code{PROJECT\_ID} & No & SLURM allocation ID \\
+\code{PROJECT\_BASE} & No & Shared data root on \code{/proj/} \\
+\code{RESULTS\_BASE} & No & Derived from \code{PROJECT\_BASE} \\
+\code{REPO\_DIR} & \textbf{Yes} & Absolute path to your clone of the repo \\
+\code{PYTHON\_MODULE} & No* & Module string for \code{module load} \\
+\code{VENV\_DIR} & \textbf{Yes} & Absolute path to your Python venv \\
+\code{DEFAULT\_TIME} & No & Default SLURM time limit \\
+\code{DEFAULT\_CPUS} & No & Default CPU count \\
+\code{DEFAULT\_MEM} & No & Default memory per job \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+\small{*Only edit \code{PYTHON\_MODULE} if the module name changes on
+UPPMAX, e.g. after a system upgrade.}
+
+% =========================================================================
+\section{Available Experiment Configurations}
+% =========================================================================
+
+The \code{parameters/} directory ships with four ready-to-use experiment
+configs:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Config file & Surface & Partitions \\
+\midrule
+\code{torus\_10part.yaml} & Torus ($R=1,\,r=0.6$) & 10 \\
+\code{ellipsoid\_6part.yaml} & Ellipsoid & 6 \\
+\code{double\_torus\_10part.yaml} & Double torus (implicit) & 10 \\
+\code{banchoff\_chmutov\_12part.yaml} & Banchoff-Chmutov order~4 (implicit) & 12 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The double-torus and Banchoff-Chmutov configs use implicit surface
+meshing (marching cubes) and require the \code{.[implicit]} dependency
+group, which is included in the cluster installation above.
+
+\end{document}
