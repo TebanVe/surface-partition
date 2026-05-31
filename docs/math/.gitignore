@@ -19,3 +19,8 @@
 *-blx.bib
 
 # Build logs / aux outputs remain ignored via repo-root *.log / *.out and patterns above.
+
+# Re-include compiled main.pdf outputs (the repo-root .gitignore has a
+# broad *.pdf rule; without this exception new doc subdirs' main.pdf
+# would be silently ignored).
+!main.pdf
