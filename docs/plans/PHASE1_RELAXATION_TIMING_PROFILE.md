@@ -1,6 +1,10 @@
 # Phase 1 (Relaxation) Timing Profile
 
 **Status:** Planned. No code changes yet.
+**Branch:** `feat/phase1-timing-profile`. The plan was committed on this
+branch as its entry point; implementation work should happen here, not
+on `main`. If checking out a different branch to read this document,
+switch back before editing code.
 **Audience:** Fresh agent / developer adding timing instrumentation to the
 Γ-convergence relaxation pipeline.
 **Goal of the work:** Reproduce, for Phase 1, the same kind of breakdown
