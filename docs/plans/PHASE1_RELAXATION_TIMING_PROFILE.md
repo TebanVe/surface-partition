@@ -577,28 +577,49 @@ flag.
 The change is verified end-to-end when **all** of the following hold on
 a real run.
 
-Run on the smallest existing torus config to keep wall time short:
+§6 is an *instrumentation coverage* check, not a characterization run
+(that is §7's job), so it does not need convergence. Use a **capped copy**
+of `parameters/torus_10part.yaml` — the exact 5-level mesh schedule with
+`max_iter` reduced to ~300/level — and run it with `--profile`. The full
+config does **not** run "short": 5 levels × up to 25 000 iters, with the
+per-iter projection cost growing toward its inner-iter cap on the fine
+meshes, makes a full run hours-long. A capped run exercises every code path
+that matters (the multi-level `start_level`/`finalize_level` transitions,
+per-iter callback accumulation, the projection inner-iter counter, and the
+backtrack overlap accounting) in a few minutes, and is in fact the *harder*
+accounting test (§6.3): the one-shot setup costs are a larger fraction of
+`level_wall_s` at a low iter cap, so if accounting closes capped it closes
+even more cleanly on a full run.
 
 ```bash
+# Capped copy: cp parameters/torus_10part.yaml /tmp/torus_10part_capped.yaml,
+# then set relaxation.max_iter: 300 (keep refinement_levels: 5).
 python scripts/find_surface_partition.py \
-    --config parameters/torus_10part.yaml --profile
+    --config /tmp/torus_10part_capped.yaml --profile
 ```
 
-1. **File written.** `results/run_*/solution/timing_profile.yaml` exists
-   and parses as YAML.
+1. **File written.** `results/run_*/solution/timing_profile.yaml` (or the
+   `--solution-dir` you pass) exists and parses as YAML.
 2. **Per-level coverage.** The `levels:` list has exactly
    `refinement_levels` entries, each with non-zero
    `matrix_assembly` and `projection` callbacks.
-3. **Accounting closes.** For each level,
-   `sum(callbacks[*].total_wall_s)` should be within ~15 % of
-   `level_wall_s` (the gap is "overhead" — pure Python between hooks).
-   If it's wildly off, a hook is missing.
+3. **Accounting closes.** For each level, the **non-overlapping** callback
+   sum should be within ~15 % of `level_wall_s` (the gap is "overhead" —
+   pure Python between hooks). The sum must *exclude* the nested callbacks
+   so they are not double-counted: `energy` and `projection` are recorded
+   inside `backtrack`, and `triangle_areas` is recorded inside
+   `matrix_assembly` (`compute_matrices` calls `_compute_triangle_areas`).
+   A naïve `sum(callbacks[*])` therefore overshoots by ~30 % and is *not*
+   the right check. If the non-overlapping sum is wildly off, a hook is
+   missing.
 4. **Counters non-zero.** `mean_backtracks_per_iter ≥ 1.0` and
    `mean_projection_inner_iters ≥ 1.0` in `summary`.
 5. **Zero-overhead check.** Run **without** `--profile` on the same
-   config. The end-of-level "elapsed" wall-clock printed by
-   `_optimize_level` must be within 2 % of the `--profile` run's
-   `level_wall_s`. (If the overhead is bigger than that, a `time.perf_counter()`
+   capped config. The end-of-level "elapsed" wall-clock printed by
+   `_optimize_level` (the per-level PGD time, which excludes setup —
+   compare this rather than `level_wall_s`, which also includes mesh build
+   + assembly) must be within 2 % of the `--profile` run's per-level
+   elapsed. (If the overhead is bigger than that, a `time.perf_counter()`
    call is firing on the inner hot path even when `profile is None`.)
 6. **Sweep collect picks it up.** Run
    `python sweep/parameter_sweep.py --sweep <some-spec> --mode collect`
@@ -606,6 +627,30 @@ python scripts/find_surface_partition.py \
    run; the corresponding entry in `experiment_index.yaml` must have
    `relax_timing_total_wall_s` (and the other `relax_timing_*` scalars)
    populated.
+
+### Result (capped 5-level torus, max_iter 300/level)
+
+All six checks passed:
+
+- §6.2 — 5 `levels[]` entries (n_vertices 5 280 → 97 744), each with
+  non-zero `matrix_assembly` and `projection`.
+- §6.3 — non-overlapping accounting ratio = 0.984 / 0.989 / 0.991 / 0.993 /
+  0.995 across levels (≤1.6 % gap).
+- §6.4 — `mean_backtracks_per_iter` = 1.0; `mean_projection_inner_iters`
+  = 6.04 (per-level 2.36 → 8.77, growing with mesh size).
+- §6.5 — worst per-level profile-vs-no-profile elapsed delta = 1.67 %.
+- §6.6 — `collect_results` wrote `relax_timing_*` (incl. the 5-level list)
+  into `experiment_index.yaml`.
+
+**Finding (feeds §8):** the dominant fine-level cost is **`init_interpolate`**
+(the inter-level nearest-neighbour interpolation), not assembly or
+projection — 77.8 s at level 4 vs. `matrix_assembly` 16.4 s and
+`projection` 38.6 s. `nearest_neighbor_interpolate` is an O(N_new × N_old)
+brute-force search. Because `init_interpolate` is not one of the fixed
+`summary` keys, it currently lands inside `summary.overhead_pct_wall` (≈45 %
+on this run); it is fully visible per-level in `levels[].callbacks`. A
+follow-up could promote it to a `summary` line and/or replace the brute-force
+search with a KD-tree (see §8).
 
 ---
 
@@ -649,6 +694,11 @@ reverse-engineering the optimizer.
 After timing data exists, the candidate optimizations to triage —
 ranked by expected payoff but not committed:
 
+0. **Replace the O(N_new × N_old) brute-force `nearest_neighbor_interpolate`
+   with a KD-tree** (`scipy.spatial.cKDTree`). The capped §6 run surfaced
+   this (`init_interpolate`) as the single largest fine-level cost — 77.8 s
+   at level 4, larger than assembly and projection — even though it runs
+   once per level. Highest expected payoff per the measured data.
 1. Vectorise `compute_matrices` and `_compute_triangle_areas` via
    batched `coo_matrix` arrays.
 2. Replace the `for i in range(n_partitions)` sparse-matvec loop in
