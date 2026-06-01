@@ -1,13 +1,18 @@
+import time
+
 import numpy as np
 from typing import Optional
 
 
 def nearest_neighbor_interpolate(old_vertices: np.ndarray, new_vertices: np.ndarray,
-                                 old_x: np.ndarray, n_partitions: int) -> np.ndarray:
+                                 old_x: np.ndarray, n_partitions: int,
+                                 _prof=None) -> np.ndarray:
 	"""
 	Map a solution from old mesh to new mesh by nearest neighbor in Euclidean space (R2 or R3).
 	old_x is flattened (N_old * n_partitions,).
 	"""
+	if _prof is not None:
+		t0 = time.perf_counter()
 	old_vertices = np.asarray(old_vertices)
 	new_vertices = np.asarray(new_vertices)
 	N_old = old_vertices.shape[0]
@@ -21,4 +26,6 @@ def nearest_neighbor_interpolate(old_vertices: np.ndarray, new_vertices: np.ndar
 		d = np.linalg.norm(old_vertices - p, axis=1)
 		j = int(np.argmin(d))
 		new_phi[i, :] = old_phi[j, :]
+	if _prof is not None:
+		_prof.record('init_interpolate', time.perf_counter() - t0)
 	return new_phi.flatten() 

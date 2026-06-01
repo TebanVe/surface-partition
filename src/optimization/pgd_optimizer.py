@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 
 from ..logging_config import get_logger
+from ..profiling import RelaxationProfilingState
 from .exceptions import RefinementTriggered
 from .projection import orthogonal_projection_iterative
 
@@ -217,6 +218,7 @@ class ProjectedGradientOptimizer:
 		refine_feas_patience: int = 30,
 		refine_feas_delta: float = 1e-6,
 		enable_refinement_triggers: bool = True,
+		profile: Optional[RelaxationProfilingState] = None,
 	) -> Tuple[np.ndarray, bool]:
 		"""
 		Run PGD with per-step projection and Armijo backtracking.
@@ -229,7 +231,7 @@ class ProjectedGradientOptimizer:
 			A0 = x0.reshape(N, n)
 			c = np.ones(n)
 			d = (np.sum(self.v) / n) * np.ones(n)
-			A0 = orthogonal_projection_iterative(A0, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=self.logger)
+			A0 = orthogonal_projection_iterative(A0, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=self.logger, _prof=profile)
 			x0 = A0.flatten()
 
 		if results_dir is None:
@@ -252,7 +254,7 @@ class ProjectedGradientOptimizer:
 		A = np.clip(A, 1e-8, 1 - 1e-8)
 		c = np.ones(n)
 		d = (np.sum(self.v) / n) * np.ones(n)
-		A = orthogonal_projection_iterative(A, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger)
+		A = orthogonal_projection_iterative(A, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile)
 		x = A.flatten()
 
 		E = self.compute_energy(x)
@@ -283,18 +285,31 @@ class ProjectedGradientOptimizer:
 
 			for k in range(maxiter):
 				# Gradient at current x
+				if profile is not None:
+					_t_g = time.perf_counter()
 				g = self.compute_gradient(x)
+				if profile is not None:
+					profile.record('gradient', time.perf_counter() - _t_g)
 				# Backtracking line search
 				step = float(step0)
 				accepted = False
+				n_backtracks = 0
+				if profile is not None:
+					_t_bt = time.perf_counter()
 				while True:
+					if profile is not None:
+						n_backtracks += 1
 					A_trial = x.reshape(N, n) - step * g.reshape(N, n)
 					A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
 					A_trial = orthogonal_projection_iterative(
-						A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger
+						A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile
 					)
 					x_trial = A_trial.flatten()
+					if profile is not None:
+						_t_e = time.perf_counter()
 					E_trial = self.compute_energy(x_trial)
+					if profile is not None:
+						profile.record('energy', time.perf_counter() - _t_e)
 					# Armijo condition with ||g||^2 surrogate
 					if E_trial <= E - armijo_c * step * float(np.dot(g, g)):
 						accepted = True
@@ -305,10 +320,22 @@ class ProjectedGradientOptimizer:
 					if step < 1e-12:
 						# Unable to make progress
 						break
+				if profile is not None:
+					profile.record('backtrack', time.perf_counter() - _t_bt)
+					profile.add_counter('backtracks_per_iter_total', n_backtracks)
+					profile.add_counter('major_iterations', 1)
 
 				# Recompute gradient and constraints at the accepted iterate (or current if not accepted)
+				if profile is not None:
+					_t_g = time.perf_counter()
 				g_post = self.compute_gradient(x)
+				if profile is not None:
+					profile.record('gradient', time.perf_counter() - _t_g)
+				if profile is not None:
+					_t_c = time.perf_counter()
 				cvec_post = self.constraint_fun(x)
+				if profile is not None:
+					profile.record('constraints', time.perf_counter() - _t_c)
 				gnorm_post = float(np.linalg.norm(g_post))
 				cnorm_post = float(np.linalg.norm(cvec_post))
 				feas_post = float(np.max(np.abs(cvec_post))) if cvec_post.size > 0 else 0.0
@@ -316,12 +343,20 @@ class ProjectedGradientOptimizer:
 				# Save iteration (post-accept values) according to stride/vars
 				should_save_iter = (k % stride == 0) or (save_first_last and (k == 0 or k == maxiter - 1))
 				if should_save_iter:
+					if profile is not None:
+						_t_s = time.perf_counter()
 					# Compute energy components for saving
 					energy_components = self.compute_energy(x, return_components=True)
 					self._save_iteration_h5(h5f, k, x, g_post, E, cvec_post, save_vars_h5, energy_components=energy_components)
+					if profile is not None:
+						profile.record('h5_save', time.perf_counter() - _t_s)
 				self._append_summary_line(summary_fh, k, E, gnorm_post, cnorm_post, feas_post, step)
+				if profile is not None:
+					_t_f = time.perf_counter()
 				summary_fh.flush()
 				h5f.flush()
+				if profile is not None:
+					profile.record('h5_flush', time.perf_counter() - _t_f)
 
 				# Track logs
 				self.log['iterations'].append(k)
@@ -347,6 +382,8 @@ class ProjectedGradientOptimizer:
 					self.logger.info(f"    Current partition areas: {areas_log}")
 
 				# Refinement trigger check
+				if profile is not None:
+					_t_tc = time.perf_counter()
 				if enable_refinement_triggers and (k + 1 >= self.refine_patience):
 					recent = self.log['energy_changes'][-self.refine_patience:]
 					stable = all(abs(de) < self.refine_delta_energy for de in recent)
@@ -369,6 +406,8 @@ class ProjectedGradientOptimizer:
 							if gn_ok and fe_ok:
 								self.logger.info(f"Refinement triggered at iteration {k}")
 								raise RefinementTriggered()
+				if profile is not None:
+					profile.record('trigger_check', time.perf_counter() - _t_tc)
 
 		# Final summary log
 		elapsed = time.time() - start_time

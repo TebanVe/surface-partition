@@ -1,8 +1,12 @@
 # Phase 1 (Relaxation) Timing Profile
 
-**Status:** Planned. No code changes yet.
+**Status:** Implemented on branch `feat/phase1-timing-profile`
+(instrumentation + `RelaxationProfilingState`, `--profile` CLI wiring,
+sweep `--mode collect` extraction, and the `timing_analyzer.py` Phase 1
+breakdown plot). The §7 interpretation notes and the §8 follow-up
+optimizations remain forward-looking and out of scope for that change.
 **Branch:** `feat/phase1-timing-profile`. The plan was committed on this
-branch as its entry point; implementation work should happen here, not
+branch as its entry point; implementation work happened here, not
 on `main`. If checking out a different branch to read this document,
 switch back before editing code.
 **Audience:** Fresh agent / developer adding timing instrumentation to the
@@ -84,7 +88,7 @@ become the canonical callback names used in `record(...)`.
 | Counter | Where to increment | Why |
 |---|---|---|
 | `major_iterations` | once per major PGD iter | denominator for means |
-| `backtracks_per_iter_total` | += backtracks observed in this iter's `while True:` | want `mean_backtracks` |
+| `backtracks_per_iter_total` | += trial steps taken in this iter's `while True:` (≥1, counting the accepted step) | want `mean_backtracks` |
 | `projection_inner_iters_total` | += inner-iter count reported by `orthogonal_projection_iterative` | want `mean_projection_inner_iters` |
 | `projection_invocations` | += 1 per `orthogonal_projection_iterative` call | denominator for above |
 
@@ -170,12 +174,25 @@ class RelaxationProfilingState:
     _summary: Dict = field(default_factory=dict, repr=False)
 ```
 
-Methods:
+Methods. The per-level setup is split across `start_level` and
+`set_level_mesh_stats` because the level wall clock has to start *before*
+the mesh is built (so `level_wall_s` spans mesh build + matrix assembly +
+PGD, and the `matrix_assembly` callback recorded during setup survives),
+yet the mesh-derived metadata (`nnz_K`, vertex/triangle counts) is only
+known *after* the build. A single `begin_level(...)` called after setup
+would have to reset the accumulators and thereby wipe the `matrix_assembly`
+timing already recorded by `compute_matrices`.
 
 ```python
-def begin_level(self, level: int, n_vertices: int, n_triangles: int,
-                nnz_K: int, nnz_M: int, epsilon: float) -> None:
-    """Reset per-level accumulators and start the level wall clock."""
+def start_level(self, level: int) -> None:
+    """Reset per-level accumulators and start the level wall clock.
+
+    Called before the mesh build so level_wall_s spans the whole level.
+    """
+
+def set_level_mesh_stats(self, n_vertices: int, n_triangles: int,
+                         nnz_K: int, nnz_M: int, epsilon: float) -> None:
+    """Record post-build mesh metadata for the current level."""
 
 def record(self, cb: str, elapsed: float) -> None:
     """Wall-clock accumulator. Same semantics as ProfilingState.record."""
@@ -184,7 +201,7 @@ def add_counter(self, name: str, n: int = 1) -> None:
     """Bump a named integer counter."""
 
 def finalize_level(self) -> None:
-    """Snapshot _wall_s / _count / _counters into _levels[len], reset."""
+    """Snapshot _wall_s / _count / _counters into _levels[len], fold into aggregate."""
 
 def finalize(self) -> None:
     """Compute aggregate summary across levels."""
@@ -353,8 +370,11 @@ Add `profile: Optional[RelaxationProfilingState] = None` to the
 - Wrap the **whole backtracking `while True:`** with the `backtrack`
   callback timing (start `t_bt` before line 288, record at first
   `break` and at the `step < 1e-12` break).
-  - Track `n_backtracks` as a local counter incremented on every
-    failed trial; after the loop call
+  - Track `n_backtracks` as a local counter incremented on every trial
+    step (each pass through the `while True:`, so a first-try acceptance
+    counts as 1 — consistent with the §6.4 check that
+    `mean_backtracks_per_iter ≥ 1.0` and the §7 reading of ~1.0 as
+    "accepted on the first try"); after the loop call
     `profile.add_counter('backtracks_per_iter_total', n_backtracks)` and
     `profile.add_counter('major_iterations', 1)`.
 - Inside the backtracking loop, wrap each `compute_energy(x_trial)`
@@ -393,11 +413,12 @@ if config.profile:
 t_run_start = time.time()
 # ... existing setup ...
 for level in range(start_level, config.refinement_levels):
+    if prof is not None:
+        prof.start_level(level)               # reset accumulators + start clock
     level_ctx = _setup_level(provider, config, level, logger, profile=prof)
     if prof is not None:
         mesh = level_ctx['mesh']
-        prof.begin_level(
-            level=level,
+        prof.set_level_mesh_stats(            # record post-build metadata only
             n_vertices=int(mesh.vertices.shape[0]),
             n_triangles=int(mesh.faces.shape[0]),
             nnz_K=int(mesh.K.nnz),
