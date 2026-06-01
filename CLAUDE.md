@@ -63,6 +63,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/ --metric 
 # Timing analysis (reads experiment_index.yaml timing fields; requires --profile runs)
 python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
 python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --campaign ipopt_btol0.001_lbfgs30_hess
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --phase relaxation  # Phase 1 PGD breakdown
 ```
 
 ## Testing
@@ -341,8 +342,12 @@ metric because it is resolution-independent (unlike energy, which is
 When runs have been profiled with `--profile`, `--mode collect` also extracts
 timing scalars into each run entry: `n_cells`, `n_active_vps`, `n_triple_points`,
 and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callback
-% breakdown, Steiner recomputation totals). These fields are consumed by
-`sweep/timing_analyzer.py` to produce scaling figures.
+% breakdown, Steiner recomputation totals). Phase 1 `--profile` runs additionally
+yield `relax_timing_*` fields (total wall time, per-callback % breakdown, mean
+backtracks / projection inner iters, and the per-level list) read from
+`solution/timing_profile.yaml`. These fields are consumed by
+`sweep/timing_analyzer.py` to produce scaling figures (`--phase relaxation` for
+the Phase 1 breakdown).
 
 ### Key Classes and Their Roles
 

@@ -511,6 +511,33 @@ def _flatten_timing(timing: dict) -> dict:
     return flat
 
 
+def _extract_relaxation_timing(run_dir: str) -> Optional[dict]:
+    """Return the parsed Phase 1 solution/timing_profile.yaml, or None."""
+    p = os.path.join(run_dir, "solution", "timing_profile.yaml")
+    if not os.path.isfile(p):
+        return None
+    try:
+        return _load_yaml(p)
+    except Exception:
+        return None
+
+
+def _flatten_relaxation_timing(tdata: dict) -> dict:
+    """Flatten the Phase 1 timing_profile into scalar relax_timing_* fields."""
+    flat: dict = {}
+    s = tdata.get("summary", {})
+    flat["relax_timing_total_wall_s"] = s.get("total_wall_s")
+    for cb in ("matrix_assembly", "energy", "gradient", "projection",
+               "backtrack", "h5_save", "h5_flush", "trigger_check"):
+        key = f"{cb}_pct_wall"
+        flat[f"relax_timing_{key}"] = s.get(key)
+    flat["relax_timing_mean_backtracks"] = s.get("mean_backtracks_per_iter")
+    flat["relax_timing_mean_projection_inner_iters"] = s.get(
+        "mean_projection_inner_iters")
+    flat["relax_timing_levels"] = tdata.get("levels", [])
+    return flat
+
+
 def _extract_run_metrics(run_dir: str) -> Optional[dict]:
     """Extract metrics from a single run directory's metadata.yaml."""
     meta_path = os.path.join(run_dir, "solution", "metadata.yaml")
@@ -562,6 +589,10 @@ def _extract_run_metrics(run_dir: str) -> Optional[dict]:
     timing = _extract_timing_metrics(run_dir)
     if timing:
         entry.update(_flatten_timing(timing))
+
+    relax_timing = _extract_relaxation_timing(run_dir)
+    if relax_timing:
+        entry.update(_flatten_relaxation_timing(relax_timing))
 
     return entry
 
