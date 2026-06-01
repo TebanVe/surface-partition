@@ -47,6 +47,11 @@ def main():
                         help='Path to a prior solution HDF5 to warm-start from. '
                              'config.refinement_levels must be greater than the '
                              'completed_levels stored in that file.')
+    parser.add_argument('--profile', action='store_true', default=False,
+                        help='Enable Phase 1 timing profiling. Writes '
+                             'solution/timing_profile.yaml with per-level '
+                             'wall-clock breakdown by callback. '
+                             'Zero overhead when omitted.')
     args = parser.parse_args()
 
     setup_logging(log_level='INFO', log_to_console=True, log_to_file=False)
@@ -60,6 +65,9 @@ def main():
             params = yaml.safe_load(f) or {}
 
     config = RelaxationConfig.from_yaml_dict(params) if params else RelaxationConfig()
+
+    if args.profile:
+        config.profile = True
 
     surface_name = args.surface
     if surface_name is None:

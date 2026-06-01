@@ -22,6 +22,8 @@ python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
 python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
 python scripts/find_surface_partition.py --config parameters/double_torus_10part.yaml      # requires .[implicit]
 python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12part.yaml  # requires .[implicit]
+# Enable timing profiling (writes solution/timing_profile.yaml with per-level breakdown):
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --profile
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
@@ -124,7 +126,7 @@ src/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
 │   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
-├── profiling.py                  # ProfilingState: opt-in timing accumulator for Phase 2 callbacks (stdlib only)
+├── profiling.py                  # ProfilingState (Phase 2) + RelaxationProfilingState (Phase 1): opt-in timing accumulators (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
@@ -365,6 +367,7 @@ and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callb
 | `PartitionArrays` | `src/partition/partition_arrays.py` | Pre-computes sparse Jacobian/Hessian sparsity structure for IPOPT. |
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
+| `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
 | `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
@@ -372,6 +375,8 @@ and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callb
 ### Data Flow
 
 1. **Phase 1:** `find_surface_partition.py --config <experiment.yaml>` → reads `relaxation` + `surface` sections → `run_relaxation()` → builds provider → PGD loop → saves solution to `solution/`, traces to `traces/`, log to `logs/relaxation.log`, copies config to `experiment.yaml` at run root.
+
+   **Phase 1 timing profile:** `--profile` on `scripts/find_surface_partition.py` writes `<run_dir>/solution/timing_profile.yaml` with a per-level wall-clock breakdown by callback (`matrix_assembly`, `projection`, `energy`, `gradient`, `backtrack`, `h5_save`, …). Zero overhead when omitted. Parallels the Phase 2 `--profile` campaign profile.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 
