@@ -427,7 +427,10 @@ def main():
     )
     parser.add_argument(
         "--metric", default="perimeter",
-        help="Metric to plot (default: perimeter; alternatives: final_energy, total_iterations)",
+        help="Metric to plot (default: perimeter; alternatives: final_energy, "
+             "total_iterations, relax_timing_total_wall_s, "
+             "relax_timing_projection_pct_wall, relax_timing_mean_projection_inner_iters, "
+             "and other relax_timing_* scalars written by --profile Phase 1 runs)",
     )
     parser.add_argument(
         "--output-dir",
