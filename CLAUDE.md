@@ -198,7 +198,8 @@ docs/math/
 │   └── references.bib          ← shared bibliography
 ├── 01-phase2-derivatives/      ← Phase 2 regular perimeter/area derivatives; Steiner forward values
 ├── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
-└── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
+├── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
+└── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
