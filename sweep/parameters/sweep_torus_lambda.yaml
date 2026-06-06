@@ -1,9 +1,10 @@
 # Sweep: lambda_penalty x seed for 30-partition torus
 #
-# Mesh pinned to the base config (torus_30part.yaml):
-#   surface.torus.n_theta = 90   (base resolution along major circle)
-#   surface.torus.n_phi   = 76   (base resolution along tube circle)
-#   relaxation.refinement_levels = 3    (3 levels: 90x76 -> 152x134 -> 214x192)
+# Mesh overridden below to a lighter resolution for fast local testing
+# (the base config torus_30part.yaml uses 90x76):
+#   surface.torus.n_theta = 60   (base resolution along major circle)
+#   surface.torus.n_phi   = 46   (base resolution along tube circle)
+#   relaxation.refinement_levels = 3    (3 levels: 60x46 -> 122x104 -> 184x162)
 # Increments (n_theta_increment = 62, n_phi_increment = 58) come from the
 # base_config and are not swept.
 #
@@ -18,7 +19,7 @@ sweep:
   relaxation.seed: [13131313, 84172851]
   relaxation.refinement_levels: [3]
   resolution:
-    surface.torus.n_theta: [90]
-    surface.torus.n_phi:   [76]
+    surface.torus.n_theta: [60]
+    surface.torus.n_phi:   [46]
 
 strategy: grid
