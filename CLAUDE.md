@@ -22,6 +22,8 @@ python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
 python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
 python scripts/find_surface_partition.py --config parameters/double_torus_10part.yaml      # requires .[implicit]
 python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12part.yaml  # requires .[implicit]
+# Enable timing profiling (writes solution/timing_profile.yaml with per-level breakdown):
+python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --profile
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
@@ -45,7 +47,7 @@ python scripts/export_partition.py \
  --config parameters/torus_10part.yaml \
  --output results/<run>/partition/torus_partition_<run-id>.h5
 
-# Analysis
+# Analysis (auto-includes relaxation_timing_profile.png when --profile was used)
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
 
 # Parameter sweeps (sweep/ directory — independent from core scripts)
@@ -61,6 +63,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/ --metric 
 # Timing analysis (reads experiment_index.yaml timing fields; requires --profile runs)
 python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
 python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --campaign ipopt_btol0.001_lbfgs30_hess
+python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --phase relaxation  # Phase 1 PGD breakdown
 ```
 
 ## Testing
@@ -124,7 +127,7 @@ src/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
 │   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
-├── profiling.py                  # ProfilingState: opt-in timing accumulator for Phase 2 callbacks (stdlib only)
+├── profiling.py                  # ProfilingState (Phase 2) + RelaxationProfilingState (Phase 1): opt-in timing accumulators (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
@@ -195,7 +198,8 @@ docs/math/
 │   └── references.bib          ← shared bibliography
 ├── 01-phase2-derivatives/      ← Phase 2 regular perimeter/area derivatives; Steiner forward values
 ├── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
-└── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
+├── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
+└── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
@@ -339,8 +343,12 @@ metric because it is resolution-independent (unlike energy, which is
 When runs have been profiled with `--profile`, `--mode collect` also extracts
 timing scalars into each run entry: `n_cells`, `n_active_vps`, `n_triple_points`,
 and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callback
-% breakdown, Steiner recomputation totals). These fields are consumed by
-`sweep/timing_analyzer.py` to produce scaling figures.
+% breakdown, Steiner recomputation totals). Phase 1 `--profile` runs additionally
+yield `relax_timing_*` fields (total wall time, per-callback % breakdown, mean
+backtracks / projection inner iters, and the per-level list) read from
+`solution/timing_profile.yaml`. These fields are consumed by
+`sweep/timing_analyzer.py` to produce scaling figures (`--phase relaxation` for
+the Phase 1 breakdown).
 
 ### Key Classes and Their Roles
 
@@ -365,6 +373,7 @@ and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callb
 | `PartitionArrays` | `src/partition/partition_arrays.py` | Pre-computes sparse Jacobian/Hessian sparsity structure for IPOPT. |
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
+| `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
 | `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
@@ -372,6 +381,8 @@ and per-campaign `timing_*` fields (total wall time, IPOPT iter count, per-callb
 ### Data Flow
 
 1. **Phase 1:** `find_surface_partition.py --config <experiment.yaml>` → reads `relaxation` + `surface` sections → `run_relaxation()` → builds provider → PGD loop → saves solution to `solution/`, traces to `traces/`, log to `logs/relaxation.log`, copies config to `experiment.yaml` at run root.
+
+   **Phase 1 timing profile:** `--profile` on `scripts/find_surface_partition.py` writes `<run_dir>/solution/timing_profile.yaml` with a per-level wall-clock breakdown by callback (`matrix_assembly`, `projection`, `energy`, `gradient`, `backtrack`, `h5_save`, …). Zero overhead when omitted. Parallels the Phase 2 `--profile` campaign profile. When the file is present, `optimization_analyzer.py` automatically produces `analysis/relaxation_timing_profile.png` (stacked wall-time bars, per-call scaling, projection inner-iter growth, backtrack rate — all across the 5 refinement levels).
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 

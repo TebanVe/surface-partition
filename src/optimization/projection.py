@@ -1,12 +1,14 @@
+import time
 import numpy as np
 from typing import Tuple, Optional, Dict, Any
 import logging
 
 from ..logging_config import get_logger
 
-def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray, 
-                                  max_iter: int = 1000, tol: float = 1e-10, 
-                                  logger: Optional[logging.Logger] = None) -> np.ndarray:
+def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray,
+                                  max_iter: int = 1000, tol: float = 1e-10,
+                                  logger: Optional[logging.Logger] = None,
+                                  _prof=None) -> np.ndarray:
     """
     Implements the orthogonal projection algorithm for partition and area constraints
     as described in the paper "Partitions of Minimal Length on Manifolds".
@@ -34,12 +36,16 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
     """
     if logger is None:
         logger = get_logger(__name__)
-    
+
+    if _prof is not None:
+        t0 = time.perf_counter()
+        _prof.add_counter('projection_invocations', 1)
+
     # Validate input dimensions
     N, n = A.shape
     if len(c) != n or len(d) != n or len(v) != N:
         raise ValueError(f"Dimension mismatch: A({N}x{n}), c({len(c)}), d({len(d)}), v({len(v)})")
-    
+
     logger.debug(f"Starting orthogonal projection: {N}x{n} matrix, max_iter={max_iter}, tol={tol}")
     
     A = A.copy()  # Make a copy to avoid modifying the input
@@ -146,7 +152,13 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
         # Loop completed without convergence
         logger.warning(f"Projection did not converge after {max_iter} iterations")
         logger.warning(f"Final errors: row={row_sum_error:.2e}, area={area_error:.2e}")
-    
+
+    if _prof is not None:
+        # `iter` survives the for/else: it holds the iteration we broke on,
+        # or max_iter-1 if the loop ran to completion.
+        _prof.add_counter('projection_inner_iters_total', iter + 1)
+        _prof.record('projection', time.perf_counter() - t0)
+
     # Validate final result
     final_row_error = np.max(np.abs(np.sum(A, axis=1) - 1))
     final_area_error = np.max(np.abs(v @ A - d))
@@ -158,7 +170,8 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
     return A
 
 def orthogonal_projection_direct(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray,
-                               logger: Optional[logging.Logger] = None) -> np.ndarray:
+                               logger: Optional[logging.Logger] = None,
+                               _prof=None) -> np.ndarray:
     """
     Implements the orthogonal projection algorithm for partition and area constraints
     as described in the paper "Partitions of Minimal Length on Manifolds".
@@ -180,12 +193,16 @@ def orthogonal_projection_direct(A: np.ndarray, c: np.ndarray, d: np.ndarray, v:
     """
     if logger is None:
         logger = get_logger(__name__)
-    
+
+    if _prof is not None:
+        t0 = time.perf_counter()
+        _prof.add_counter('projection_invocations', 1)
+
     # Validate input dimensions
     N, n = A.shape
     if len(c) != n or len(d) != n or len(v) != N:
         raise ValueError(f"Dimension mismatch: A({N}x{n}), c({len(c)}), d({len(d)}), v({len(v)})")
-    
+
     logger.debug(f"Starting direct orthogonal projection: {N}x{n} matrix")
     
     A = A.copy()  # Make a copy to avoid modifying the input
@@ -265,9 +282,12 @@ def orthogonal_projection_direct(A: np.ndarray, c: np.ndarray, d: np.ndarray, v:
     # Validate result
     final_row_error = np.max(np.abs(np.sum(A, axis=1) - 1))
     final_area_error = np.max(np.abs(v @ A - d))
-    
+
     logger.debug(f"Direct projection completed: row_error={final_row_error:.2e}, area_error={final_area_error:.2e}")
-    
+
+    if _prof is not None:
+        _prof.record('projection', time.perf_counter() - t0)
+
     return A
 
 def validate_projection_result(A: np.ndarray, v: np.ndarray, d: np.ndarray, 
@@ -305,10 +325,11 @@ def validate_projection_result(A: np.ndarray, v: np.ndarray, d: np.ndarray,
     
     return row_error < tol and area_error < tol and non_neg_error < tol
 
-def create_initial_condition_with_projection(N: int, n_partitions: int, v: np.ndarray, 
+def create_initial_condition_with_projection(N: int, n_partitions: int, v: np.ndarray,
                                            seed: int = None, method: str = "iterative",
                                            max_iter: int = 100, tol: float = 1e-8,
-                                           logger: Optional[logging.Logger] = None) -> np.ndarray:
+                                           logger: Optional[logging.Logger] = None,
+                                           _prof=None) -> np.ndarray:
     """
     Create a valid initial condition using orthogonal projection.
     
@@ -343,9 +364,9 @@ def create_initial_condition_with_projection(N: int, n_partitions: int, v: np.nd
     
     # Apply projection
     if method == "iterative":
-        A_projected = orthogonal_projection_iterative(A, c, d, v, max_iter, tol, logger)
+        A_projected = orthogonal_projection_iterative(A, c, d, v, max_iter, tol, logger, _prof=_prof)
     elif method == "direct":
-        A_projected = orthogonal_projection_direct(A, c, d, v, logger)
+        A_projected = orthogonal_projection_direct(A, c, d, v, logger, _prof=_prof)
     else:
         raise ValueError(f"Unknown projection method: {method}")
     

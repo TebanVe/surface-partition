@@ -20,6 +20,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.logging_config import get_logger
 
+# Non-overlapping callback order for Phase 1 timing stacked-bar plots.
+# backtrack subsumes energy & projection (trial steps); matrix_assembly
+# subsumes triangle_areas. init_condition and init_interpolate are mutually
+# exclusive per level (level 0 vs level 1+).
+_RELAX_TIMING_NON_OVERLAP = (
+    'mesh_build', 'matrix_assembly',
+    'init_condition', 'init_interpolate',
+    'gradient', 'backtrack',
+    'constraints', 'h5_save', 'h5_flush', 'trigger_check',
+)
+
+_RELAX_TIMING_COLORS = {
+    'mesh_build':       '#aec7e8',
+    'matrix_assembly':  '#1f77b4',
+    'init_condition':   '#ffbb78',
+    'init_interpolate': '#ff7f0e',
+    'gradient':         '#2ca02c',
+    'backtrack':        '#d62728',
+    'constraints':      '#9467bd',
+    'h5_save':          '#8c564b',
+    'h5_flush':         '#e377c2',
+    'trigger_check':    '#7f7f7f',
+    'overhead':         '#eeeeee',
+}
+
 def load_internal_data(hdf5_file_path: str) -> Optional[Dict]:
 	"""
 	Load internal optimization data from HDF5 file and return arrays plus
@@ -753,6 +778,153 @@ def plot_energy_components(component_data: Dict, level_boundaries: List[int],
     if logger:
         logger.info(f"Saved energy components plot to: {save_path}")
 
+def load_relaxation_timing(run_dir: str) -> Optional[dict]:
+    """Return parsed solution/timing_profile.yaml from a Phase 1 run, or None."""
+    p = os.path.join(run_dir, 'solution', 'timing_profile.yaml')
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return None
+
+
+def plot_relaxation_timing_profile(
+    tp_data: dict,
+    output_dir: str,
+    surface_name: str = '',
+    logger=None,
+) -> None:
+    """2×2 figure from a single Phase 1 solution/timing_profile.yaml.
+
+    Top-left  : stacked-bar absolute wall time by callback per level.
+    Top-right  : mean per-call wall time vs n_vertices (log-log) for hot callbacks.
+    Bottom-left: mean_projection_inner_iters vs n_vertices.
+    Bottom-right: mean_backtracks_per_iter per level.
+
+    Saved to <output_dir>/relaxation_timing_profile.png. Called automatically
+    by analyze_optimization_run() when solution/timing_profile.yaml exists.
+    """
+    if logger is None:
+        logger = get_logger(__name__)
+
+    levels = tp_data.get('levels', [])
+    if not levels:
+        logger.warning("timing_profile.yaml has no levels; skipping timing plots.")
+        return
+
+    n_levels = len(levels)
+    n_verts = [lv['n_vertices'] for lv in levels]
+    level_indices = list(range(n_levels))
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # ── [0,0] Stacked bar: absolute wall time by non-overlapping callback ──
+    ax = axes[0, 0]
+    bottom = np.zeros(n_levels)
+    drawn = []
+    for cb in _RELAX_TIMING_NON_OVERLAP:
+        vals = np.array([
+            lv['callbacks'].get(cb, {}).get('total_wall_s', 0.0)
+            for lv in levels
+        ])
+        if vals.sum() == 0:
+            continue
+        ax.bar(level_indices, vals, bottom=bottom,
+               color=_RELAX_TIMING_COLORS.get(cb, '#cccccc'),
+               label=cb, edgecolor='white', linewidth=0.5)
+        bottom += vals
+        drawn.append(cb)
+    overhead = np.array([lv['level_wall_s'] for lv in levels]) - bottom
+    ax.bar(level_indices, np.maximum(overhead, 0.0), bottom=bottom,
+           color=_RELAX_TIMING_COLORS['overhead'],
+           label='overhead', edgecolor='white', linewidth=0.5)
+    ax.set_xticks(level_indices)
+    ax.set_xticklabels(
+        [f"L{i}\n{lv['n_vertices'] // 1000}k" for i, lv in enumerate(levels)]
+    )
+    ax.set_xlabel('Level  (n_vertices)')
+    ax.set_ylabel('Wall time (s)')
+    ax.set_title('Cost breakdown per level')
+    ax.legend(loc='upper left', fontsize=7, ncol=2)
+    ax.grid(True, axis='y', alpha=0.3)
+    ax.text(0.99, 0.01, 'backtrack includes energy & projection',
+            transform=ax.transAxes, ha='right', va='bottom',
+            fontsize=6, color='gray', style='italic')
+
+    # ── [0,1] Mean per-call wall time vs n_vertices (log-log) ─────────────
+    ax = axes[0, 1]
+    hot = [
+        ('energy',          '#2ca02c', 'o'),
+        ('gradient',        '#ff7f0e', 's'),
+        ('projection',      '#d62728', '^'),
+        ('matrix_assembly', '#1f77b4', 'D'),
+        ('init_interpolate', '#ff7f0e', 'v'),
+    ]
+    for cb, color, marker in hot:
+        xs, ys = [], []
+        for lv in levels:
+            cb_data = lv['callbacks'].get(cb)
+            if cb_data and cb_data.get('invocation_count', 0) > 0:
+                xs.append(lv['n_vertices'])
+                ys.append(cb_data['mean_wall_s'])
+        if xs:
+            ax.plot(xs, ys, color=color, marker=marker,
+                    linewidth=1.5, markersize=6, label=cb)
+    if len(n_verts) > 1:
+        ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('n_vertices')
+    ax.set_ylabel('Mean wall time per call (s)')
+    ax.set_title('Per-call cost vs mesh size')
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, which='both')
+
+    # ── [1,0] Projection inner-iter count vs n_vertices ────────────────────
+    ax = axes[1, 0]
+    proj_inner = [lv.get('mean_projection_inner_iters', 0.0) for lv in levels]
+    ax.plot(n_verts, proj_inner, color='#d62728', marker='o',
+            linewidth=2, markersize=7)
+    if len(n_verts) > 1:
+        ax.set_xscale('log')
+    ax.set_xlabel('n_vertices')
+    ax.set_ylabel('Mean projection inner iters')
+    ax.set_title('Projection inner-iter count vs mesh size')
+    ax.grid(True, alpha=0.3)
+
+    # ── [1,1] Backtracks per major iter by level ───────────────────────────
+    ax = axes[1, 1]
+    bt = [lv.get('mean_backtracks_per_iter', 0.0) for lv in levels]
+    ax.bar(level_indices, bt, color='#9467bd',
+           edgecolor='white', linewidth=0.5)
+    ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7,
+               label='1.0 = first-try acceptance')
+    ax.set_xticks(level_indices)
+    ax.set_xticklabels([f"L{i}" for i in level_indices])
+    ax.set_xlabel('Level')
+    ax.set_ylabel('Mean trial steps per major iter')
+    ax.set_title('Armijo backtracking rate per level')
+    ax.legend(fontsize=8)
+    ax.grid(True, axis='y', alpha=0.3)
+
+    summary = tp_data.get('summary', {})
+    total = summary.get('total_wall_s', 0.0)
+    n_part = tp_data.get('run_metadata', {}).get('n_partitions', '')
+    suf = (f"{surface_name}, n_partitions={n_part}"
+           if surface_name else f"n_partitions={n_part}")
+    fig.suptitle(
+        f"Phase 1 Timing Profile — {suf}  (total {total:.1f} s)",
+        fontsize=12,
+    )
+    plt.tight_layout()
+
+    save_path = os.path.join(output_dir, 'relaxation_timing_profile.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved relaxation timing profile plot to: {save_path}")
+
+
 def _build_provider(surface_name, surface_params, v1_init, v2_init,
                     results_dir, logger):
     """Build a surface provider from metadata for mesh reconstruction.
@@ -1008,7 +1180,14 @@ def analyze_optimization_run(results_dir: str, output_dir: str = None):
         logger.warning("Energy component data not found in internal_data files. "
                       "Skipping energy components plot. (This plot is only available "
                       "for PGD runs with the updated optimizer.)")
-    
+
+    # Phase 1 timing profile — auto-detected, silently skipped when absent.
+    tp_data = load_relaxation_timing(results_dir)
+    if tp_data is not None:
+        plot_relaxation_timing_profile(
+            tp_data, output_dir, surface_name=surface_name, logger=logger
+        )
+
     logger.info(f"Analysis complete. Plots saved in: {output_dir}")
 
 def main():

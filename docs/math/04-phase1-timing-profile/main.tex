@@ -1,0 +1,354 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}
+\usepackage{graphicx}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 1 Timing Profile},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{%
+  \textbf{Phase~1 Relaxation (PGD) Timing Profile}\\[0.5em]
+  \large Where the $\Gamma$-Convergence Solver Spends Its Time, and What
+  That Implies for Scaling the Number of Regions
+}
+\author{}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document records empirical timing measurements collected by the
+\code{RelaxationProfilingState} instrumentation in
+\codefile{src/profiling.py} for Phase~1, the projected-gradient-descent
+(PGD) relaxation of the $\Gamma$-convergence energy.  Across a
+$3\times2$ sweep (penalty weight $\lambda \in \{1.9,2.0,2.1\}$, two
+random seeds) on a 30-region torus, a single callback ---
+\code{projection}, the orthogonal projection onto the partition and
+equal-area constraints --- consumes $86$--$88\% $ of wall time in
+\emph{every} run.  The total runtime varies by $4.3\times$
+($923$\,s to $3401$\,s) not because of mesh size but because of
+\emph{line-search thrashing}: in the slow regime the Armijo backtracking
+takes $\sim\!11$ trial steps per iteration, and because the solver
+re-projects on every trial step, the projection count explodes.  The
+practical conclusion for scaling up $N$ (the number of regions) is that
+projection cost, not FEM assembly, is the quantity to attack:
+re-projection on backtrack and the per-call inner-iteration count are the
+two levers.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Overview}
+% =========================================================================
+
+Phase~1 minimises the discrete $\Gamma$-convergence energy
+\cite{bogosel2023partitions}
+\begin{equation}
+  E_\varepsilon(u)
+  = \varepsilon\, u^{\!\top} K u
+  + \tfrac{1}{\varepsilon}\,\big(u^2(1-u)^2\big)^{\!\top} M \,\big(u^2(1-u)^2\big)
+  + \text{(penalty)}
+  \label{eq:energy}
+\end{equation}
+over nodal density functions, subject to a partition-of-unity constraint
+and an equal-area constraint, using projected gradient descent with an
+Armijo backtracking line search.  The solver runs once per mesh
+refinement level, warm-starting each level from the previous one by
+nearest-neighbour interpolation.
+
+Each major PGD iteration invokes a small set of operations, which become
+the canonical callback names used by the profiler:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{ll}
+\toprule
+\textbf{Callback} & \textbf{Operation} \\
+\midrule
+\code{matrix\_assembly} & FEM mass/stiffness assembly (once per level) \\
+\code{projection}       & orthogonal projection onto constraints (\emph{per trial step}) \\
+\code{energy}           & energy evaluation $E_\varepsilon(u)$ (per trial step) \\
+\code{gradient}         & energy gradient $\grad E_\varepsilon(u)$ (per iteration) \\
+\code{backtrack}        & the whole Armijo \texttt{while} loop (per iteration) \\
+\code{init\_interpolate} & inter-level nearest-neighbour interpolation \\
+\code{h5\_save}, \code{h5\_flush}, \code{trigger\_check} & I/O and plateau checks \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+This document reports only the \emph{measured cost} of these operations.
+
+% =========================================================================
+\section{Profiling Methodology}
+\label{sec:method}
+% =========================================================================
+
+The class \code{RelaxationProfilingState} (\codefile{src/profiling.py})
+accumulates wall-clock time and an invocation count per callback,
+\emph{per refinement level}, plus three counters
+(\code{major\_iterations}, \code{backtracks\_per\_iter\_total},
+\code{projection\_inner\_iters\_total}).  Results are written to
+\code{solution/timing\_profile.yaml} when \texttt{-{}-profile} is passed to
+\codefile{scripts/find\_surface\_partition.py}, or when
+\code{profile: true} is set in the experiment YAML (the mechanism used by
+the parameter sweep, which cannot inject CLI flags).  The instrumentation
+is zero-overhead when disabled: every hook is a single
+\code{if profile is not None} guard, verified to perturb per-level wall
+time by $<2\%$.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Nesting of callbacks (matters for accounting)},
+                  fontupper=\small]
+Two callbacks are recorded \emph{inside} another and must not be
+double-counted: \code{energy} and \code{projection} are timed inside
+\code{backtrack} (every trial step evaluates both), and
+\code{triangle\_areas} is timed inside \code{matrix\_assembly}.  The
+non-overlapping per-level sum (all callbacks except \code{energy},
+\code{projection}, \code{triangle\_areas}) closes to within
+$0.1$--$0.4\%$ of the measured level wall time on every level of every
+run below --- confirming the hooks capture essentially all wall time.
+\end{tcolorbox}
+
+% =========================================================================
+\section{Reference Sweep}
+\label{sec:ref-run}
+% =========================================================================
+
+All numbers come from the $3\times2$ grid sweep in
+Table~\ref{tab:reference-run}.  The mesh schedule is fixed across all
+runs; only the penalty weight $\lambda$ and the random seed vary.
+
+\begin{table}[H]
+\centering
+\caption{Reference sweep parameters.}
+\label{tab:reference-run}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Surface                & torus ($R=1$, $r=0.6$) \\
+Number of regions $N$  & 30 \\
+Refinement levels      & 3 \\
+Mesh vertices / level  & 2\,760 $\to$ 12\,688 $\to$ 29\,808 \\
+Penalty weight $\lambda$ & $\{1.9,\,2.0,\,2.1\}$ \\
+Seeds                  & $\{13131313,\,84172851\}$ \\
+Projection inner cap   & 200 iters, tol $10^{-10}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =========================================================================
+\section{Results}
+\label{sec:results}
+% =========================================================================
+
+Table~\ref{tab:summary} gives the aggregate per-run breakdown.  The
+\code{projection} share is remarkably stable at $86$--$88\%$ regardless
+of $\lambda$, seed, or total runtime.  The runtime itself, however,
+spans $4.3\times$, tracking \code{mean\_backtracks} and the resulting
+projection-call count almost perfectly.
+
+\begin{table}[H]
+\centering
+\caption{Aggregate timing per run. ``proj \%'' is projection share of
+total wall; \code{mBT} is mean backtrack trial steps per major iteration;
+\code{mPII} is mean projection inner iterations per call.  Percentages
+sum with the unshown callbacks (energy, gradient, backtrack-net,
+overhead) to $100\%$.}
+\label{tab:summary}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{llrrrrrr}
+\toprule
+$\lambda$ & seed & total (s) & proj \% & \code{mBT} & \code{mPII}
+  & proj calls & major iters \\
+\midrule
+1.9 & 13131313 & 3401 & 86.7 & 11.65 & 17.0 & 197\,381 & 16\,935 \\
+1.9 & 84172851 & 3008 & 86.5 & 11.14 & 17.4 & 172\,103 & 15\,444 \\
+2.0 & 13131313 & 1324 & 87.5 &  3.00 & 18.4 &  10\,902 &  3\,636 \\
+2.0 & 84172851 & 1014 & 86.1 &  2.91 & 17.4 &  11\,032 &  3\,787 \\
+2.1 & 13131313 & 3099 & 85.9 &  9.92 & 15.3 & 188\,609 & 19\,018 \\
+2.1 & 84172851 &  923 & 85.9 &  3.35 & 16.2 &  11\,267 &  3\,359 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:thrash} shows the per-level breakdown of a slow
+(``thrashing'') run and Figure~\ref{fig:healthy} a fast (``healthy'')
+run.  The contrast is the whole story: in the thrashing run the
+\emph{coarsest} level~0 (2\,760 vertices) consumes $\sim\!75\%$ of total
+time because the line search averages $\sim\!12$ trial steps per
+iteration (bottom-right panel) and grinds $15\,590$ iterations; in the
+healthy run the line search behaves ($\sim\!3$ trials/iter) and cost
+falls on the finest level, as one would expect.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/profile_lam1p9_thrash.png}
+\caption{\textbf{Thrashing regime} ($\lambda=1.9$, seed 13131313, total
+$3401$\,s).  Top-left: level~0 dominates wall time.  Bottom-right: the
+Armijo line search averages $\sim\!12$ trial steps per major iteration on
+level~0 (dashed line marks first-try acceptance).  Each trial step
+triggers a full projection, so projection-call count --- and thus runtime
+--- explodes.}
+\label{fig:thrash}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/profile_lam2p0_healthy.png}
+\caption{\textbf{Healthy regime} ($\lambda=2.0$, seed 13131313, total
+$1324$\,s).  Backtracking stays near $3$ trials/iter at all levels, so
+cost falls on the finest level (top-left) as expected for a mesh-bound
+solver.  Projection is still $87.5\%$ of wall time --- it is the
+bottleneck in \emph{both} regimes.}
+\label{fig:healthy}
+\end{figure}
+
+% =========================================================================
+\section{Analysis: the Projection Bottleneck}
+\label{sec:bottleneck}
+% =========================================================================
+
+Two facts together explain every run:
+
+\paragraph{1. Projection is the dominant per-operation cost.}
+Each \code{projection} call runs an iterative alternating projection
+(Dykstra-style) whose inner-iteration count (\code{mPII} in
+Table~\ref{tab:summary}) is $15$--$20$ and grows mildly with mesh size.
+Crucially, \code{mPII} is far below the cap of $200$: projection is
+\emph{not} hitting its iteration limit.  The cost is therefore driven by
+the \emph{number} of projection calls, not by any single call stalling.
+
+\paragraph{2. The line search multiplies the projection count.}
+The PGD step is
+\begin{equation}
+  u^{+} = \Pi_{\mathcal{C}}\!\big(u - s\,\grad E_\varepsilon(u)\big),
+  \label{eq:pgd-step}
+\end{equation}
+and the projection $\Pi_{\mathcal{C}}$ is re-evaluated for \emph{every}
+trial step size $s$ during Armijo backtracking.  Hence
+\begin{equation}
+  \#\,\text{projection calls}
+  \;\approx\;
+  (\text{major iters}) \times \big(\code{mBT} + 1\big).
+  \label{eq:proj-count}
+\end{equation}
+In the thrashing regime $\code{mBT}\approx 11$, so $\sim\!90\%$ of all
+projections are spent on \emph{rejected} trial steps.  This is why the
+$\lambda=1.9$ run issues $197\,381$ projection calls versus $10\,902$ for
+$\lambda=2.0$ --- an $18\times$ difference that maps directly onto the
+$2.6\times$ runtime difference (the thrashing calls are cheaper because
+they sit on the coarse level~0).
+
+\begin{remark}[$\lambda$ is not the control variable; the interaction is]
+Total wall time is V-shaped in $\lambda$ with a minimum at
+$\lambda=2.0$ (Figure~\ref{fig:lambda}), but the effect is not monotone
+and is strongly seed-dependent: $\lambda=2.1$ thrashes for seed
+13131313 yet is the fastest run for seed 84172851.  Whether the line
+search thrashes is a property of the $(\lambda,\text{init})$ pair, not of
+$\lambda$ alone.  Only $\lambda=2.0$ was well-behaved for both seeds.
+\end{remark}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.80\textwidth]{figures/line_total_wall_vs_lambda.png}
+\caption{Total wall time versus $\lambda$ (left panel; error bars span
+the two seeds).  The minimum at $\lambda=2.0$ and the large spread at
+$\lambda=2.1$ reflect line-search thrashing, not algorithmic work that
+$\lambda$ legitimately adds.}
+\label{fig:lambda}
+\end{figure}
+
+\paragraph{What is \emph{not} a bottleneck.}
+FEM \code{matrix\_assembly} is $0.2$--$0.9\%$ of wall time at these
+mesh sizes; energy, gradient, interpolation and I/O are each a few
+percent or less.  The Python-loop assembly that document
+\codefile{02-phase2-timing-profile} anticipates as a future hot spot does
+not bite until $10^5$--$10^6$ vertices, well beyond the $30$k reached
+here.
+
+% =========================================================================
+\section{Scaling Outlook: Increasing the Number of Regions}
+\label{sec:scaling}
+% =========================================================================
+
+The motivating question is how Phase~1 cost behaves as the number of
+regions $N$ grows.  The projection operates on the $V\times N$ density
+matrix ($V$ = vertices), so a single projection call costs
+$\mathcal{O}(\code{mPII}\cdot V N)$, and total Phase~1 cost is
+\begin{equation}
+  T_{\text{phase 1}}
+  \;\sim\;
+  \underbrace{(\text{major iters})\,(\code{mBT}+1)}_{\text{\# projections}}
+  \;\times\;
+  \underbrace{\code{mPII}\cdot V N}_{\text{cost per projection}}.
+  \label{eq:scaling}
+\end{equation}
+Every factor except $V$ is tied to the projection, which gives a clear
+priority order for scaling up $N$:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Eliminate re-projection on rejected steps.}  Equation
+        \eqref{eq:proj-count} shows the $(\code{mBT}+1)$ factor is pure
+        waste in the thrashing regime.  Caching/reusing the projection
+        across backtrack trials, or a step-size rule that does not thrash
+        (e.g.\ Barzilai--Borwein or an adaptive \code{step0}), removes the
+        single largest source of variance and the bulk of the slow-run
+        cost.  Highest expected payoff.
+  \item \textbf{Warm-start the projection.}  \code{mPII}$=15$--$20$ inner
+        iterations per call could be cut by warm-starting
+        $\Pi_{\mathcal{C}}$ from the previous accepted iterate's
+        multipliers, since consecutive iterates are close.
+  \item \textbf{Watch the $N$ factor directly.}  Cost per projection is
+        linear in $N$, so doubling regions roughly doubles per-call cost
+        \emph{at fixed mesh}.  Combined with the fact that more regions
+        typically need finer meshes (larger $V$) to resolve interfaces,
+        the $VN$ product is the term that will dominate at large $N$ ---
+        making items~1 and~2 more, not less, important as $N$ grows.
+  \item \textbf{FEM assembly is a later concern.}  Vectorising
+        \code{matrix\_assembly} matters only once $V$ reaches
+        $10^5$--$10^6$; it is irrelevant at the current scale.
+\end{enumerate}
+
+% =========================================================================
+\section*{Summary table}
+% =========================================================================
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{p{3.4cm}p{4.6cm}p{4.6cm}}
+\toprule
+\textbf{Callback} & \textbf{Current cost (this sweep)} &
+  \textbf{Implication for scaling $N$} \\
+\midrule
+\code{projection}
+  & $86$--$88\%$ of wall, all regimes; cost $\propto \code{mPII}\cdot VN$
+  & Primary target: cache across backtracks; warm-start inner solve \\
+\code{backtrack} (line search)
+  & multiplies projection count by \code{mBT}$+1$ ($3$ to $12$)
+  & Non-thrashing step rule removes $\sim\!90\%$ of slow-run projections \\
+\code{energy}, \code{gradient}
+  & $\sim\!5$--$9\%$ and $\sim\!3$--$5\%$
+  & Minor; vectorise per-region matvec loop if needed \\
+\code{matrix\_assembly}
+  & $<1\%$ at $\le 30$k vertices
+  & Only matters at $10^5$--$10^6$ vertices \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}

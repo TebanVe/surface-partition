@@ -1,0 +1,70 @@
+# Experiment: 30-partition torus of revolution
+# This file defines a complete experiment configuration for both phases.
+
+experiment:
+  name: torus-30-partitions
+  surface: torus                      # "torus", "ellipsoid", "double_torus", "banchoff_chmutov"
+
+# Phase 1: Γ-convergence relaxation via Projected Gradient Descent
+relaxation:
+  n_partitions: 30
+  lambda_penalty: 3.25
+  seed: 13001502
+  max_iter: 30000
+  refinement_levels: 3                # number of multi-level mesh refinement steps
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  # PGD step-size control
+  pgd_step0: 1.0                      # initial step size
+  pgd_armijo_c: 0.0001                # Armijo sufficient-decrease constant
+  pgd_backtrack_rho: 0.5              # step-size reduction factor per backtrack
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  # Multi-level refinement triggers (when to move to the next mesh level)
+  enable_refinement_triggers: true
+  refine_trigger_mode: full           # "full" (energy+gradient+feasibility) or "energy"
+  refine_patience: 30                 # iterations without improvement before triggering
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  # PGD penalty controls
+  penalty_target_mode: fixed          # "fixed" (paper default) or "adaptive"
+  penalty_eps: 1.0e-8
+
+  # Trace / logging controls
+  run_log_frequency: 200              # log to console every N iterations
+  h5_save_stride: 200                  # save every N-th iterate to HDF5 trace
+  h5_save_vars: ["x"]                 # variables to store: "x", "constraints"
+  h5_always_save_first_last: true
+  profile: true                       # write solution/timing_profile.yaml per run
+
+# Surface geometry (keyed by surface name)
+surface:
+  torus:
+    n_theta: 90                       # samples along major circle (base level)
+    n_phi: 76                         # samples along minor (tube) circle (base level)
+    R: 1.0                            # major radius
+    r: 0.6                            # minor (tube) radius
+    n_theta_increment: 62             # added per refinement level
+    n_phi_increment: 58               # added per refinement level
+
+# Phase 2: iterative perimeter refinement
+refinement:
+  method: ipopt                       # "ipopt", "SLSQP", or "trust-constr"
+  max_iterations: 8                  # topology iteration cycles (optimize → migrate)
+  max_opt_iter: 300                  # optimizer iterations per topology
+  tolerance: 1.0e-7                    # optimizer convergence tolerance
+  boundary_tol: 0.001                 # λ threshold triggering Type 1 migration
+  lbfgs_memory: 30                    # L-BFGS history size (ipopt only; default 6, try 20-50)
+  exact_hessian: true                # true: analytical Hessian; false: L-BFGS approx (ipopt only)
+  best_iterate: true                 # track best feasible iterate (ipopt only)
+  allow_partial_convergence: true     # continue to migration even if optimizer hits max_opt_iter
+  save_iterations: true              # true: checkpoint after every topology iteration
+  distance_preservation: preserve     # "preserve", "midpoint", or a float 0.0-1.0

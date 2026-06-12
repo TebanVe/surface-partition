@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Timing analyzer for Phase 2 perimeter refinement profiling data.
+Timing analyzer for profiling data (Phase 2 by default, Phase 1 via --phase).
 
 Reads experiment_index.yaml and produces scaling figures from
-timing_profile.yaml data collected by --profile runs.
+timing_profile.yaml data collected by --profile runs. The default
+(--phase refinement) renders the Phase 2 IPOPT callback figures;
+--phase relaxation renders the Phase 1 PGD wall-time breakdown.
 
 Usage:
     python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/
     python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ \
         --campaign ipopt_btol0.001_lbfgs30_hess
+    python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ \
+        --phase relaxation
 """
 
 import argparse
@@ -41,6 +45,19 @@ CB_COLORS = {
     'objective':   '#1f77b4',
     'constraints': '#9467bd',
     'overhead':    '#8c564b',
+}
+
+# Phase 1 (relaxation) per-callback colours for the breakdown plot.
+RELAX_CB_COLORS = {
+    'matrix_assembly': '#1f77b4',
+    'projection':      '#d62728',
+    'energy':          '#2ca02c',
+    'gradient':        '#ff7f0e',
+    'backtrack':       '#9467bd',
+    'h5_save':         '#8c564b',
+    'h5_flush':        '#e377c2',
+    'trigger_check':   '#7f7f7f',
+    'overhead':        '#bcbd22',
 }
 
 
@@ -293,9 +310,79 @@ def plot_ipopt_iters_vs_ncells(runs: list, out_dir: str):
     logger.info(f"Saved: {path}")
 
 
+def _load_runs_with_relax_timing(experiment_dir: str) -> list:
+    """Return run-entry dicts that carry Phase 1 relax_timing_* fields."""
+    index_path = os.path.join(experiment_dir, "experiment_index.yaml")
+    if not os.path.isfile(index_path):
+        logger.error(f"No experiment_index.yaml found in {experiment_dir}")
+        return []
+    index = _load_yaml(index_path)
+    runs = [r for r in index.get("runs", [])
+            if r.get("relax_timing_total_wall_s") is not None]
+    if not runs:
+        logger.warning("No runs with Phase 1 timing data found. "
+                       "Re-run relaxation with --profile and then --mode collect.")
+    return runs
+
+
+def plot_relaxation_breakdown_vs_nvertices(runs: list, out_dir: str):
+    """Stacked-area plot: per-callback wall fraction vs n_vertices.
+
+    Uses the aggregate relax_timing_*_pct_wall summary fields, with
+    n_vertices read from the first level of relax_timing_levels.
+    TODO: a fuller Phase 1 scaling-figure suite (per-level curves, absolute
+    wall vs n_vertices, projection-inner-iter scaling) is sketched in
+    docs/plans/PHASE1_RELAXATION_TIMING_PROFILE.md §4.9 / §8.
+    """
+    cbs = ('matrix_assembly', 'projection', 'energy', 'gradient',
+           'backtrack', 'h5_save', 'h5_flush', 'trigger_check')
+    points = []
+    for run in runs:
+        levels = run.get("relax_timing_levels") or []
+        if not levels:
+            continue
+        nv = levels[0].get("n_vertices")
+        if nv is None:
+            continue
+        fracs = {cb: (run.get(f"relax_timing_{cb}_pct_wall") or 0.0) for cb in cbs}
+        fracs['overhead'] = max(0.0, 100.0 - sum(fracs.values()))
+        points.append((nv, fracs))
+
+    if not points:
+        logger.warning("No Phase 1 runs with per-level n_vertices; skipping plot.")
+        return
+
+    points.sort(key=lambda p: p[0])
+    xs = [p[0] for p in points]
+    series = list(cbs) + ['overhead']
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_title('Phase 1 Wall-Time Breakdown vs Number of Vertices', fontsize=13)
+    bottom = np.zeros(len(xs))
+    for cb in series:
+        vals = np.array([p[1][cb] for p in points])
+        ax.fill_between(xs, bottom, bottom + vals,
+                        color=RELAX_CB_COLORS.get(cb, '#333333'),
+                        label=cb, alpha=0.85)
+        bottom += vals
+
+    ax.set_xlabel('n_vertices (level 0)')
+    ax.set_ylabel('% of total wall time')
+    ax.set_ylim(0, 100)
+    if len(set(xs)) > 1:
+        ax.set_xscale('log')
+    ax.legend(loc='upper right', fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+
+    path = os.path.join(out_dir, 'relaxation_breakdown_vs_nvertices.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved: {path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Timing analysis for Phase 2 profiling data',
+        description='Timing analysis for profiling data (Phase 2; Phase 1 via --phase)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
@@ -308,6 +395,10 @@ Example usage:
                         help='Experiment directory containing experiment_index.yaml')
     parser.add_argument('--campaign', default=None,
                         help='Campaign name to select (default: first with timing data)')
+    parser.add_argument('--phase', default='refinement',
+                        choices=['refinement', 'relaxation'],
+                        help='Which phase to analyze (default: refinement). '
+                             '"relaxation" reads Phase 1 relax_timing_* fields.')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory for figures '
                              '(default: {experiment_dir}/analysis/timing/)')
@@ -328,6 +419,16 @@ Example usage:
 
     out_dir = args.output_dir or os.path.join(experiment_dir, "analysis", "timing")
     os.makedirs(out_dir, exist_ok=True)
+
+    if args.phase == 'relaxation':
+        runs = _load_runs_with_relax_timing(experiment_dir)
+        if not runs:
+            logger.warning("No runs with Phase 1 timing data. Exiting.")
+            return 0
+        logger.info(f"Loaded {len(runs)} run(s) with Phase 1 timing data")
+        plot_relaxation_breakdown_vs_nvertices(runs, out_dir)
+        logger.info(f"All figures written to: {out_dir}")
+        return 0
 
     runs = _load_runs_with_timing(experiment_dir, campaign=args.campaign)
     if not runs:

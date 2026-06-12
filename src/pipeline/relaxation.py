@@ -72,6 +72,7 @@ class RelaxationConfig:
     enable_refinement_triggers: bool = True
     penalty_target_mode: str = 'fixed'
     penalty_eps: float = 1e-8
+    profile: bool = False
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -187,6 +188,12 @@ def run_relaxation(provider, config: RelaxationConfig,
     )
     root_logger.addHandler(file_handler)
 
+    prof = None
+    if config.profile:
+        from ..profiling import RelaxationProfilingState
+        prof = RelaxationProfilingState(n_partitions=config.n_partitions)
+    t_run_start = time.time()
+
     try:
         results = []
         levels_meta = []
@@ -223,16 +230,28 @@ def run_relaxation(provider, config: RelaxationConfig,
             )
             logger.info("=" * 80)
 
-            level_ctx = _setup_level(provider, config, level, logger)
+            if prof is not None:
+                prof.start_level(level)
+
+            level_ctx = _setup_level(provider, config, level, logger, profile=prof)
             mesh = level_ctx['mesh']
 
+            if prof is not None:
+                prof.set_level_mesh_stats(
+                    n_vertices=int(mesh.vertices.shape[0]),
+                    n_triangles=int(mesh.faces.shape[0]),
+                    nnz_K=int(mesh.K.nnz),
+                    nnz_M=int(mesh.M.nnz),
+                    epsilon=float(level_ctx['epsilon']),
+                )
+
             x0 = _create_initial_condition(
-                mesh, config, level, prev_vertices, prev_x_opt
+                mesh, config, level, prev_vertices, prev_x_opt, profile=prof
             )
 
             level_result = _optimize_level(
                 level_ctx['optimizer'], config, x0, level,
-                provider, traces_dir, logger
+                provider, traces_dir, logger, profile=prof
             )
             level_result['epsilon'] = level_ctx['epsilon']
 
@@ -259,6 +278,9 @@ def run_relaxation(provider, config: RelaxationConfig,
             logger.info(f"  Time: {level_result['elapsed']:.2f}s")
             logger.info(f"  Success: {level_result['success']}")
 
+            if prof is not None:
+                prof.finalize_level()
+
             prev_vertices = mesh.vertices.copy()
             prev_x_opt = level_result['x_opt'].copy()
 
@@ -271,6 +293,11 @@ def run_relaxation(provider, config: RelaxationConfig,
                 del level_ctx['optimizer']
                 del mesh
                 gc.collect()
+
+        if prof is not None:
+            prof.total_wall_s = time.time() - t_run_start
+            prof.finalize()
+            _write_timing_profile(prof, solution_dir, provider, config, logger)
 
         final = results[-1]
         solution_path = _save_solution(
@@ -417,7 +444,7 @@ def _load_warm_start(solution_path: str) -> dict:
         }
 
 
-def _setup_level(provider, config, level, logger) -> dict:
+def _setup_level(provider, config, level, logger, profile=None) -> dict:
     """Build mesh and PGD optimizer for one refinement level."""
     n1, n2 = provider.get_initial_resolution()
     dn1, dn2 = provider.get_resolution_increment()
@@ -425,8 +452,12 @@ def _setup_level(provider, config, level, logger) -> dict:
     n2 = n2 + level * dn2
     provider.set_resolution(n1, n2)
 
+    if profile is not None:
+        _t_mb = time.perf_counter()
     mesh = provider.build()
-    mesh.compute_matrices()
+    if profile is not None:
+        profile.record('mesh_build', time.perf_counter() - _t_mb)
+    mesh.compute_matrices(_prof=profile)
     stats = mesh.get_mesh_statistics()
     epsilon = (np.sqrt(stats['mean_triangle_area'])
                if stats['mean_triangle_area'] > 0 else 1e-2)
@@ -469,30 +500,35 @@ def _setup_level(provider, config, level, logger) -> dict:
 
 
 def _create_initial_condition(mesh, config, level,
-                              prev_vertices, prev_x_opt) -> np.ndarray:
+                              prev_vertices, prev_x_opt, profile=None) -> np.ndarray:
     """Create initial condition (random when no prior solution, interpolated otherwise)."""
     N = len(mesh.v)
     if prev_vertices is None:
-        return create_initial_condition_with_projection(
+        if profile is not None:
+            _t_ic = time.perf_counter()
+        x0 = create_initial_condition_with_projection(
             N, config.n_partitions, mesh.v,
-            seed=config.seed, method="iterative"
+            seed=config.seed, method="iterative", _prof=profile
         )
+        if profile is not None:
+            profile.record('init_condition', time.perf_counter() - _t_ic)
+        return x0
 
     x0 = nearest_neighbor_interpolate(
-        prev_vertices, mesh.vertices, prev_x_opt, config.n_partitions
+        prev_vertices, mesh.vertices, prev_x_opt, config.n_partitions, _prof=profile
     )
     A = x0.reshape(N, config.n_partitions)
     area_targets = (np.sum(mesh.v) / config.n_partitions
                     * np.ones(config.n_partitions))
     A = orthogonal_projection_iterative(
         A, np.ones(config.n_partitions), area_targets,
-        mesh.v, max_iter=100, tol=1e-8
+        mesh.v, max_iter=100, tol=1e-8, _prof=profile
     )
     return A.flatten()
 
 
 def _optimize_level(optimizer, config, x0, level,
-                    provider, traces_dir, logger) -> dict:
+                    provider, traces_dir, logger, profile=None) -> dict:
     """Run PGD optimizer for one level. Handles RefinementTriggered."""
     label1, label2 = provider.resolution_labels()
     n1, n2 = provider.get_resolution()
@@ -523,6 +559,7 @@ def _optimize_level(optimizer, config, x0, level,
             refine_feas_patience=int(config.refine_feas_patience),
             refine_feas_delta=float(config.refine_feas_delta),
             enable_refinement_triggers=bool(config.enable_refinement_triggers),
+            profile=profile,
         )
     except RefinementTriggered:
         logger.info(f"Refinement triggered early at level {level+1}")
@@ -549,6 +586,19 @@ def _optimize_level(optimizer, config, x0, level,
             ),
         },
     }
+
+
+def _write_timing_profile(prof, solution_dir, provider, config, logger):
+    """Write the per-run Phase 1 timing_profile.yaml into the solution dir."""
+    tp_path = os.path.join(solution_dir, 'timing_profile.yaml')
+    data = prof.to_yaml_dict(
+        surface=provider.surface_name(),
+        n_partitions=config.n_partitions,
+        refinement_levels=config.refinement_levels,
+    )
+    with open(tp_path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    logger.info(f"Timing profile written to: {tp_path}")
 
 
 def _save_solution(mesh, x_opt, x0, config, provider,

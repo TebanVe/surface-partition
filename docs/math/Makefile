@@ -1,4 +1,4 @@
-DOCS = 01-phase2-derivatives 02-phase2-timing-profile 03-analytical-steiner-derivatives
+DOCS = 01-phase2-derivatives 02-phase2-timing-profile 03-analytical-steiner-derivatives 04-phase1-timing-profile
 
 all: $(DOCS)
 

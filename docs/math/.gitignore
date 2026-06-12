@@ -24,3 +24,7 @@
 # broad *.pdf rule; without this exception new doc subdirs' main.pdf
 # would be silently ignored).
 !main.pdf
+
+# Re-include document figures (the repo-root .gitignore has a broad *.png
+# rule; doc figures/ images are sources the PDF needs to build).
+!**/figures/*.png

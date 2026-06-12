@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import scipy.sparse as sparse
 from typing import Tuple, Dict, List
@@ -33,7 +35,9 @@ class TriMesh:
 			self._compute_triangle_areas()
 		return self._triangle_areas
 
-	def _compute_triangle_areas(self):
+	def _compute_triangle_areas(self, _prof=None):
+		if _prof is not None:
+			t0 = time.perf_counter()
 		v = self.vertices
 		areas = []
 		if self.dim == 2:
@@ -49,13 +53,17 @@ class TriMesh:
 				areas.append(area)
 		self._triangle_areas = np.asarray(areas)
 		self._mean_triangle_area = float(np.mean(self._triangle_areas)) if len(areas) else 0.0
+		if _prof is not None:
+			_prof.record('triangle_areas', time.perf_counter() - t0)
 
 	@log_performance("matrix computation")
-	def compute_matrices(self) -> Tuple[sparse.csr_matrix, sparse.csr_matrix]:
+	def compute_matrices(self, _prof=None) -> Tuple[sparse.csr_matrix, sparse.csr_matrix]:
 		"""
 		Assemble mass (M) and stiffness (K) matrices for P1 elements on triangles.
 		Formulas applied in the triangle's plane; valid for R2 or R3 surfaces.
 		"""
+		if _prof is not None:
+			t0 = time.perf_counter()
 		v = self.vertices
 		f = self.faces
 		T = f.shape[0]
@@ -65,7 +73,7 @@ class TriMesh:
 
 		# Precompute triangle areas and normals (for 3D)
 		if self._triangle_areas is None:
-			self._compute_triangle_areas()
+			self._compute_triangle_areas(_prof=_prof)
 
 		for t in range(T):
 			i, j, k = f[t]
@@ -120,6 +128,8 @@ class TriMesh:
 		self.mass_matrix = M.tocsr()
 		self.stiffness_matrix = K.tocsr()
 		self.logger.info(f"Matrix computation completed: M {self.mass_matrix.shape}, K {self.stiffness_matrix.shape}")
+		if _prof is not None:
+			_prof.record('matrix_assembly', time.perf_counter() - t0)
 		return self.mass_matrix, self.stiffness_matrix
 
 	@property
