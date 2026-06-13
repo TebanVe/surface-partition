@@ -140,6 +140,20 @@ def main():
     print(f"\nSurface partition optimization complete.")
     print(f"Results saved in: {result.output_dir}")
 
+    dc = result.dormant_cells or {}
+    if dc.get('dead') or dc.get('weak'):
+        print("\n" + "=" * 70)
+        print("⚠️  WARNING: DORMANT CELLS DETECTED")
+        print(f"   This is NOT a valid {result.n_partitions}-region partition, even though")
+        print("   it is a consistent continuous solution (equal areas satisfied).")
+        if dc.get('dead'):
+            print(f"   Dead cells (vanished): {dc['dead']}  ->  "
+                  f"{dc['n_effective']}/{dc['n_cells']} effective regions")
+        if dc.get('weak'):
+            print(f"   Weak cells (peak density < {dc['weak_threshold']}): {dc['weak']}")
+        print("   Increase the initial mesh resolution (n_theta/n_phi) and re-run.")
+        print("=" * 70)
+
     return 0
 
 

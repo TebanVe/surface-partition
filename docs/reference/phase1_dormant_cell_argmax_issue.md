@@ -201,12 +201,18 @@ given seed and configuration ends up in a dormant-cell minimum.
 
 These are options, not recommendations. Choice between them is open.
 
-1. **Detection-only safeguard.** Add a `max(u_k) < threshold` check inside
-   `ContourAnalyzer.compute_indicator_functions` (or at the end of
-   `run_relaxation`). Surface the result as a warning, a hard error
-   (`--strict`), or a metadata field (`dormant_cells: [13, 26]`). This
-   makes the issue visible and prevents silent N→N−k partitions but does
-   not fix the optimizer outcome.
+1. **Detection-only safeguard.** ✅ **Implemented.**
+   `detect_dormant_cells()` in `src/partition/find_contours.py` classifies
+   each cell as *dead* (zero argmax wins) or *weak* (peak density below the
+   `WEAK_CELL_DENSITY_THRESHOLD = 0.5` argmax/contour level).
+   `run_relaxation` calls it on the final solution and, via
+   `_warn_if_dormant_cells`, logs a prominent warning (to console and
+   `logs/relaxation.log`) pointing the user at the initial mesh resolution;
+   `scripts/find_surface_partition.py` also prints a screen banner. The full
+   result is persisted as the `dormant_cells` block in
+   `solution/metadata.yaml`. This makes the issue visible and prevents silent
+   N→N−k partitions but does not fix the optimizer outcome — it remains
+   orthogonal to (2)–(4) below, which address the root cause.
 
 2. **Higher-resolution level 1.** Increase `nt` and `np` so each cell has
    enough vertices for early competition. As a rule of thumb, target
@@ -225,8 +231,9 @@ These are options, not recommendations. Choice between them is open.
    keeps the cheap initialisation but adds recovery. Most complex of the
    three; requires careful interaction with the level-transition logic.
 
-(1) is orthogonal to (2)–(4) and probably worth doing regardless of which
-of the others is chosen, since it converts a silent failure into a loud one.
+(1) has been implemented (it converts a silent failure into a loud one) and
+is orthogonal to (2)–(4); one of the root-cause options (2)–(4) is still
+needed to actually produce valid N-region partitions at higher N.
 
 ## Open Questions
 
