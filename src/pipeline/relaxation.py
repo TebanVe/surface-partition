@@ -26,7 +26,7 @@ from ..optimization.projection import (
     orthogonal_projection_iterative,
     create_initial_condition_with_projection,
 )
-from ..partition.find_contours import ContourAnalyzer
+from ..partition.find_contours import ContourAnalyzer, detect_dormant_cells
 from ..partition.contour_partition import PartitionContour
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
 
@@ -114,6 +114,7 @@ class RelaxationResult:
     lambda_penalty: float
     levels: list
     metadata: dict
+    dormant_cells: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable summary for the AI agent layer."""
@@ -300,6 +301,11 @@ def run_relaxation(provider, config: RelaxationConfig,
             _write_timing_profile(prof, solution_dir, provider, config, logger)
 
         final = results[-1]
+
+        dormant = detect_dormant_cells(
+            final['x_opt'].reshape(mesh.vertices.shape[0], config.n_partitions)
+        )
+
         solution_path = _save_solution(
             mesh, final['x_opt'], x0, config, provider,
             levels_meta, timestamp, solution_dir
@@ -312,7 +318,7 @@ def run_relaxation(provider, config: RelaxationConfig,
         metadata = _collect_metadata(
             config, provider, results, levels_meta, mesh,
             timestamp, solution_path, logfile_path, initial_perimeter,
-            warm_start_path=warm_start_path,
+            warm_start_path=warm_start_path, dormant_cells=dormant,
         )
 
         with open(os.path.join(solution_dir, 'metadata.yaml'), 'w') as f:
@@ -342,6 +348,8 @@ def run_relaxation(provider, config: RelaxationConfig,
         else:
             logger.info("Initial perimeter: could not be computed")
 
+        _warn_if_dormant_cells(dormant, levels_meta, config, logger)
+
         overall_success = all(r['success'] for r in results)
         total_elapsed = sum(r['elapsed'] for r in results)
 
@@ -360,6 +368,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             lambda_penalty=config.lambda_penalty,
             levels=results,
             metadata=metadata,
+            dormant_cells=dormant,
         )
 
     finally:
@@ -642,10 +651,57 @@ def _save_solution(mesh, x_opt, x0, config, provider,
     return solution_path
 
 
+def _warn_if_dormant_cells(dormant, levels_meta, config, logger) -> None:
+    """Log a prominent warning when the partition has dormant cells.
+
+    A dormant solution satisfies the equal-area and sum-to-one constraints but
+    loses regions under winner-take-all, so it is not a usable N-region
+    partition. The root cause is an under-resolved coarsest mesh, so the
+    warning points the user at the initial mesh resolution.
+    """
+    dead = dormant.get('dead', [])
+    weak = dormant.get('weak', [])
+    if not dead and not weak:
+        return
+
+    coarsest_N = int(levels_meta[0].get('N', 0)) if levels_meta else 0
+    per_cell = (coarsest_N / config.n_partitions) if config.n_partitions else 0.0
+
+    logger.warning("=" * 80)
+    logger.warning(
+        f"DORMANT CELLS DETECTED - this is NOT a valid {config.n_partitions}-region "
+        f"partition."
+    )
+    logger.warning(
+        "The solution is a consistent continuous minimizer (equal areas and "
+        "sum-to-one are satisfied), but some density columns never win the "
+        "per-vertex argmax, so the discrete partition is missing regions."
+    )
+    if dead:
+        logger.warning(
+            f"  Dead cells (0 winning vertices): {dead}  ->  effective regions: "
+            f"{dormant.get('n_effective')}/{dormant.get('n_cells')}"
+        )
+    if weak:
+        logger.warning(
+            f"  Weak cells (peak density < {dormant.get('weak_threshold')}): {weak}"
+        )
+    logger.warning(
+        f"Likely cause: coarsest-level mesh too sparse (level 1 had {coarsest_N} "
+        f"vertices = {per_cell:.0f}/cell; guideline >= ~400/cell)."
+    )
+    logger.warning(
+        "Fix: increase the initial mesh resolution (n_theta/n_phi) or "
+        "refinement_levels, then re-run."
+    )
+    logger.warning("=" * 80)
+
+
 def _collect_metadata(config, provider, results, levels_meta, mesh,
                       timestamp, solution_path, logfile_path,
                       initial_perimeter,
-                      warm_start_path: Optional[str] = None) -> dict:
+                      warm_start_path: Optional[str] = None,
+                      dormant_cells: Optional[dict] = None) -> dict:
     """Assemble comprehensive metadata dictionary."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
@@ -723,5 +779,6 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
             os.path.abspath(warm_start_path)
             if warm_start_path is not None else None
         ),
+        'dormant_cells': dormant_cells,
     }
     return meta

@@ -8,6 +8,52 @@ from dataclasses import dataclass
 from ..logging_config import get_logger
 
 
+# A cell whose peak density never reaches the 0.5 argmax/contour level is
+# "weak": it barely wins (or loses) every vertex. 0.5 is the partition's
+# defining level (winner-take-all / 0.5 level-set), not a tunable parameter.
+WEAK_CELL_DENSITY_THRESHOLD = 0.5
+
+
+def detect_dormant_cells(densities: np.ndarray,
+                         weak_threshold: float = WEAK_CELL_DENSITY_THRESHOLD) -> dict:
+    """Identify cells that vanish or nearly vanish under winner-take-all.
+
+    A relaxation solution can satisfy the equal-area and sum-to-one constraints
+    exactly while some density column never (or barely) wins the per-vertex
+    argmax: the cell carries its target area diffusely and is everywhere
+    second place. Such a solution is a consistent continuous minimizer but not
+    a usable N-region partition (the discrete partition is missing regions).
+
+    Args:
+        densities: (V, n) density matrix (rows approximately sum to 1).
+        weak_threshold: a cell is "weak" if its peak density never reaches this
+            level (the argmax/contour level that defines region interiors).
+
+    Returns:
+        dict with keys: wins_per_cell, max_density_per_cell, dead (cells with
+        zero argmax wins), weak (cells with peak density < weak_threshold),
+        n_cells, n_effective (n_cells - len(dead)), weak_threshold.
+    """
+    phi = np.asarray(densities)
+    if phi.ndim != 2:
+        raise ValueError(f"densities must be 2-D (V, n); got shape {phi.shape}")
+    n_cells = int(phi.shape[1])
+    winners = np.argmax(phi, axis=1)
+    wins = np.bincount(winners, minlength=n_cells)
+    max_density = phi.max(axis=0)
+    dead = [k for k in range(n_cells) if wins[k] == 0]
+    weak = [k for k in range(n_cells) if max_density[k] < weak_threshold]
+    return {
+        'wins_per_cell': [int(w) for w in wins],
+        'max_density_per_cell': [float(m) for m in max_density],
+        'dead': dead,
+        'weak': weak,
+        'n_cells': n_cells,
+        'n_effective': n_cells - len(dead),
+        'weak_threshold': float(weak_threshold),
+    }
+
+
 @dataclass
 class BoundaryTriangleInfo:
     """
