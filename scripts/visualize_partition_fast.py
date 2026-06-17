@@ -64,20 +64,14 @@ from src.visualization.partition_helpers import (
     add_steiner_visualization,
     add_vp_visualization,
 )
+from src.visualization.cell_coloring import (
+    build_cell_adjacency,
+    assign_cell_colors,
+)
 from src.pipeline.io import (
     load_partition_from_refined_file,
     load_partition_from_base_file,
 )
-
-# ---------------------------------------------------------------------------
-# Colour palette — cycles automatically for any number of cells
-# ---------------------------------------------------------------------------
-_PALETTE = [
-    '#FFE5B4', '#E0BBE4', '#FFDAC1', '#B5EAD7', '#C7CEEA',
-    '#FFB7B2', '#FFDFD3', '#E2F0CB', '#B4F8C8', '#A0C4FF',
-    '#FFC6FF', '#FFCFD2', '#FDE2E4', '#FAD2E1', '#BEE1E6',
-    '#D4E6F1', '#D5F5E3', '#FDEBD0', '#F9EBEA', '#EAF2F8',
-]
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +268,10 @@ def render_all_regions_fast(
         ts.triangle_idx: ts for ts in partition.triangle_segments
     }
 
+    # Neighbour-distinct colors: adjacent cells never share a color.
+    adjacency = build_cell_adjacency(partition.vertex_labels, mesh.faces, n_cells)
+    cell_colors = assign_cell_colors(adjacency, n_cells)
+
     t1 = time.perf_counter()
     print(f"  ✓ Segment lookup ready ({t1 - t0:.2f}s)")
     print(f"  Rendering {n_cells} regions...")
@@ -285,7 +283,7 @@ def render_all_regions_fast(
             color = target_color
             cell_opacity = 1.0
         else:
-            color = _PALETTE[cell_idx % len(_PALETTE)]
+            color = cell_colors[cell_idx]
             cell_opacity = opacity
 
         _render_region_fast(
