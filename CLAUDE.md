@@ -126,6 +126,7 @@ src/
 ├── visualization/
 │   ├── plot_utils.py             # Matplotlib utilities
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
+│   ├── cell_coloring.py          # Neighbour-distinct cell colors (graph coloring; glasbey/HSV palette)
 │   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
 ├── profiling.py                  # ProfilingState (Phase 2) + RelaxationProfilingState (Phase 1): opt-in timing accumulators (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
@@ -133,7 +134,7 @@ scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
 ├── optimization_analyzer.py      # Per-run analysis and plotting
-├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized)
+├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized, neighbour-distinct cell colors)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
 ├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
 ├── visualize_type2_triple_point.py     # Type 2 migration debugging viewer
@@ -550,7 +551,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 Core (`pip install -e .`): `numpy`, `scipy`, `pyyaml`, `matplotlib`, `h5py`, `tqdm`
 Optional groups (defined in `pyproject.toml`):
 - `pip install -e ".[ipopt]"` — adds `cyipopt` (IPOPT solver for Phase 2)
-- `pip install -e ".[viz]"` — adds `pyvista` (3D visualization)
+- `pip install -e ".[viz]"` — adds `pyvista` (3D visualization) and `colorcet` (optional; glasbey palette for neighbour-distinct cell colors — falls back to a built-in HSV palette if absent)
 - `pip install -e ".[implicit]"` — adds `scikit-image` (marching cubes for implicit surfaces)
 - `pip install -e ".[all]"` — all optional deps
 - `pip install -e ".[dev]"` — adds `pytest`, `black`, `flake8`
