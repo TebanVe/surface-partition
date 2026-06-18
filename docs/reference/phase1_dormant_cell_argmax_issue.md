@@ -197,6 +197,48 @@ None of these factors *causes* the failure on its own — the underlying
 issue is the argmax/density gap. They determine the probability that a
 given seed and configuration ends up in a dormant-cell minimum.
 
+## Empirical: Resolution Sweep (does more mesh fix it?)
+
+To test mitigation (2) directly, a sweep was run at fixed `λ_penalty = 2.1`
+and fixed seed `84172851`, varying only the base (level-1) mesh resolution
+over four values (3 refinement levels each). Per-cell vertex budget at
+level 1 ranged from 154 to 320 (still below the ≥ 400 rule-of-thumb, but
+roughly doubling across the sweep). Dead cells were taken from the
+`dormant_cells` metadata / `relaxation.log` warning; survivor area spread is
+`(max − min) / mean` over the discrete (argmax-territory) areas of the
+non-empty cells.
+
+| base `nt × np` | level-1 vertices/cell | dead cells   | effective | survivor area spread |
+| -------------- | --------------------- | ------------ | --------- | -------------------- |
+| 70 × 66        | 154                   | `[5, 26]`    | 28/30     | 4.6 %                |
+| 80 × 76        | 202                   | `[1]`        | 29/30     | 5.3 %                |
+| 90 × 86        | 258                   | `[18]`       | 29/30     | 2.3 %                |
+| 100 × 96       | 320                   | `[15, 27]`   | 28/30     | 3.4 %                |
+
+Findings:
+
+- **Dormancy persisted at every resolution.** The dead-cell count went
+  `2 → 1 → 1 → 2` — not monotonically decreasing, and the *highest*-resolution
+  run still lost two cells. Doubling the per-cell vertex budget (154 → 320)
+  did **not** reliably reduce dormancy.
+- **Which cell dies is random.** The dead indices change every run
+  (`[5,26] → [1] → [18] → [15,27]`) even though the seed is fixed: each mesh
+  has a different vertex count, so the uniform random init differs, the
+  symmetry-break plays out differently, and a different cell loses. The
+  failure is **not** tied to a fixed geometric location on the torus.
+- **Survivor areas are unequal but mildly so here (2–5 %)** — milder than the
+  15 % seen on the earlier `lam2.1_seed84172851` run that also had a
+  degenerate speck cell, because with only 1–2 clean kills the lost area
+  budget is reabsorbed more evenly. Still not an equal-area `N`-cell
+  partition.
+
+Caveats: the sweep stayed below the ≥ 400 vertices/cell threshold, and four
+runs is a small sample. But the non-monotonic persistence across a 2×
+resolution increase is strong evidence that, in this range and for this
+seed/`λ`, the **random initialization dominates the outcome** — i.e.
+resolution is a weak, unreliable lever, and the symmetry-break origin
+(mitigation 3) is the one to attack.
+
 ## Possible Mitigations
 
 These are options, not recommendations. Choice between them is open.
@@ -215,16 +257,22 @@ These are options, not recommendations. Choice between them is open.
    orthogonal to (2)–(4) below, which address the root cause.
 
 2. **Higher-resolution level 1.** Increase `nt` and `np` so each cell has
-   enough vertices for early competition. As a rule of thumb, target
-   ≥ 400 vertices per cell on level 1 (`nt × np / N ≥ 400`). For `N=30`,
-   that suggests `nt × np ≥ 12 000`, e.g. `nt=128, np=96`. Cheap on the
-   coarse level; addresses the root cause for this specific configuration.
+   enough vertices for early competition. Rule of thumb: ≥ 400 vertices per
+   cell on level 1 (`nt × np / N ≥ 400`). **Empirically weak (see the
+   Resolution Sweep section).** Doubling the per-cell budget from 154 to 320
+   at fixed seed/`λ` did not reliably reduce dormancy (dead count
+   `2 → 1 → 1 → 2`). The sweep did not cross the 400/cell threshold, so much
+   higher resolution *might* still help, but it is expensive and the trend
+   gives no promise of converging to zero. Treat as, at best, a partial lever.
 
 3. **Seeded initial condition.** Replace the uniform initialisation with
    one that places `N` distinct seed regions (e.g. `N` Voronoi cells around
    randomly chosen vertex centres, projected to satisfy the constraints).
-   This gives every cell a winning region from iteration 0. More invasive
-   than (2) but addresses the symmetry-break problem directly.
+   This gives every cell a winning region from iteration 0, **independent of
+   mesh resolution and seed**. More invasive than (2) but addresses the
+   symmetry-break problem at its source — and the Resolution Sweep evidence
+   (random init dominates the outcome) points to this as the lever most
+   likely to actually eliminate dormancy at higher `N`.
 
 4. **Mid-run rescue.** Detect dormant cells between refinement levels and
    reseed them — split the densest cell, transfer mass, re-project. This
@@ -237,12 +285,14 @@ needed to actually produce valid N-region partitions at higher N.
 
 ## Open Questions
 
-- **Is the failure geometric or numerical?** The other two `npart30` seeds
-  (`seed52698790` analysed here; `seed13131313`, `seed55369783`) have not
-  been inspected. If all three lose exactly two cells in similar locations,
-  the torus at `N=30` has a true small-cell limit at this resolution. If
-  the count varies with seed, the failure is purely a numerical
-  symmetry-break problem solvable by (2) or (3).
+- **Is the failure geometric or numerical?** **Largely answered: numerical
+  (symmetry-break), not geometric.** In the Resolution Sweep (fixed seed/`λ`,
+  four meshes) the dead-cell *index* changed every run
+  (`[5,26] → [1] → [18] → [15,27]`), so the failure is not tied to a fixed
+  geometric small-cell limit on the torus; it is driven by the random
+  initialization. This is the evidence base for prioritising mitigation (3)
+  over (2). (A multi-seed scan would further quantify the per-config
+  probability, but the location-independence is already established.)
 
 - **Does the same pattern appear at intermediate `N`?** A scan over
   `N ∈ {12, 16, 20, 24, 30}` on a fixed level-1 mesh would identify the
