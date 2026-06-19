@@ -26,6 +26,7 @@ from ..optimization.projection import (
     orthogonal_projection_iterative,
     create_initial_condition_with_projection,
 )
+from ..optimization.initialization import create_seeded_initial_condition
 from ..partition.find_contours import ContourAnalyzer, detect_dormant_cells
 from ..partition.contour_partition import PartitionContour
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
@@ -73,6 +74,7 @@ class RelaxationConfig:
     penalty_target_mode: str = 'fixed'
     penalty_eps: float = 1e-8
     profile: bool = False
+    init_method: str = 'random'
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -247,7 +249,8 @@ def run_relaxation(provider, config: RelaxationConfig,
                 )
 
             x0 = _create_initial_condition(
-                mesh, config, level, prev_vertices, prev_x_opt, profile=prof
+                mesh, config, level, prev_vertices, prev_x_opt,
+                profile=prof, logger=logger
             )
 
             level_result = _optimize_level(
@@ -509,16 +512,37 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
 
 
 def _create_initial_condition(mesh, config, level,
-                              prev_vertices, prev_x_opt, profile=None) -> np.ndarray:
-    """Create initial condition (random when no prior solution, interpolated otherwise)."""
+                              prev_vertices, prev_x_opt, profile=None,
+                              logger=None) -> np.ndarray:
+    """Create initial condition (level-0 builder, interpolated otherwise).
+
+    Level 0 (``prev_vertices is None``) dispatches on ``config.init_method``:
+    ``'seeded'`` builds a Voronoi initial condition; any other value (default
+    ``'random'``) uses the legacy uniform-random builder, warning if the value
+    is unrecognized. Finer levels always warm-start by interpolation.
+    """
+    if logger is None:
+        logger = get_logger(__name__)
     N = len(mesh.v)
     if prev_vertices is None:
         if profile is not None:
             _t_ic = time.perf_counter()
-        x0 = create_initial_condition_with_projection(
-            N, config.n_partitions, mesh.v,
-            seed=config.seed, method="iterative", _prof=profile
-        )
+        method = str(config.init_method).lower()
+        if method == 'seeded':
+            x0 = create_seeded_initial_condition(
+                mesh, config.n_partitions, mesh.v,
+                seed=config.seed, logger=logger
+            )
+        else:
+            if method != 'random':
+                logger.warning(
+                    f"Unrecognized init_method '{config.init_method}'; "
+                    f"falling back to 'random'."
+                )
+            x0 = create_initial_condition_with_projection(
+                N, config.n_partitions, mesh.v,
+                seed=config.seed, method="iterative", _prof=profile
+            )
         if profile is not None:
             profile.record('init_condition', time.perf_counter() - _t_ic)
         return x0
