@@ -1,8 +1,7 @@
 # Phase 1 Seeded (Voronoi) Initialization
 
-**Status:** Not Started
-**Branch:** to be created by the implementing agent (suggested:
-`feat/seeded-initialization`), off `main`.
+**Status:** Implemented (branch `feat/seeded-initialization`).
+**Branch:** `feat/seeded-initialization`, off `main`.
 **Audience:** Fresh agent implementing the feature.
 **Goal:** Add a **selectable** initial-condition strategy to Phase 1 — keep the
 current uniform-random initialization as the default, and add a seeded
@@ -160,7 +159,7 @@ codebase. Geodesic Voronoi is out of scope.
 ---
 
 ## Phase 1 — Configuration plumbing & dispatch
-**Status:** Not Started
+**Status:** Implemented
 
 - `src/pipeline/relaxation.py`: add `init_method: str = 'random'` to
   `RelaxationConfig` (bottom of the dataclass). No `from_yaml_dict` change
@@ -177,7 +176,7 @@ codebase. Geodesic Voronoi is out of scope.
   backward compatibility.
 
 ## Phase 2 — Seeded initialization implementation
-**Status:** Not Started
+**Status:** Implemented
 
 - Add `create_seeded_initial_condition(mesh, n_partitions, v, seed, logger=None,
   max_iter=..., tol=...)` implementing the algorithm above. **Recommended
@@ -196,7 +195,7 @@ codebase. Geodesic Voronoi is out of scope.
   convergence; no per-vertex spam.
 
 ## Phase 3 — Verification & docs sync
-**Status:** Not Started
+**Status:** Implemented
 
 Verification (no pytest harness — empirical, mirroring the repo's existing
 diagnostics):

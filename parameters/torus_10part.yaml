@@ -15,6 +15,10 @@ relaxation:
   use_analytic: true
   use_discrete_area_for_constraints: true
 
+  # Initial condition for level 0: "random" (default; legacy uniform random)
+  # or "seeded" (Voronoi seed regions; avoids dormant cells at higher N).
+  init_method: random
+
   # PGD step-size control
   pgd_step0: 1.0                      # initial step size
   pgd_armijo_c: 0.0001                # Armijo sufficient-decrease constant

@@ -15,6 +15,12 @@ relaxation:
   use_analytic: true
   use_discrete_area_for_constraints: true
 
+  # Initial condition for level 0:
+  #   random  - uniform random densities then projected (default; legacy)
+  #   seeded  - Voronoi seed regions (one contiguous winner per cell from
+  #             iteration 0; avoids dormant cells at higher N)
+  init_method: seeded
+
   # PGD step-size control
   pgd_step0: 1.0                      # initial step size
   pgd_armijo_c: 0.0001                # Armijo sufficient-decrease constant

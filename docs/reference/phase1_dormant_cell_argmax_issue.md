@@ -265,23 +265,49 @@ These are options, not recommendations. Choice between them is open.
    higher resolution *might* still help, but it is expensive and the trend
    gives no promise of converging to zero. Treat as, at best, a partial lever.
 
-3. **Seeded initial condition.** Replace the uniform initialisation with
-   one that places `N` distinct seed regions (e.g. `N` Voronoi cells around
-   randomly chosen vertex centres, projected to satisfy the constraints).
-   This gives every cell a winning region from iteration 0, **independent of
-   mesh resolution and seed**. More invasive than (2) but addresses the
-   symmetry-break problem at its source — and the Resolution Sweep evidence
-   (random init dominates the outcome) points to this as the lever most
-   likely to actually eliminate dormancy at higher `N`.
+3. **Seeded initial condition.** ✅ **Implemented.**
+   `create_seeded_initial_condition()` in `src/optimization/initialization.py`
+   replaces the uniform level-0 initialisation with `N` Voronoi seed regions:
+   `N` well-spread seed vertices are chosen by farthest-point sampling
+   (incremental running min-distance array, Euclidean R³, deterministic via
+   `np.random.default_rng(seed)`), every vertex is labelled by its nearest
+   seed (`scipy.spatial.cKDTree`), and the one-hot density is projected with
+   the existing `orthogonal_projection_iterative` to enforce sum-to-one and
+   equal areas. This gives every cell a contiguous winning region from
+   iteration 0, **independent of mesh resolution and seed**. It is selected
+   per run by `relaxation.init_method: seeded` (default `random`); the level-0
+   dispatch lives in `_create_initial_condition` (`src/pipeline/relaxation.py`),
+   and finer levels still warm-start by interpolation unchanged.
+
+   **Verification** (torus, `N=30`, `λ=2.1`, `seed=84172851`, coarse base mesh
+   `nt=60, np=46`, 3 refinement levels, capped `max_iter`):
+   - `init_method: random` → **dead [15, 19]**, weak [15, 19, 22],
+     28/30 effective — reproduces the dormant failure.
+   - `init_method: seeded` → **0 dead, 0 weak, 30/30 effective** on the same
+     29 808-vertex final mesh, every cell's peak density = 1.000. The discrete
+     (argmax-territory) lumped-mass cell areas are near-equal — min 0.7742,
+     max 0.8020, mean 0.7894 (target total/30 = 0.7894), spread ≈ 3.5% —
+     versus the random run's degenerate spread of ≈ 124% (two cells at 0
+     territory). The continuous equal-area constraint itself holds to machine
+     precision throughout (post-projection column-area spread ≈ 1e-14).
+   - **Deterministic:** same `seed` + `seeded` reproduces an identical solution
+     across reruns.
+   - **Cost negligible:** the seeded build (FPS + KD-tree + projection) on the
+     level-0 mesh (2 760 vertices) runs in ≈ 23 ms — far below the PGD loop.
+
+   This addresses the symmetry-break problem at its source and is the lever the
+   Resolution Sweep evidence (random init dominates the outcome) pointed to.
 
 4. **Mid-run rescue.** Detect dormant cells between refinement levels and
    reseed them — split the densest cell, transfer mass, re-project. This
    keeps the cheap initialisation but adds recovery. Most complex of the
    three; requires careful interaction with the level-transition logic.
 
-(1) has been implemented (it converts a silent failure into a loud one) and
-is orthogonal to (2)–(4); one of the root-cause options (2)–(4) is still
-needed to actually produce valid N-region partitions at higher N.
+(1) has been implemented (it converts a silent failure into a loud one) and is
+orthogonal to (2)–(4). **(3) is now also implemented and is the root-cause fix:
+seeded initialisation produces valid N-region partitions at higher N** (verified
+above on the previously-dormant `N=30` config). (2) remains a partial lever and
+(4) is unimplemented.
 
 ## Open Questions
 
