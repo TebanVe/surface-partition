@@ -58,41 +58,38 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
     
     # Small regularization to avoid numerical issues
     epsilon = 1e-10
-    
-    # Track convergence history
-    convergence_history = {
-        'iterations': [],
-        'row_errors': [],
-        'area_errors': [],
-        'max_errors': []
-    }
-    
+
+    # The coupling matrix C = ||v||^2 (I - J/n) and its epsilon-regularized form
+    # depend only on v and n, which are fixed for the whole call; build once
+    # (Change B / audit #4). C_reg is the matrix actually solved each iteration.
+    v_norm_squared = np.sum(v**2)
+    C = np.full((n, n), -v_norm_squared/n)
+    np.fill_diagonal(C, v_norm_squared - v_norm_squared/n)
+    C_reg = C + epsilon * np.eye(n)
+    C_reg_reduced = C[:-1, :-1] + epsilon * np.eye(n-1)  # singular-fallback path
+
+    # Scalar-residual stall tracker (replaces the O(V*N) A_prev copy + allclose).
+    prev_max_error = np.inf
+
     for iter in range(max_iter):
-        A_prev = A.copy()
-        
         # Step 1: Calculate line sum error (N x 1 column vector)
         e = np.sum(A, axis=1) - np.ones(N)  # Each row should sum to 1
-        
+
         # Step 2: Calculate column scalar product error (n x 1 column vector)
         f = v @ A - d
-        
-        # Step 3: Define matrix C of size n x n
-        v_norm_squared = np.sum(v**2)
-        C = np.full((n, n), -v_norm_squared/n)
-        np.fill_diagonal(C, v_norm_squared - v_norm_squared/n)
-        
+
         # Step 4: Calculate q vector
         q = f - np.dot(v, e)/n
-        
-        # Step 5: Solve for lambda
+
+        # Step 5: Solve for lambda (against the precomputed regularized C)
         try:
             # Try solving the full system first
-            lambda_vec = np.linalg.solve(C + epsilon * np.eye(n), q)
+            lambda_vec = np.linalg.solve(C_reg, q)
         except np.linalg.LinAlgError:
             # Fall back to reduced system if full system fails
             logger.warning(f"Iteration {iter}: Full system singular, using reduced system")
             lambda_vec = np.zeros(n)
-            lambda_vec[:-1] = np.linalg.solve(C[:-1, :-1] + epsilon * np.eye(n-1), q[:-1])
+            lambda_vec[:-1] = np.linalg.solve(C_reg_reduced, q[:-1])
         
         # Step 6: Calculate S
         S = np.sum(lambda_vec)
@@ -124,30 +121,23 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
         row_sum_error = np.max(np.abs(np.sum(A, axis=1) - 1))
         area_error = np.max(np.abs(v @ A - d))
         max_error = max(row_sum_error, area_error)
-        
-        # Track convergence history
-        convergence_history['iterations'].append(iter)
-        convergence_history['row_errors'].append(row_sum_error)
-        convergence_history['area_errors'].append(area_error)
-        convergence_history['max_errors'].append(max_error)
-        
+
         # Log progress every 10 iterations
         if iter % 10 == 0:
             logger.debug(f"Iteration {iter}: row_error={row_sum_error:.2e}, area_error={area_error:.2e}")
-        
+
         if row_sum_error < tol and area_error < tol:
             logger.info(f"Projection converged after {iter+1} iterations")
             logger.info(f"Final errors: row={row_sum_error:.2e}, area={area_error:.2e}")
             break
-            
-        # Check if we're making progress
-        if iter > 0 and np.allclose(A, A_prev, rtol=tol, atol=tol):
-            # Warn only if clearly above tolerance; otherwise treat as benign stagnation
-            if max_error > 10 * tol:
-                logger.warning(f"Projection stagnated after {iter+1} iterations (max_error={max_error:.2e} > {10*tol:.1e})")
-            else:
-                logger.debug(f"Projection stagnated after {iter+1} iterations (near tol): row={row_sum_error:.2e}, area={area_error:.2e}")
+
+        # Scalar-residual stall test (replaces the O(V*N) allclose on A vs A_prev).
+        # Only stop when the residual has plateaued AND is already near tolerance,
+        # so the loop never returns an infeasible iterate (Change B / audit #4).
+        if iter > 0 and (prev_max_error - max_error) < 1e-2 * tol and max_error < 10 * tol:
+            logger.debug(f"Projection stagnated after {iter+1} iterations (near tol): row={row_sum_error:.2e}, area={area_error:.2e}")
             break
+        prev_max_error = max_error
     else:
         # Loop completed without convergence
         logger.warning(f"Projection did not converge after {max_iter} iterations")
