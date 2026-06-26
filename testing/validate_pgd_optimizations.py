@@ -19,8 +19,13 @@ Mode 1 (``--equivalence``, in-process, fast)
         *original* implementation (``reference_projection_iterative`` below) over a
         grid of sizes and seeds. Asserts agreement within ``max(1e-10, 10*tol)``
         and that both satisfy the constraints.
-    1b. Gradient-reuse identity (Change C): builds a tiny optimizer and asserts
-        ``compute_gradient`` at a fixed iterate is reproducible to ``< 1e-12``.
+    1b. Gradient-reuse invariant (Change C): builds a tiny optimizer, takes one
+        accepted PGD step, and asserts that after the optimizer's read-only
+        post-step bookkeeping the gradient at ``x`` is unchanged (so reusing
+        ``g_post`` as the next pre-step gradient is valid) and ``x`` is unmutated.
+    1c. Stall path (Change B): drives the projection with a tol below the residual
+        floor so it must exit via the new scalar-residual stall detector, and
+        asserts the returned iterate still honours the feasibility contract.
 
 Mode 2 (``--compare --baseline <run_dir> --candidate <run_dir>``)
     Compares two completed Phase 1 runs produced on the *same config and seed* —
@@ -248,8 +253,13 @@ def run_equivalence(tol=1e-9, max_iter=300):
     print(f"     worst max|dA| over grid = {worst_delta:.2e} "
           f"(gate {atol:.1e})")
 
-    # --- 1b. Gradient-reuse identity (Change C) --------------------------
-    print("\n[1b] Gradient-reuse identity (compute_gradient reproducible)")
+    # --- 1b. Gradient-reuse invariant (Change C) -------------------------
+    # Change C reuses g_post as the NEXT iteration's pre-step gradient, valid only
+    # because x is not mutated between computing g_post and re-entering the loop.
+    # Assert that invariant directly (not merely that compute_gradient is
+    # deterministic): after the same read-only post-step bookkeeping the optimizer
+    # performs, the gradient at x must equal g_post and x must be unchanged.
+    print("\n[1b] Gradient-reuse invariant (x unmutated between g_post and reuse)")
     try:
         from src.surfaces.torus import TorusMeshProvider
         from src.optimization.pgd_optimizer import ProjectedGradientOptimizer
@@ -270,22 +280,59 @@ def run_equivalence(tol=1e-9, max_iter=300):
         A = orthogonal_projection_iterative(A, c, d, mesh.v,
                                             max_iter=300, tol=1e-9)
         x = A.flatten()
-        # One manual accepted PGD step.
+        # One manual accepted PGD step → accepted iterate xp.
         g = opt.compute_gradient(x)
         A_trial = x.reshape(V, n_parts) - 0.1 * g.reshape(V, n_parts)
         A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
         A_trial = orthogonal_projection_iterative(A_trial, c, d, mesh.v,
                                                   max_iter=300, tol=1e-9)
         xp = A_trial.flatten()
-        g1 = opt.compute_gradient(xp)
-        g2 = opt.compute_gradient(xp)
-        dg = float(np.max(np.abs(g1 - g2)))
-        grad_ok = dg < 1e-12
+        g_post = opt.compute_gradient(xp)
+        xp_before = xp.copy()
+        # Read-only post-step bookkeeping the optimizer runs after g_post.
+        _ = opt.constraint_fun(xp)
+        _ = float(np.linalg.norm(g_post))
+        _ = xp.copy()
+        g_next = opt.compute_gradient(xp)   # what the next iteration recomputes
+        dg = float(np.max(np.abs(g_next - g_post)))
+        unmutated = bool(np.array_equal(xp, xp_before))
+        grad_ok = dg < 1e-12 and unmutated
         ok = ok and grad_ok
-        print(f"     V={V} N={n_parts}: max|g(x')-g(x')| = {dg:.2e} "
-              f"[{'PASS' if grad_ok else 'FAIL'}]")
+        print(f"     V={V} N={n_parts}: max|g_next - g_post| = {dg:.2e}, "
+              f"x unmutated={unmutated} [{'PASS' if grad_ok else 'FAIL'}]")
     except Exception as exc:  # pragma: no cover - diagnostic
         print(f"     SKIP (could not build optimizer): {exc}")
+
+    # --- 1c. Stall path exercised (Change B) -----------------------------
+    # Mode-1a converges via the natural `tol` test before the stall code runs, so the
+    # stall branch (the only behavioural change in Change B) is never exercised there.
+    # The projection residual floors near the epsilon=1e-10 regularization in
+    # projection.py; a tol below that floor makes natural convergence impossible and
+    # forces the loop to exit via the scalar-residual stall detector. Assert the
+    # returned iterate still honours the feasibility contract (max_error < 10*tol),
+    # i.e. the stall never silently returns an under-converged result.
+    print("\n[1c] Stall path exercised (tol below the ~1e-10 residual floor)")
+    rng = np.random.default_rng(11)
+    Vs, Ns = 800, 12
+    As = rng.random((Vs, Ns))
+    vs = rng.random(Vs) + 0.1
+    ds = (vs.sum() / Ns) * np.ones(Ns)
+    cs = np.ones(Ns)
+    stall_tol = 5e-11  # < floor (~1.5e-10): the natural-convergence test cannot fire
+    try:
+        A_s = orthogonal_projection_iterative(
+            As, cs, ds, vs, max_iter=300, tol=stall_tol)
+        rerr, aerr = _constraint_errors(A_s, vs, ds)
+        stall_ok = max(rerr, aerr) < 10 * stall_tol
+        detail = (f"returned feas={max(rerr, aerr):.2e} "
+                  f"(gate < {10 * stall_tol:.1e})")
+    except RuntimeError:
+        # Floor exceeded 10*tol: the function correctly refuses to return an
+        # infeasible projection instead of silently emitting one.
+        stall_ok = True
+        detail = "raised RuntimeError (floor > 10*tol) — contract honoured"
+    ok = ok and stall_ok
+    print(f"     tol={stall_tol:.1e}: {detail} [{'PASS' if stall_ok else 'FAIL'}]")
 
     print("\n" + ("RESULT: PASS" if ok else "RESULT: FAIL"))
     return ok
@@ -296,19 +343,23 @@ def run_equivalence(tol=1e-9, max_iter=300):
 # ---------------------------------------------------------------------------
 def _load_run(run_dir):
     run = Path(run_dir)
-    sol_glob = sorted(glob.glob(str(run / "solution" / "*.h5")))
-    if not sol_glob:
-        raise FileNotFoundError(f"No solution/*.h5 under {run}")
+    # Resolve the base solution the way src/pipeline/io.py (find_base_solution_path)
+    # does: exclude refined-contour checkpoints and take the latest when a run dir
+    # holds several (e.g. a resumed run), not the lexicographically-first file.
+    candidates = sorted(
+        p for p in glob.glob(str(run / "solution" / "*.h5"))
+        if not p.endswith("_refined_contours.h5")
+    )
+    if not candidates:
+        raise FileNotFoundError(f"No base solution *.h5 under {run / 'solution'}")
+    sol_path = candidates[-1]
     import h5py
     sol = {}
-    with h5py.File(sol_glob[0], "r") as h5:
+    with h5py.File(sol_path, "r") as h5:
         sol["x_opt"] = np.array(h5["x_opt"])
         sol["vertices"] = np.array(h5["vertices"])
         sol["faces"] = np.array(h5["faces"])
         sol["n_partitions"] = int(h5.attrs["n_partitions"])
-    meta_path = run / "solution" / "metadata.yaml"
-    sol["metadata"] = (yaml.safe_load(meta_path.read_text())
-                       if meta_path.exists() else {})
     tp_path = run / "solution" / "timing_profile.yaml"
     sol["timing"] = (yaml.safe_load(tp_path.read_text())
                     if tp_path.exists() else None)
@@ -431,19 +482,24 @@ def run_compare(baseline_dir, candidate_dir, stage=None):
     print(f"    agreement = {agree:.4f}%  (gate >= {thr['partition']}%) "
           f"[{'PASS' if p_ok else 'FAIL'}]")
 
-    # 4. Region areas (permutation-invariant).
+    # 4. Region areas (permutation-invariant), FEM lumped-mass weighted.
     print("\n[4] Region areas (sorted) rel diff")
-    # v = lumped mass = row-sum of M; reconstruct from solution metadata if
-    # available, else use uniform weights as a fallback (areas via vertex count).
+    # The equal-area constraint is on the FEM lumped mass v = row-sum of M (v^T A=d),
+    # so weight each winning vertex by its lumped mass rather than counting vertices
+    # (raw counts misweight non-uniform meshes). v is reconstructed from the stored
+    # vertices/faces via the canonical TriMesh assembly.
+    from src.mesh.tri_mesh import TriMesh
+    v_b = TriMesh(b["vertices"], b["faces"]).v
+    v_c = TriMesh(cd["vertices"], cd["faces"]).v
     areas_b = np.sort(np.bincount(np.argmax(x_b.reshape(V, N), axis=1),
-                                  minlength=N).astype(float))
+                                  weights=v_b, minlength=N))
     areas_c = np.sort(np.bincount(np.argmax(x_c.reshape(V, N), axis=1),
-                                  minlength=N).astype(float))
+                                  weights=v_c, minlength=N))
     denom = np.where(areas_b != 0, areas_b, 1.0)
     area_rel = float(np.max(np.abs(areas_b - areas_c) / denom))
     a_ok = area_rel < thr["areas"]
     ok = ok and a_ok
-    print(f"    sorted region-vertex-count rel diff = {area_rel:.2e}  "
+    print(f"    sorted v-weighted region-area rel diff = {area_rel:.2e}  "
           f"(gate {thr['areas']:.0e}) [{'PASS' if a_ok else 'FAIL'}]")
 
     # 5. Speedup (report; assert backtrack reduction if timing present).

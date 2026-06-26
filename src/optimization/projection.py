@@ -69,7 +69,12 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
     C_reg_reduced = C[:-1, :-1] + epsilon * np.eye(n-1)  # singular-fallback path
 
     # Scalar-residual stall tracker (replaces the O(V*N) A_prev copy + allclose).
-    prev_max_error = np.inf
+    # Break only after the residual fails to improve on its best value for several
+    # CONSECUTIVE iterations, so a single non-monotone tick-up of the alternating
+    # projection is not mistaken for convergence (Change B / audit #4).
+    best_max_error = np.inf
+    stall_count = 0
+    stall_patience = 5
 
     for iter in range(max_iter):
         # Step 1: Calculate line sum error (N x 1 column vector)
@@ -132,12 +137,30 @@ def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray,
             break
 
         # Scalar-residual stall test (replaces the O(V*N) allclose on A vs A_prev).
-        # Only stop when the residual has plateaued AND is already near tolerance,
-        # so the loop never returns an infeasible iterate (Change B / audit #4).
-        if iter > 0 and (prev_max_error - max_error) < 1e-2 * tol and max_error < 10 * tol:
-            logger.debug(f"Projection stagnated after {iter+1} iterations (near tol): row={row_sum_error:.2e}, area={area_error:.2e}")
-            break
-        prev_max_error = max_error
+        # Count CONSECUTIVE iterations that fail to improve the best residual by at
+        # least 1e-2*tol; break on a sustained plateau. Unlike a single-step delta,
+        # this tolerates the alternating projection's non-monotone ticks. The test is
+        # magnitude-agnostic: a genuine stall ABOVE tolerance also breaks here (rather
+        # than running to max_iter) and is then caught by the feasibility validation
+        # below, which raises if the result is worse than 10*tol.
+        if max_error < best_max_error - 1e-2 * tol:
+            best_max_error = max_error
+            stall_count = 0
+        else:
+            stall_count += 1
+            if stall_count >= stall_patience:
+                if max_error > tol:
+                    logger.warning(
+                        f"Projection stalled after {iter+1} iterations above tol "
+                        f"(max_error={max_error:.2e} > tol={tol:.1e}); "
+                        f"row={row_sum_error:.2e}, area={area_error:.2e}"
+                    )
+                else:
+                    logger.debug(
+                        f"Projection stalled after {iter+1} iterations near tol: "
+                        f"row={row_sum_error:.2e}, area={area_error:.2e}"
+                    )
+                break
     else:
         # Loop completed without convergence
         logger.warning(f"Projection did not converge after {max_iter} iterations")
