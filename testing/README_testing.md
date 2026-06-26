@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the surface partition project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-05-21 (May 21, 2026) — added Tests 10–11 (analytical Steiner first/second derivatives)
+**Last Updated**: 2026-06-26 (June 26, 2026) — added Test 14 (Phase 1 PGD serial-optimization validation harness)
 
 ---
 
@@ -748,6 +748,54 @@ input mesh size loaded from the checkpoint.
 
 ---
 
+### Test 14: `validate_pgd_optimizations.py` (Phase 1 PGD serial optimizations)
+
+**Status**: ✅ APPROVED   **Created**: 2026-06-26
+
+Validates the three Phase 1 PGD serial optimizations (audit IDs #1/#4/#6 in
+`docs/reference/PHASE1_PGD_SERIAL_OPTIMIZATION_AUDIT.md`):
+
+- **Change A** — backtracking step warm-start (`pgd_optimizer.py`).
+- **Change B** — projection inner-loop cleanup (`projection.py`).
+- **Change C** — gradient reuse (`pgd_optimizer.py`).
+
+Two modes:
+
+- **Mode 1 (`--equivalence`)** — in-process. (1a) runs the current
+  `orthogonal_projection_iterative` against a verbatim frozen copy of the
+  pre-Change-B implementation over a `(V,N)`×seed grid, asserting agreement
+  within `max(1e-10, 10*tol)` and constraint feasibility; (1b) asserts
+  `compute_gradient` is reproducible to `< 1e-12`. No run directories needed.
+- **Mode 2 (`--compare --baseline <dir> --candidate <dir> [--stage A|B|C]`)** —
+  compares two completed Phase 1 runs built on the *same config and seed* (one
+  from `main`, one from the branch). Reports/asserts final energy, partition
+  agreement (permutation-invariant via `linear_sum_assignment`), region areas,
+  and the backtrack/wall-time speedup.
+
+```bash
+python testing/validate_pgd_optimizations.py --equivalence
+python testing/validate_pgd_optimizations.py --compare \
+    --baseline <main_run_dir> --candidate <branch_run_dir> --stage A
+```
+
+**Acceptance gates** (Change-B end-to-end gate corrected from the original plan —
+see the audit doc "Implementation outcome"): Change C is bit-identical
+(`max|dx| < 1e-12`). Change B is *path-altering* — its scalar-residual stall test
+shifts each projection's exit iteration by ~`tol`, which compounds over the PGD
+trajectory to ~1e-7 in the density field while landing on the **same** minimizer;
+therefore the end-to-end gate drops `max|dx|` and asserts only the behavioural
+thresholds (energy rel `< 1e-6`, partition `>= 99.5%`, areas rel `< 1e-3`). The
+strict thresholds still apply where exactness genuinely holds (Mode 1 projection
+`< 1e-8`; Change C `< 1e-12`). Measured speedup on the fast torus-10 A/B config:
+mean backtracks/iter 5.15 → 2.74, total wall 2.40x.
+
+**Dependencies**:
+- `src/optimization/projection.py`, `src/optimization/pgd_optimizer.py`
+- `src/surfaces/torus.py` (Mode 1b synthetic optimizer)
+- `src/pipeline/io.py`, `numpy`, `scipy`, `h5py`, `pyyaml`
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -769,6 +817,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-06-26 | Added Test 14 (Phase 1 PGD serial-optimization validation harness) | System |
 | 2026-05-27 | Added Test 13 (triple-point sub-face subdivision smoke test) | System |
 | 2026-05-27 | Added Test 12 (export grid_shape invariant smoke test) | System |
 | 2026-05-21 | Added Tests 10–11 (analytical Steiner first/second derivatives); upgraded Test 7 to a Richardson FD reference | System |

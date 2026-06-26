@@ -4,9 +4,9 @@ This document records a read-only audit of the **serial** optimization
 opportunities in the Phase 1 relaxation hot path (Projected Gradient Descent with
 per-step orthogonal projection, in `src/optimization/`). It was produced before a
 multi-day N=50 production relaxation, to decide what to optimize without
-parallelization. It assigns each opportunity a **stable ID (#1–#13)** that other
-documents reference (notably
-`docs/plans/PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md`, which implements #1, #4, #6).
+parallelization. It assigns each opportunity a **stable ID (#1–#13)**. Opportunities #1, #4, #6, #8
+were subsequently implemented (Changes A/B/C; see "Implementation outcome" below);
+the driving plan was retired on completion and this document is now the record.
 Findings are grounded in the empirical timing breakdown
 (`docs/math/04-phase1-timing-profile/`,
 `docs/plans/PHASE1_RELAXATION_TIMING_PROFILE.md`) and corroborated against a live
@@ -57,14 +57,14 @@ correctness pitfall (#13), and the "wrong sparse format" hypothesis was found fa
 
 | # | Opportunity | Location | Impact | Fix type | Status |
 |---|---|---|---|---|---|
-| 1 | Warm-start / adapt the initial backtracking step | `pgd_optimizer.py:294`, loop `299–322` | **HIGH** | both | Planned (Change A) |
+| 1 | Warm-start / adapt the initial backtracking step | `pgd_optimizer.py:294`, loop `299–322` | **HIGH** | both | **Implemented (Change A)** — see Implementation outcome |
 | 2 | Make projection tolerance reachable / residual-plateau stall break | `projection.py:138,144,151–154,60` | MEDIUM* | both | Out of scope (already fixed by `tol=1e-9`) |
 | 3 | Dual-Newton over closed-form per-vertex simplex projections | `projection.py:70–122` | HIGH (merit) | new-algorithm | Deferred (not pre-run; durable fix for N≥100) |
-| 4 | Trim per-inner-iteration waste in `orthogonal_projection_iterative` | `projection.py:71,144,63–68,129–132,80–82,90` | MEDIUM | code-fix | Planned (Change B) |
+| 4 | Trim per-inner-iteration waste in `orthogonal_projection_iterative` | `projection.py:71,144,63–68,129–132,80–82,90` | MEDIUM | code-fix | **Implemented (Change B)** — stall swap is path-altering; see Implementation outcome |
 | 5 | Batch per-region energy/gradient loops into CSR @ dense matmuls | `pgd_optimizer.py:92–98,135–140,100–115,141–164` | MEDIUM | code-fix | Optional follow-up |
-| 6 | Reuse post-step gradient as next iteration's step gradient | `pgd_optimizer.py:290,331` | LOW (free, exact) | code-fix | Planned (Change C) |
+| 6 | Reuse post-step gradient as next iteration's step gradient | `pgd_optimizer.py:290,331` | LOW (free, exact) | code-fix | **Implemented (Change C)** — bit-identical |
 | 7 | Skip dead `var_w` in gradient penalty loop (fixed-target mode) | `pgd_optimizer.py:147` | LOW | code-fix | Optional follow-up |
-| 8 | Hoist invariant `‖g‖²` out of the backtracking loop | `pgd_optimizer.py:314` | LOW | code-fix | Optional (foldable into Change A) |
+| 8 | Hoist invariant `‖g‖²` out of the backtracking loop | `pgd_optimizer.py:314` | LOW | code-fix | **Implemented (folded into Change A)** |
 | 9 | Defer per-iteration bookkeeping to a summary stride | `pgd_optimizer.py:336,339–341,363,380` | LOW | code-fix | Optional follow-up |
 | 10 | Stop flushing summary + HDF5 to disk every iteration | `pgd_optimizer.py:356–357` | LOW (matters on networked FS) | code-fix | Optional follow-up |
 | 11 | Capture energy components from the accepted trial on save strides | `pgd_optimizer.py:349` | LOW | code-fix | Optional follow-up |
@@ -250,10 +250,56 @@ landable before a multi-day run. Everything in energy/gradient and the mesh/FEM
 layer is secondary, bounded by the ~10–15 % non-projection share. The actionable,
 safe, pre-run set is **#1 + #4 + #6** (with #8 folded in for free).
 
+## Implementation outcome (2026-06-26)
+
+Opportunities **#1 (Change A)**, **#4 (Change B)**, **#6 (Change C)**, and **#8**
+(folded into Change A) were implemented on branch `feat/pgd-serial-optimizations`
+and validated with `testing/validate_pgd_optimizations.py` (Test 14). The plan that
+drove this work (`docs/plans/PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md`) was retired
+on completion; the lasting findings live here.
+
+**Measured speedup** (fast torus-10 A/B config — 3 levels, seed 13001502,
+`tol=1e-9`, same machine, `--profile`): mean backtracks/iter **5.15 → 2.74**, total
+relaxation wall time **2.40×** (71.9 s → 29.9 s). The minimizer is preserved:
+partition agreement 100 %, region areas identical, final energy relative difference
+1.1e-8.
+
+**Change C (gradient reuse) is exact** — bit-identical end-to-end (`max|dx| = 0`).
+
+**Change B's stall-rule swap is path-altering, not bit-for-bit (gate correction).**
+The audit rated #4 "MEDIUM … at zero accuracy cost," and the plan's Phase-4 staging
+table inherited an end-to-end `max|dx| < 1e-9` gate for Change B. That gate was
+**wrong** and is superseded. Decomposing Change B:
+
+- Hoisting the constant coupling matrix `C`/`C_reg` out of the inner loop and
+  removing the dead `convergence_history` dict are **exact refactors** — verified
+  bit-identical end-to-end (`max|dx| = 0`) with the original `allclose` stall
+  retained, and the projection-equivalence unit test (current vs frozen reference)
+  agrees to `0.00e+00 < max(1e-10, 10*tol)`.
+- Replacing the `A_prev` + `np.allclose(A, A_prev)` stall with the scalar-residual
+  stall test **deliberately changes the inner-loop exit iteration** (the original
+  premise that this stall was "rarely exercised" is false: the equal-area/simplex
+  residual routinely plateaus above `tol`, so the *stall*, not the primary residual
+  test, stops most projections). Each projection is perturbed by ~`tol` (1e-9);
+  over ~3000 PGD steps those perturbations compound along the trajectory to ~1e-7
+  in the final density field while landing on the **same minimizer**. This is not a
+  bug: there is no in-place `C` mutation, no sign error, and the stall is gated on
+  `max_error < 10*tol` so it never returns an infeasible iterate (the function's
+  final feasibility guard never fired).
+
+Because `max|dx|` measures *trajectory chaos* rather than correctness for a
+path-altering change, the **corrected, authoritative end-to-end gate for Change B**
+(and for the combined A+B+C) **drops `max|dx|`** and asserts only:
+energy rel `< 1e-6`, partition agreement `>= 99.5 %`, region areas rel `< 1e-3`.
+The strict/exact thresholds still apply where exactness genuinely holds: the Mode 1
+projection-equivalence unit test (`< max(1e-10, 10*tol)`) and Change C end-to-end
+(`< 1e-12`). This is the gate encoded in Test 14.
+
 ## Related documents
 
-- Plan implementing #1, #4, #6:
-  `docs/plans/PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md`
+- Implementation of #1, #4, #6, #8: the "Implementation outcome" section above
+  (the driving plan `PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md` was retired on
+  completion). Validation harness: `testing/validate_pgd_optimizations.py`.
 - Empirical timing basis:
   `docs/plans/PHASE1_RELAXATION_TIMING_PROFILE.md`,
   `docs/math/04-phase1-timing-profile/`
