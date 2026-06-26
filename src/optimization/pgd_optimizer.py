@@ -283,13 +283,16 @@ class ProjectedGradientOptimizer:
 			# Optional header line (analyzer ignores lines starting with 'MAJOR')
 			summary_fh.write("MAJOR NFEV NGEV OBJFUN GNORM CNORM FEAS OPT STEP\n")
 
+			# Gradient at the initial x; reused across iterations (see Change C).
+			if profile is not None:
+				_t_g = time.perf_counter()
+			g = self.compute_gradient(x)
+			if profile is not None:
+				profile.record('gradient', time.perf_counter() - _t_g)
+
 			for k in range(maxiter):
-				# Gradient at current x
-				if profile is not None:
-					_t_g = time.perf_counter()
-				g = self.compute_gradient(x)
-				if profile is not None:
-					profile.record('gradient', time.perf_counter() - _t_g)
+				# `g` holds the gradient at the current x on loop entry
+				# (the initial gradient above, or g_post carried forward below).
 				# Backtracking line search
 				step = float(step0)
 				accepted = False
@@ -367,6 +370,11 @@ class ProjectedGradientOptimizer:
 				self.log['feas'].append(feas_post)
 				self.prev_x = self.curr_x
 				self.curr_x = x.copy()
+				# Change C: x is not mutated between g_post (above) and the next
+				# iteration's line search, so g_post is exactly that iteration's
+				# pre-step gradient. Carry it forward to halve gradient evals.
+				# (Invariant: nothing below/after must mutate x before loop re-entry.)
+				g = g_post
 
 				# Best-so-far
 				if E < best_E:
