@@ -71,6 +71,13 @@ python sweep/timing_analyzer.py --experiment-dir results/torus_npart10/ --phase 
 There are no pytest unit tests. The `testing/` directory contains CLI diagnostic tools:
 ```bash
 python testing/test_migrations_debug.py --solution <path_to_refined.h5>
+
+# Validate the Phase 1 PGD serial optimizations (Changes A/B/C):
+# Mode 1 — in-process projection-equivalence + gradient-reuse identity:
+python testing/validate_pgd_optimizations.py --equivalence
+# Mode 2 — compare two completed runs (same config+seed; one from main, one from branch):
+python testing/validate_pgd_optimizations.py --compare \
+    --baseline <main_run_dir> --candidate <branch_run_dir> --stage A
 ```
 The `scripts/debug_archive/` directory contains archived diagnostic scripts.
 
@@ -155,6 +162,7 @@ testing/
 ├── test_type1_triple_point_guard.py     # Type 1 triple-point safety-guard smoke test
 ├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
 ├── test_white_triangle_fix.py           # Zero-length-boundary rendering-fix smoke test
+├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/

@@ -283,17 +283,31 @@ class ProjectedGradientOptimizer:
 			# Optional header line (analyzer ignores lines starting with 'MAJOR')
 			summary_fh.write("MAJOR NFEV NGEV OBJFUN GNORM CNORM FEAS OPT STEP\n")
 
+			# Gradient at the initial x; reused across iterations (see Change C).
+			if profile is not None:
+				_t_g = time.perf_counter()
+			g = self.compute_gradient(x)
+			if profile is not None:
+				profile.record('gradient', time.perf_counter() - _t_g)
+
+			# Change A: warm-start the line search from the last accepted step.
+			# Seeded at step0 so iteration 0 is identical to the hard-reset version.
+			prev_step = float(step0)
+
 			for k in range(maxiter):
-				# Gradient at current x
-				if profile is not None:
-					_t_g = time.perf_counter()
-				g = self.compute_gradient(x)
-				if profile is not None:
-					profile.record('gradient', time.perf_counter() - _t_g)
-				# Backtracking line search
-				step = float(step0)
+				# `g` holds the gradient at the current x on loop entry
+				# (the initial gradient above, or g_post carried forward below).
+				# Backtracking line search.
+				# Warm-start one notch above the last accepted step (capped at
+				# step0) so the search converges in ~1-2 trials instead of
+				# re-walking from step0 each iteration. backtrack_rho in (0,1) so
+				# prev_step/backtrack_rho > prev_step; on iter 0 prev_step==step0
+				# and the min selects step0 (identical to the old behaviour).
+				step = min(float(step0), prev_step / backtrack_rho)
 				accepted = False
 				n_backtracks = 0
+				# ||g||^2 is invariant across the line search (audit #8): hoist it.
+				gg = float(np.dot(g, g))
 				if profile is not None:
 					_t_bt = time.perf_counter()
 				while True:
@@ -311,14 +325,16 @@ class ProjectedGradientOptimizer:
 					if profile is not None:
 						profile.record('energy', time.perf_counter() - _t_e)
 					# Armijo condition with ||g||^2 surrogate
-					if E_trial <= E - armijo_c * step * float(np.dot(g, g)):
+					if E_trial <= E - armijo_c * step * gg:
 						accepted = True
 						x = x_trial
 						E = E_trial
+						prev_step = step  # carry the accepted step forward
 						break
 					step *= backtrack_rho
 					if step < 1e-12:
-						# Unable to make progress
+						# Unable to make progress; recover from step0 next iteration.
+						prev_step = float(step0)
 						break
 				if profile is not None:
 					profile.record('backtrack', time.perf_counter() - _t_bt)
@@ -367,6 +383,11 @@ class ProjectedGradientOptimizer:
 				self.log['feas'].append(feas_post)
 				self.prev_x = self.curr_x
 				self.curr_x = x.copy()
+				# Change C: x is not mutated between g_post (above) and the next
+				# iteration's line search, so g_post is exactly that iteration's
+				# pre-step gradient. Carry it forward to halve gradient evals.
+				# (Invariant: nothing below/after must mutate x before loop re-entry.)
+				g = g_post
 
 				# Best-so-far
 				if E < best_E:

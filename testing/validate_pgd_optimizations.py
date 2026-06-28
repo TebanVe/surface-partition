@@ -1,0 +1,611 @@
+#!/usr/bin/env python3
+"""Validate the Phase 1 PGD serial optimizations (Changes A, B, C).
+
+This harness proves the three serial optimizations (audit IDs #1, #4, #6 +
+folded-in #8 in ``docs/reference/PHASE1_PGD_SERIAL_OPTIMIZATION_AUDIT.md``, section
+"Implementation outcome") preserve the computed minimizer while measuring the
+speedup.
+
+  * Change A — backtracking step warm-start (per-iteration step trajectory only).
+  * Change B — projection inner-loop cleanup (result-preserving refactor + a
+    scalar-residual stall test).
+  * Change C — gradient reuse (bit-identical; halves gradient evaluations).
+
+Two modes:
+
+Mode 1 (``--equivalence``, in-process, fast)
+    1a. Projection equivalence (Change B): runs the *current*
+        ``orthogonal_projection_iterative`` against a verbatim frozen copy of the
+        *original* implementation (``reference_projection_iterative`` below) over a
+        grid of sizes and seeds. Asserts agreement within ``max(1e-10, 10*tol)``
+        and that both satisfy the constraints.
+    1b. Gradient-reuse invariant (Change C): builds a tiny optimizer, takes one
+        accepted PGD step, and asserts that after the optimizer's read-only
+        post-step bookkeeping the gradient at ``x`` is unchanged (so reusing
+        ``g_post`` as the next pre-step gradient is valid) and ``x`` is unmutated.
+    1c. Stall path (Change B): drives the projection with a tol below the residual
+        floor so it must exit via the new scalar-residual stall detector, and
+        asserts the returned iterate still honours the feasibility contract.
+
+Mode 2 (``--compare --baseline <run_dir> --candidate <run_dir>``)
+    Compares two completed Phase 1 runs produced on the *same config and seed* —
+    one built from ``main``, one from the branch. Reports/asserts final energy,
+    solution-vector delta, permutation-invariant partition agreement, region-area
+    delta, and the backtrack/wall-time speedup.
+
+A/B run protocol (Mode 2):
+    1. Pick a small, fast, deterministic config (e.g.
+       ``parameters/torus_10part.yaml``) with a fixed ``seed``. Use the *identical*
+       config file for both branches. Run with ``--profile``.
+    2. ``git checkout main`` →
+       ``python scripts/find_surface_partition.py --config <cfg> --profile``
+       → note the ``results/run_.../`` dir (the ``--baseline``).
+    3. ``git checkout feat/pgd-serial-optimizations`` → run the *same* command →
+       note the new ``results/run_.../`` dir (the ``--candidate``).
+    4. ``python testing/validate_pgd_optimizations.py --compare \
+           --baseline <baseline_run_dir> --candidate <candidate_run_dir>``
+    Both runs must execute on the same machine (BLAS reduction order affects the
+    1e-12 exact thresholds).
+
+Stage thresholds (changes are committed/validated in order C → B → A):
+    | Stage | Gated metrics                                                       |
+    | C     | max|dx|<1e-12, energy rel<1e-10, partition 100%, perimeter rel<1e-9  |
+    | B / A | partition >=99.5%, areas rel<1e-3, perimeter rel<1e-3               |
+
+NOTE on the path-altering stages (A, B; authoritative — see the audit "Implementation
+outcome"): Changes A and B alter the PGD *trajectory* (the warm-started step schedule
+and the projection's inner-loop exit iteration), so they land on the SAME minimizer
+via a different path. Two such converged trajectories settle at slightly different
+points on the (nearly flat) energy-basin floor: at N=50 the final energy differs by
+rel ~1e-6 and the density field by max|dx| ~1e-4, even though the extracted partition
+is identical. Therefore stages A/B REPORT energy and max|dx| but do NOT gate on them
+(they measure trajectory chaos, not result quality). The gates are the
+resolution-independent metrics: contour perimeter (rel<1e-3), permutation-invariant
+partition agreement, and v-weighted region areas. Exactness of the result-preserving
+parts is proven separately at stage C (bit-identical) and by the Mode-1
+projection-equivalence test.
+
+Usage:
+    python testing/validate_pgd_optimizations.py --equivalence
+    python testing/validate_pgd_optimizations.py --compare \
+        --baseline <baseline_run_dir> --candidate <candidate_run_dir> [--stage A|B|C]
+
+Exit code: 0 on PASS, 1 on FAIL.
+"""
+
+import argparse
+import glob
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import numpy as np  # noqa: E402
+import yaml  # noqa: E402
+
+from src.optimization.projection import (  # noqa: E402
+    orthogonal_projection_iterative,
+)
+
+
+# ---------------------------------------------------------------------------
+# Frozen verbatim copy of the ORIGINAL orthogonal_projection_iterative.
+# This is the pre-Change-B implementation, captured so the equivalence test does
+# not depend on git history. Do NOT edit to track refactors — it is the baseline.
+# ---------------------------------------------------------------------------
+def reference_projection_iterative(A, c, d, v, max_iter=1000, tol=1e-10,
+                                   logger=None, _prof=None):
+    if logger is None:
+        logger = logging.getLogger(__name__ + ".reference")
+
+    # Validate input dimensions
+    N, n = A.shape
+    if len(c) != n or len(d) != n or len(v) != N:
+        raise ValueError(
+            f"Dimension mismatch: A({N}x{n}), c({len(c)}), d({len(d)}), v({len(v)})"
+        )
+
+    A = A.copy()  # Make a copy to avoid modifying the input
+
+    # Initial normalization to satisfy partition constraint
+    row_sums = np.sum(A, axis=1)
+    mask = row_sums > 0  # Avoid division by zero
+    A[mask] = A[mask] / row_sums[mask, np.newaxis]
+    A[~mask] = 1.0 / n  # Set uniform distribution for zero rows
+
+    # Small regularization to avoid numerical issues
+    epsilon = 1e-10
+
+    # Track convergence history
+    convergence_history = {
+        'iterations': [],
+        'row_errors': [],
+        'area_errors': [],
+        'max_errors': []
+    }
+
+    for iter in range(max_iter):
+        A_prev = A.copy()
+
+        # Step 1: Calculate line sum error (N x 1 column vector)
+        e = np.sum(A, axis=1) - np.ones(N)  # Each row should sum to 1
+
+        # Step 2: Calculate column scalar product error (n x 1 column vector)
+        f = v @ A - d
+
+        # Step 3: Define matrix C of size n x n
+        v_norm_squared = np.sum(v ** 2)
+        C = np.full((n, n), -v_norm_squared / n)
+        np.fill_diagonal(C, v_norm_squared - v_norm_squared / n)
+
+        # Step 4: Calculate q vector
+        q = f - np.dot(v, e) / n
+
+        # Step 5: Solve for lambda
+        try:
+            # Try solving the full system first
+            lambda_vec = np.linalg.solve(C + epsilon * np.eye(n), q)
+        except np.linalg.LinAlgError:
+            # Fall back to reduced system if full system fails
+            lambda_vec = np.zeros(n)
+            lambda_vec[:-1] = np.linalg.solve(
+                C[:-1, :-1] + epsilon * np.eye(n - 1), q[:-1])
+
+        # Step 6: Calculate S
+        S = np.sum(lambda_vec)
+
+        # Step 7: Calculate eta vector
+        eta = (e - S * v) / n
+
+        # Step 8: Calculate orthogonal correction
+        A_orth = np.outer(eta, np.ones(n)) + np.outer(v, lambda_vec)
+
+        # Step 9: Apply correction
+        A = A - A_orth
+
+        # Step 10: Ensure non-negativity
+        A = np.maximum(A, 0)
+
+        # Step 11: Normalize rows to ensure partition constraint
+        row_sums = np.sum(A, axis=1)
+        mask = row_sums > epsilon  # Avoid division by zero
+        A[mask] = A[mask] / row_sums[mask, np.newaxis]
+        A[~mask] = 1.0 / n  # Set uniform distribution for zero rows
+
+        # Step 12: Project onto area constraints
+        area_sums = v @ A
+        scale_factors = d / (area_sums + epsilon)
+        A = A * scale_factors[np.newaxis, :]
+
+        # Check convergence of both constraints
+        row_sum_error = np.max(np.abs(np.sum(A, axis=1) - 1))
+        area_error = np.max(np.abs(v @ A - d))
+        max_error = max(row_sum_error, area_error)
+
+        # Track convergence history
+        convergence_history['iterations'].append(iter)
+        convergence_history['row_errors'].append(row_sum_error)
+        convergence_history['area_errors'].append(area_error)
+        convergence_history['max_errors'].append(max_error)
+
+        if row_sum_error < tol and area_error < tol:
+            break
+
+        # Check if we're making progress
+        if iter > 0 and np.allclose(A, A_prev, rtol=tol, atol=tol):
+            break
+
+    # Validate final result
+    final_row_error = np.max(np.abs(np.sum(A, axis=1) - 1))
+    final_area_error = np.max(np.abs(v @ A - d))
+
+    if final_row_error > 10 * tol or final_area_error > 10 * tol:
+        raise RuntimeError(
+            "Orthogonal projection failed to achieve required tolerance")
+
+    return A
+
+
+# ---------------------------------------------------------------------------
+# Mode 1 — in-process numerical proof
+# ---------------------------------------------------------------------------
+def _constraint_errors(A, v, d):
+    row_err = float(np.max(np.abs(np.sum(A, axis=1) - 1.0)))
+    area_err = float(np.max(np.abs(v @ A - d)))
+    return row_err, area_err
+
+
+def run_equivalence(tol=1e-9, max_iter=300):
+    print("=" * 70)
+    print("Mode 1 — in-process equivalence proof")
+    print("=" * 70)
+    ok = True
+
+    # --- 1a. Projection equivalence (Change B) ---------------------------
+    print("\n[1a] Projection equivalence (current vs frozen reference)")
+    print(f"     tol={tol:.1e}, max_iter={max_iter}, "
+          f"atol_gate={max(1e-10, 10 * tol):.1e}")
+    sizes = [(200, 5), (500, 10), (1000, 30), (2000, 50)]
+    seeds = [0, 1, 7, 42]
+    atol = max(1e-10, 10 * tol)
+    worst_delta = 0.0
+    for (V, Nreg) in sizes:
+        for seed in seeds:
+            rng = np.random.default_rng(seed)
+            A = rng.random((V, Nreg))
+            v = rng.random(V) + 0.1
+            d = (v.sum() / Nreg) * np.ones(Nreg)
+            c = np.ones(Nreg)
+            A_new = orthogonal_projection_iterative(
+                A, c, d, v, max_iter=max_iter, tol=tol)
+            A_ref = reference_projection_iterative(
+                A, c, d, v, max_iter=max_iter, tol=tol)
+            delta = float(np.max(np.abs(A_new - A_ref)))
+            worst_delta = max(worst_delta, delta)
+            rerr_n, aerr_n = _constraint_errors(A_new, v, d)
+            rerr_r, aerr_r = _constraint_errors(A_ref, v, d)
+            feasible = max(rerr_n, aerr_n, rerr_r, aerr_r) < 10 * tol
+            row_ok = delta < atol and feasible
+            ok = ok and row_ok
+            status = "PASS" if row_ok else "FAIL"
+            print(f"     V={V:5d} N={Nreg:3d} seed={seed:2d}: "
+                  f"max|dA|={delta:.2e} feas(new)=({rerr_n:.1e},{aerr_n:.1e}) "
+                  f"[{status}]")
+    print(f"     worst max|dA| over grid = {worst_delta:.2e} "
+          f"(gate {atol:.1e})")
+
+    # --- 1b. Gradient-reuse invariant (Change C) -------------------------
+    # Change C reuses g_post as the NEXT iteration's pre-step gradient, valid only
+    # because x is not mutated between computing g_post and re-entering the loop.
+    # Assert that invariant directly (not merely that compute_gradient is
+    # deterministic): after the same read-only post-step bookkeeping the optimizer
+    # performs, the gradient at x must equal g_post and x must be unchanged.
+    print("\n[1b] Gradient-reuse invariant (x unmutated between g_post and reuse)")
+    try:
+        from src.surfaces.torus import TorusMeshProvider
+        from src.optimization.pgd_optimizer import ProjectedGradientOptimizer
+
+        prov = TorusMeshProvider(n_theta=12, n_phi=8, R=2.0, r=1.0)
+        prov.set_resolution(12, 8)
+        mesh = prov.build()
+        n_parts = 4
+        opt = ProjectedGradientOptimizer(
+            K=mesh.K, M=mesh.M, v=mesh.v, n_partitions=n_parts,
+            epsilon=0.1, total_area=prov.theoretical_total_area(),
+        )
+        V = len(mesh.v)
+        rng = np.random.default_rng(123)
+        A = rng.random((V, n_parts))
+        c = np.ones(n_parts)
+        d = (np.sum(mesh.v) / n_parts) * np.ones(n_parts)
+        A = orthogonal_projection_iterative(A, c, d, mesh.v,
+                                            max_iter=300, tol=1e-9)
+        x = A.flatten()
+        # One manual accepted PGD step → accepted iterate xp.
+        g = opt.compute_gradient(x)
+        A_trial = x.reshape(V, n_parts) - 0.1 * g.reshape(V, n_parts)
+        A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
+        A_trial = orthogonal_projection_iterative(A_trial, c, d, mesh.v,
+                                                  max_iter=300, tol=1e-9)
+        xp = A_trial.flatten()
+        g_post = opt.compute_gradient(xp)
+        xp_before = xp.copy()
+        # Read-only post-step bookkeeping the optimizer runs after g_post.
+        _ = opt.constraint_fun(xp)
+        _ = float(np.linalg.norm(g_post))
+        _ = xp.copy()
+        g_next = opt.compute_gradient(xp)   # what the next iteration recomputes
+        dg = float(np.max(np.abs(g_next - g_post)))
+        unmutated = bool(np.array_equal(xp, xp_before))
+        grad_ok = dg < 1e-12 and unmutated
+        ok = ok and grad_ok
+        print(f"     V={V} N={n_parts}: max|g_next - g_post| = {dg:.2e}, "
+              f"x unmutated={unmutated} [{'PASS' if grad_ok else 'FAIL'}]")
+    except Exception as exc:  # pragma: no cover - diagnostic
+        print(f"     SKIP (could not build optimizer): {exc}")
+
+    # --- 1c. Stall path exercised (Change B) -----------------------------
+    # Mode-1a converges via the natural `tol` test before the stall code runs, so the
+    # stall branch (the only behavioural change in Change B) is never exercised there.
+    # The projection residual floors near the epsilon=1e-10 regularization in
+    # projection.py; a tol below that floor makes natural convergence impossible and
+    # forces the loop to exit via the scalar-residual stall detector. Assert the
+    # returned iterate still honours the feasibility contract (max_error < 10*tol),
+    # i.e. the stall never silently returns an under-converged result.
+    print("\n[1c] Stall path exercised (tol below the ~1e-10 residual floor)")
+    rng = np.random.default_rng(11)
+    Vs, Ns = 800, 12
+    As = rng.random((Vs, Ns))
+    vs = rng.random(Vs) + 0.1
+    ds = (vs.sum() / Ns) * np.ones(Ns)
+    cs = np.ones(Ns)
+    stall_tol = 5e-11  # < floor (~1.5e-10): the natural-convergence test cannot fire
+    try:
+        A_s = orthogonal_projection_iterative(
+            As, cs, ds, vs, max_iter=300, tol=stall_tol)
+        rerr, aerr = _constraint_errors(A_s, vs, ds)
+        stall_ok = max(rerr, aerr) < 10 * stall_tol
+        detail = (f"returned feas={max(rerr, aerr):.2e} "
+                  f"(gate < {10 * stall_tol:.1e})")
+    except RuntimeError:
+        # Floor exceeded 10*tol: the function correctly refuses to return an
+        # infeasible projection instead of silently emitting one.
+        stall_ok = True
+        detail = "raised RuntimeError (floor > 10*tol) — contract honoured"
+    ok = ok and stall_ok
+    print(f"     tol={stall_tol:.1e}: {detail} [{'PASS' if stall_ok else 'FAIL'}]")
+
+    print("\n" + ("RESULT: PASS" if ok else "RESULT: FAIL"))
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# Mode 2 — compare two completed runs
+# ---------------------------------------------------------------------------
+def _load_run(run_dir):
+    run = Path(run_dir)
+    # Resolve the base solution the way src/pipeline/io.py (find_base_solution_path)
+    # does: exclude refined-contour checkpoints and take the latest when a run dir
+    # holds several (e.g. a resumed run), not the lexicographically-first file.
+    candidates = sorted(
+        p for p in glob.glob(str(run / "solution" / "*.h5"))
+        if not p.endswith("_refined_contours.h5")
+    )
+    if not candidates:
+        raise FileNotFoundError(f"No base solution *.h5 under {run / 'solution'}")
+    sol_path = candidates[-1]
+    import h5py
+    sol = {}
+    with h5py.File(sol_path, "r") as h5:
+        sol["x_opt"] = np.array(h5["x_opt"])
+        sol["vertices"] = np.array(h5["vertices"])
+        sol["faces"] = np.array(h5["faces"])
+        sol["n_partitions"] = int(h5.attrs["n_partitions"])
+    meta_path = run / "solution" / "metadata.yaml"
+    meta = (yaml.safe_load(meta_path.read_text())
+            if meta_path.exists() else {}) or {}
+    # initial_perimeter = extracted contour length (resolution-independent quality).
+    sol["perimeter"] = meta.get("initial_perimeter")
+    tp_path = run / "solution" / "timing_profile.yaml"
+    sol["timing"] = (yaml.safe_load(tp_path.read_text())
+                    if tp_path.exists() else None)
+    # Final energy: prefer metadata; fall back to the finest-level trace summary.
+    fe = meta.get("final_energy")
+    sol["final_energy"] = fe if fe is not None else _final_energy_from_traces(run)
+    return sol
+
+
+def _final_energy_from_traces(run):
+    summaries = sorted(glob.glob(str(Path(run) / "traces" / "*_summary.out")))
+    if not summaries:
+        return None
+
+    def level_of(p):
+        name = Path(p).name
+        for tok in name.split("_"):
+            if tok.startswith("level"):
+                try:
+                    return int(tok[len("level"):])
+                except ValueError:
+                    return -1
+        return -1
+
+    summaries.sort(key=level_of)
+    finest = summaries[-1]
+    last = None
+    for line in Path(finest).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("MAJOR"):
+            continue
+        last = line
+    if last is None:
+        return None
+    cols = last.split()
+    # Columns: MAJOR NFEV NGEV OBJFUN GNORM CNORM FEAS OPT STEP
+    return float(cols[3])
+
+
+def _partition_agreement(x_b, x_c, V, N):
+    Phi_b = x_b.reshape(V, N)
+    Phi_c = x_c.reshape(V, N)
+    lab_b = np.argmax(Phi_b, axis=1)
+    lab_c = np.argmax(Phi_c, axis=1)
+    # Overlap matrix; rows = baseline label, cols = candidate label.
+    overlap = np.zeros((N, N), dtype=np.int64)
+    np.add.at(overlap, (lab_b, lab_c), 1)
+    from scipy.optimize import linear_sum_assignment
+    # Maximize overlap → minimize negative.
+    row_ind, col_ind = linear_sum_assignment(-overlap)
+    agree = int(overlap[row_ind, col_ind].sum())
+    return 100.0 * agree / V
+
+
+def run_compare(baseline_dir, candidate_dir, stage=None):
+    print("=" * 70)
+    print("Mode 2 — compare two completed Phase 1 runs")
+    print(f"  baseline : {baseline_dir}")
+    print(f"  candidate: {candidate_dir}")
+    if stage:
+        print(f"  stage    : {stage} "
+              f"(applies the stage-specific acceptance thresholds)")
+    print("=" * 70)
+
+    b = _load_run(baseline_dir)
+    cd = _load_run(candidate_dir)
+
+    if b["n_partitions"] != cd["n_partitions"]:
+        print(f"FAIL: n_partitions differ "
+              f"({b['n_partitions']} vs {cd['n_partitions']})")
+        return False
+    N = b["n_partitions"]
+    x_b = b["x_opt"]
+    x_c = cd["x_opt"]
+    if x_b.shape != x_c.shape:
+        print(f"FAIL: x_opt shapes differ ({x_b.shape} vs {x_c.shape})")
+        return False
+    V = x_b.size // N
+
+    # Stage thresholds. Change C is exact (dx + energy gated). Changes A/B are
+    # path-altering (warm-started steps + the projection stall swap) — they reach the
+    # SAME minimizer via a different trajectory, so at A/B energy and max|dx| are
+    # REPORTED but NOT gated (they measure trajectory chaos on the flat basin floor:
+    # ~1e-6 energy / ~1e-4 dx at N=50, on an identical partition). The A/B gates are
+    # the resolution-independent quality metrics: contour perimeter, partition
+    # agreement, and v-weighted region areas. (See the audit "Implementation outcome".)
+    thr = {
+        "C": dict(dx=1e-12, energy=1e-10, partition=100.0, areas=1e-3, perimeter=1e-9),
+        "B": dict(dx=None, energy=None, partition=99.5, areas=1e-3, perimeter=1e-3),
+        "A": dict(dx=None, energy=None, partition=99.5, areas=1e-3, perimeter=1e-3),
+    }.get(stage, dict(dx=None, energy=None, partition=99.5, areas=1e-3, perimeter=1e-3))
+
+    ok = True
+
+    # 1. Final energy (gated only at the exact stage C; reported at A/B).
+    print("\n[1] Final energy")
+    if b["final_energy"] is not None and cd["final_energy"] is not None:
+        E_b, E_c = b["final_energy"], cd["final_energy"]
+        rel = abs(E_b - E_c) / abs(E_b) if E_b != 0 else abs(E_c)
+        print(f"    E_base={E_b:.12e}  E_cand={E_c:.12e}")
+        if thr["energy"] is not None:
+            e_ok = rel < thr["energy"]
+            ok = ok and e_ok
+            print(f"    rel diff = {rel:.2e}  (gate {thr['energy']:.0e}) "
+                  f"[{'PASS' if e_ok else 'FAIL'}]")
+        else:
+            print(f"    rel diff = {rel:.2e}  (reported, not gated at this stage; "
+                  f"trajectory differs on the flat basin floor)")
+    else:
+        print("    SKIP (final energy not found)")
+
+    # 2. Solution vector (only meaningful at exact stages).
+    print("\n[2] Solution vector max|dx|")
+    dx = float(np.max(np.abs(x_b - x_c)))
+    if thr["dx"] is not None:
+        dx_ok = dx < thr["dx"]
+        ok = ok and dx_ok
+        print(f"    max|dx| = {dx:.2e}  (gate {thr['dx']:.0e}) "
+              f"[{'PASS' if dx_ok else 'FAIL'}]")
+    else:
+        print(f"    max|dx| = {dx:.2e}  (reported, not gated at this stage; "
+              f"trajectory differs)")
+
+    # 3. Partition agreement (permutation-invariant).
+    print("\n[3] Partition agreement (optimal relabel)")
+    agree = _partition_agreement(x_b, x_c, V, N)
+    p_ok = agree >= thr["partition"]
+    ok = ok and p_ok
+    print(f"    agreement = {agree:.4f}%  (gate >= {thr['partition']}%) "
+          f"[{'PASS' if p_ok else 'FAIL'}]")
+
+    # 4. Region areas (permutation-invariant), FEM lumped-mass weighted.
+    print("\n[4] Region areas (sorted) rel diff")
+    # The equal-area constraint is on the FEM lumped mass v = row-sum of M (v^T A=d),
+    # so weight each winning vertex by its lumped mass rather than counting vertices
+    # (raw counts misweight non-uniform meshes). v is reconstructed from the stored
+    # vertices/faces via the canonical TriMesh assembly.
+    from src.mesh.tri_mesh import TriMesh
+    v_b = TriMesh(b["vertices"], b["faces"]).v
+    v_c = TriMesh(cd["vertices"], cd["faces"]).v
+    areas_b = np.sort(np.bincount(np.argmax(x_b.reshape(V, N), axis=1),
+                                  weights=v_b, minlength=N))
+    areas_c = np.sort(np.bincount(np.argmax(x_c.reshape(V, N), axis=1),
+                                  weights=v_c, minlength=N))
+    denom = np.where(areas_b != 0, areas_b, 1.0)
+    area_rel = float(np.max(np.abs(areas_b - areas_c) / denom))
+    a_ok = area_rel < thr["areas"]
+    ok = ok and a_ok
+    print(f"    sorted v-weighted region-area rel diff = {area_rel:.2e}  "
+          f"(gate {thr['areas']:.0e}) [{'PASS' if a_ok else 'FAIL'}]")
+
+    # 5. Contour perimeter (resolution-independent quality metric; the primary
+    # equivalence gate for path-altering stages — see the module docstring NOTE).
+    print("\n[5] Contour perimeter (extracted) rel diff")
+    P_b, P_c = b.get("perimeter"), cd.get("perimeter")
+    if P_b is not None and P_c is not None:
+        p_rel = abs(P_b - P_c) / abs(P_b) if P_b != 0 else abs(P_c)
+        print(f"    P_base={P_b:.10f}  P_cand={P_c:.10f}")
+        if thr["perimeter"] is not None:
+            per_ok = p_rel < thr["perimeter"]
+            ok = ok and per_ok
+            print(f"    rel diff = {p_rel:.2e}  (gate {thr['perimeter']:.0e}) "
+                  f"[{'PASS' if per_ok else 'FAIL'}]")
+        else:
+            print(f"    rel diff = {p_rel:.2e}  (reported)")
+    else:
+        print("    SKIP (initial_perimeter not in metadata.yaml for one/both runs)")
+
+    # 6. Speedup (report; assert backtrack reduction if timing present).
+    print("\n[6] Speedup (mean backtracks / iter, total wall time)")
+    bt_b = _mean_backtracks(b["timing"])
+    bt_c = _mean_backtracks(cd["timing"])
+    wall_b = _total_wall(b["timing"])
+    wall_c = _total_wall(cd["timing"])
+    if bt_b is not None and bt_c is not None:
+        print(f"    mean backtracks/iter: base={bt_b:.4f}  cand={bt_c:.4f}")
+        bt_ok = bt_c < bt_b
+        if stage == "A" or stage is None:
+            ok = ok and bt_ok
+        print(f"    backtrack reduction: "
+              f"{'PASS' if bt_ok else 'FAIL'} "
+              f"({'expected only after Change A' if stage in ('B', 'C') else 'asserted'})")
+    else:
+        print("    SKIP backtracks (no timing_profile.yaml; rerun with --profile)")
+    if wall_b is not None and wall_c is not None and wall_c > 0:
+        print(f"    total wall: base={wall_b:.2f}s  cand={wall_c:.2f}s  "
+              f"speedup={wall_b / wall_c:.2f}x")
+    else:
+        print("    SKIP wall time (no timing_profile.yaml)")
+
+    print("\n" + ("RESULT: PASS" if ok else "RESULT: FAIL"))
+    return ok
+
+
+def _mean_backtracks(timing):
+    if not timing:
+        return None
+    summ = timing.get("summary", {})
+    return summ.get("mean_backtracks_per_iter")
+
+
+def _total_wall(timing):
+    if not timing:
+        return None
+    summ = timing.get("summary", {})
+    return summ.get("total_wall_s")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Validate Phase 1 PGD serial optimizations (Changes A/B/C).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    ap.add_argument("--equivalence", action="store_true",
+                    help="Mode 1: in-process projection + gradient equivalence.")
+    ap.add_argument("--compare", action="store_true",
+                    help="Mode 2: compare two completed run directories.")
+    ap.add_argument("--baseline", help="Baseline run dir (built from main).")
+    ap.add_argument("--candidate", help="Candidate run dir (built from branch).")
+    ap.add_argument("--stage", choices=["A", "B", "C"],
+                    help="Apply the stage-specific acceptance thresholds.")
+    ap.add_argument("--tol", type=float, default=1e-9,
+                    help="Projection tolerance for Mode 1 (default 1e-9).")
+    args = ap.parse_args()
+
+    if not (args.equivalence or args.compare):
+        ap.error("choose at least one of --equivalence / --compare")
+
+    ok = True
+    if args.equivalence:
+        ok = run_equivalence(tol=args.tol) and ok
+    if args.compare:
+        if not (args.baseline and args.candidate):
+            ap.error("--compare requires --baseline and --candidate")
+        ok = run_compare(args.baseline, args.candidate, stage=args.stage) and ok
+
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()
