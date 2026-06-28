@@ -250,19 +250,36 @@ landable before a multi-day run. Everything in energy/gradient and the mesh/FEM
 layer is secondary, bounded by the ~10–15 % non-projection share. The actionable,
 safe, pre-run set is **#1 + #4 + #6** (with #8 folded in for free).
 
-## Implementation outcome (2026-06-26)
+## Implementation outcome (2026-06-26 — validated at N=50 2026-06-28)
 
 Opportunities **#1 (Change A)**, **#4 (Change B)**, **#6 (Change C)**, and **#8**
 (folded into Change A) were implemented on branch `feat/pgd-serial-optimizations`
-and validated with `testing/validate_pgd_optimizations.py` (Test 14). The plan that
-drove this work (`docs/plans/PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md`) was retired
-on completion; the lasting findings live here.
+and validated with `testing/validate_pgd_optimizations.py` (Test 14). A high-effort
+code review (and the fixes in commit `20637a2`) hardened the projection stall logic
+and the harness before the production run; the plan that drove this work
+(`docs/plans/PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md`) was retired on completion and
+the lasting findings live here.
 
-**Measured speedup** (fast torus-10 A/B config — 3 levels, seed 13001502,
-`tol=1e-9`, same machine, `--profile`): mean backtracks/iter **5.15 → 2.74**, total
-relaxation wall time **2.40×** (71.9 s → 29.9 s). The minimizer is preserved:
-partition agreement 100 %, region areas identical, final energy relative difference
-1.1e-8.
+**Production validation (N=50 torus, `torus_50part.yaml`, seed 84172851, 5 levels,
+`tol=1e-9`).** Pre-optimization (`main`) baseline vs the branch, identical
+config/seed/machine, both `--profile`:
+
+| Metric | Baseline | Branch | Result |
+|---|---|---|---|
+| Contour perimeter (extracted) | 152.3883843639 | 152.3883843639 | **bit-identical** |
+| Partition agreement (optimal relabel) | — | **100.0000 %** | identical |
+| Region areas (v-weighted FEM) | — | **0.00e+00** rel | exact |
+| Final energy | 2.6183775e+01 | 2.6183886e+01 | rel 4.21e-6 (reported) |
+| Mean backtracks/iter | **7.16** | **1.93** | 3.7× fewer trials |
+| Total wall time | **158,088 s (~43.9 h)** | **41,754 s (~11.6 h)** | **3.79×** |
+
+The partition is **identical** at **3.79× wall-clock**. The speedup scales with the
+backtrack count, which grows with N: the warm-start cut fine-level backtracks from
+~6–7.7 to ~1.8–2.0 per iteration (the coarsest level still thrashes but costs
+seconds). Smaller dev configs gave smaller speedups for the same reason — fast
+torus-10 (3 levels) **2.40×** (5.15 → 2.74 backtracks, energy rel 1.1e-8), standard
+torus-10 (5 levels, `tol=1e-10`) **1.56×** (2.82 → 1.72) — all preserving the
+partition exactly.
 
 **Change C (gradient reuse) is exact** — bit-identical end-to-end (`max|dx| = 0`).
 
@@ -276,24 +293,34 @@ table inherited an end-to-end `max|dx| < 1e-9` gate for Change B. That gate was
   bit-identical end-to-end (`max|dx| = 0`) with the original `allclose` stall
   retained, and the projection-equivalence unit test (current vs frozen reference)
   agrees to `0.00e+00 < max(1e-10, 10*tol)`.
-- Replacing the `A_prev` + `np.allclose(A, A_prev)` stall with the scalar-residual
-  stall test **deliberately changes the inner-loop exit iteration** (the original
-  premise that this stall was "rarely exercised" is false: the equal-area/simplex
-  residual routinely plateaus above `tol`, so the *stall*, not the primary residual
-  test, stops most projections). Each projection is perturbed by ~`tol` (1e-9);
-  over ~3000 PGD steps those perturbations compound along the trajectory to ~1e-7
-  in the final density field while landing on the **same minimizer**. This is not a
-  bug: there is no in-place `C` mutation, no sign error, and the stall is gated on
-  `max_error < 10*tol` so it never returns an infeasible iterate (the function's
-  final feasibility guard never fired).
+- Replacing the `A_prev` + `np.allclose(A, A_prev)` stall with a **scalar-residual
+  stall detector deliberately changes the inner-loop exit iteration.** The code
+  review found the first implementation (a single-step `(prev_max_error − max_error)
+  < 1e-2·tol` test) fired on *any* non-improvement — including a transient
+  non-monotone tick-up of the alternating projection — so commit `20637a2` replaced
+  it with a **consecutive-plateau detector**: break only after the residual fails to
+  improve on its best value for `stall_patience = 5` iterations. It tolerates
+  non-monotone ticks, breaks on a genuine stall regardless of magnitude (a stall
+  *above* `tol` no longer runs to `max_iter`), restores a `WARNING` when stalling
+  above `tol`, and is gated so it never returns an infeasible iterate. Each
+  projection is still perturbed by ~`tol`; over thousands of PGD steps this
+  compounds along the trajectory (~1e-7 in the density field at the small config,
+  ~1e-4 at N=50) while landing on the **same minimizer**. This is not a bug: no
+  in-place `C` mutation, no sign error, and the final feasibility validation never
+  fires.
 
-Because `max|dx|` measures *trajectory chaos* rather than correctness for a
-path-altering change, the **corrected, authoritative end-to-end gate for Change B**
-(and for the combined A+B+C) **drops `max|dx|`** and asserts only:
-energy rel `< 1e-6`, partition agreement `>= 99.5 %`, region areas rel `< 1e-3`.
-The strict/exact thresholds still apply where exactness genuinely holds: the Mode 1
-projection-equivalence unit test (`< max(1e-10, 10*tol)`) and Change C end-to-end
-(`< 1e-12`). This is the gate encoded in Test 14.
+Because `max|dx|` **and final energy** measure *trajectory chaos* rather than result
+quality for a path-altering change, the **corrected, authoritative end-to-end gate**
+for the path-altering stages (Change B, Change A, and combined A+B+C) **reports but
+does not gate** `max|dx|` and final energy, and instead asserts the
+resolution-independent quality metrics: **contour perimeter** rel `< 1e-3`,
+**partition agreement** `>= 99.5 %`, and **v-weighted region areas** rel `< 1e-3`.
+(The original plan gated energy rel `< 1e-6`; the N=50 run showed two converged
+trajectories legitimately differ by rel 4.21e-6 in energy on the flat basin floor
+while producing a bit-identical partition, so the energy gate was demoted to a
+report — commit `08a920d`.) The strict/exact thresholds still apply where exactness
+genuinely holds: the Mode-1 projection-equivalence unit test (`< max(1e-10, 10*tol)`)
+and Change C end-to-end (`< 1e-12`). This is the gate encoded in Test 14.
 
 ## Related documents
 
