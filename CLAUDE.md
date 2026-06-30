@@ -167,6 +167,8 @@ testing/
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/
 ├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
+├── torus_30part.yaml             # Torus, 30 partitions (parametric mesh; seeded init)
+├── torus_50part.yaml             # Torus, 50 partitions (parametric mesh; seeded init, 6 levels)
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
 ├── double_torus_10part.yaml      # Double torus, 10 partitions (implicit / marching cubes)
 └── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions (implicit / marching cubes)

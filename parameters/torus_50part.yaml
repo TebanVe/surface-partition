@@ -1,0 +1,102 @@
+# Experiment: 50-partition torus of revolution
+#
+# Parameter rationale (derived from N=30 empirical runs, Jun 2026):
+#
+#   lambda_penalty = 2.1
+#     Same value that produced clean 30-cell partitions (seeded init, 5 levels).
+#     No empirical basis yet to change it for N=50.
+#
+#   init_method = seeded
+#     REQUIRED for N >= 30.  Random init produces dormant cells at this N.
+#
+#   refinement_levels = 5  (same as N=30)
+#     Five levels gave clean 30-cell partitions; same schedule applied here.
+#     Level schedule:
+#       L0: 100×096 =   9,600 V  (192 V/cell)
+#       L1: 162×154 =  24,948 V  (499 V/cell)
+#       L2: 224×212 =  47,488 V  (950 V/cell)
+#       L3: 286×270 =  77,220 V  (1544 V/cell)
+#       L4: 348×328 = 114,144 V  (2283 V/cell)
+#
+#   n_theta = 100, n_phi = 96  (vs 90×86 for N=30)
+#     Gives 192 V/cell at L0 (vs 155 with 90×86 and N=50).
+#     Provides comparable safety margin to the N=30 reference (258 V/cell).
+#
+#   max_iter = 30000  (per level — same as N=30)
+#     Each N=30 level triggered refinement in ~5k–10k iterations; 30k is a
+#     generous per-level cap.  Total across 5 levels will be well under 150k.
+#
+# Estimated wall time (single machine, seeded init):
+#   Lower bound (best seed): ~100 h  (~4 days)
+#   Upper bound (worst seed): ~190 h  (~8 days)
+#   See docs/math/05-phase1-nregion-scaling/main.pdf for the scaling analysis.
+
+experiment:
+  name: torus-50-partitions
+  surface: torus
+
+# Phase 1: Γ-convergence relaxation via Projected Gradient Descent
+relaxation:
+  n_partitions: 50
+  lambda_penalty: 2.1
+  seed: 84172851                      # best seed from N=30 runs; try others in sweep
+  max_iter: 30000
+  refinement_levels: 5
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  init_method: seeded                 # REQUIRED: random init causes dormant cells at N>=30
+
+  # PGD step-size control (unchanged from N=30)
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  # Multi-level refinement triggers
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  # PGD penalty controls
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  # Trace / logging
+  run_log_frequency: 500              # less frequent logging for long runs
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true                       # write solution/timing_profile.yaml
+
+# Surface geometry
+surface:
+  torus:
+    n_theta: 100                      # base resolution along major circle
+    n_phi: 96                         # base resolution along tube circle
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62             # added per refinement level (same as N=30)
+    n_phi_increment: 58               # added per refinement level (same as N=30)
+
+# Phase 2: iterative perimeter refinement
+refinement:
+  method: ipopt
+  max_iterations: 19                   # start with 1 to inspect before committing to full run
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

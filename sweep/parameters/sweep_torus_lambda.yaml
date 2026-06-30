@@ -15,11 +15,11 @@ base_config: parameters/torus_30part.yaml
 
 sweep:
   relaxation.n_partitions: [30]
-  relaxation.lambda_penalty: [1.9, 2.0, 2.1]
-  relaxation.seed: [13131313, 84172851]
-  relaxation.refinement_levels: [3]
+  relaxation.lambda_penalty: [2.1]
+  relaxation.seed: [13151129, 61847392, 47301856, 83920164]
+  relaxation.refinement_levels: [5]
   resolution:
-    surface.torus.n_theta: [60]
-    surface.torus.n_phi:   [46]
+    surface.torus.n_theta: [90]
+    surface.torus.n_phi:   [86]
 
 strategy: grid

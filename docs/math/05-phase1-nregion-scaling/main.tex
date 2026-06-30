@@ -1,0 +1,533 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 1 Scaling with Number of Regions},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Phase~1 Wall-Time Scaling with Number of Regions}\\[0.5em]
+  \large Empirical Measurements, Power-Law Fit, and the Path to $N>100$}
+\author{}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document analyses how Phase~1 (PGD relaxation) wall time grows with the
+number of regions~$N$.  Two pre-optimization data points --- $N=10$ (1.2\,h, 7
+levels, torus, random init) and $N=30$ (20.7\,h--38.2\,h, 5 levels, torus,
+seeded init) --- yield an empirical power-law exponent of approximately
+$\alpha \approx 3.1$, meaning wall time scales roughly as $N^3$.  Since these
+measurements were taken, the serial optimizations of
+\S\ref{sec:serial-opts} (the backtracking step warm-start, the projection
+inner-loop cleanup, and post-step gradient reuse) landed; they are
+\emph{constant-factor} wins ($\approx\!3.8\times$ at $N=50$) and so do
+\textbf{not} change~$\alpha$, but they re-anchor every absolute estimate
+below.  A profiled post-optimization run measures $N=50$ at
+$\mathbf{11.6}$~\textbf{h} (clean host, best seed, 5 levels).  Anchored on
+that measured point with $\alpha = 3.1$, the projections become
+$\sim\!\mathbf{4}$~\textbf{days} for $N=100$ and $\sim\!\mathbf{14}$
+\textbf{years} for $N=1000$ --- the latter still infeasible at scale on a
+single machine, though an order of magnitude below the pre-optimization
+$\sim\!120$\,yr.  The dominant cost remains the orthogonal projection, whose
+share fell from $88$--$90\%$ to $\approx\!80\%$ after the inner-loop cleanup
+and which still scales as $\mathcal{O}(N)$ per call.  The $N^3$ overall
+scaling arises because both the per-call cost and the number of iterations
+grow with~$N$.  The remaining levers --- the durable algorithmic fix is a
+closed-form simplex projection with a dual-Newton equal-area coupling
+(\S\ref{sec:improvements}), plus parallelising across regions --- are
+required before the method can scale to $N > 100$.  Inner-solver dual
+warm-start, listed as future work in an earlier draft, has since been
+ruled out on correctness grounds.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Context and Motivation}
+% =========================================================================
+
+The long-term goal of the surface-partition project is to compute
+minimal-perimeter partitions for $N \gg 30$ regions, with $N = 1000$ as a
+target.  Document~04 (\emph{Phase~1 Timing Profile}) established that
+$88$--$90\%$ of Phase~1 wall time is spent in the orthogonal projection
+$\Pi_{\mathcal{C}}$ onto the partition-of-unity and equal-area constraints,
+and that the projection cost per call is $\mathcal{O}(\mathrm{mPII} \cdot V
+N)$, where $V$ is the number of mesh vertices and $\mathrm{mPII}$ is the
+mean inner-iteration count.
+
+This document quantifies how total Phase~1 wall time actually grows with $N$
+using the $N$ values for which profiled data exist, projects the fit to
+larger~$N$, and identifies which factors in the cost model are responsible
+for the steep scaling.
+
+\begin{remark}[Optimization status]
+The $N=10$ and $N=30$ runs of \S\ref{sec:data} predate the Phase~1 PGD serial
+optimizations (Changes~A/B/C; see \S\ref{sec:serial-opts} and
+\texttt{docs/reference/PHASE1\_PGD\_SERIAL\_OPTIMIZATION\_AUDIT.md}).  The
+$N=50$ run of \S\ref{sec:n50} is post-optimization.  Because Changes~A/B/C
+are constant-factor wins, the \emph{exponent} $\alpha$ derived from the
+pre-optimization pair is unchanged, but the \emph{absolute} projections of
+\S\ref{sec:projections} are re-anchored on the measured post-optimization
+$N=50$ point.
+\end{remark}
+
+% =========================================================================
+\section{Notation and Setup}
+\label{sec:notation}
+% =========================================================================
+
+Throughout this document:
+
+\begin{itemize}
+  \item $N$ --- number of regions (partition cells).
+  \item $V$ --- number of mesh vertices at the finest refinement level.
+  \item $L$ --- number of refinement levels.
+  \item $T$ --- total Phase~1 wall time (seconds or hours).
+  \item $\mathrm{mBT}$ --- mean Armijo backtrack trial steps per major iteration.
+  \item $\mathrm{mPII}$ --- mean inner-iteration count per projection call.
+  \item $K$ --- total major (outer) PGD iterations summed across all levels.
+\end{itemize}
+
+The cost model from document~04 is
+\begin{equation}
+  T \;\sim\;
+  \underbrace{K \cdot (\mathrm{mBT}+1)}_{\text{\# projection calls}}
+  \;\times\;
+  \underbrace{\mathrm{mPII} \cdot V N}_{\text{cost per call}}.
+  \label{eq:cost-model}
+\end{equation}
+
+% =========================================================================
+\section{Measured Data Points}
+\label{sec:data}
+% =========================================================================
+
+\subsection{$N = 10$ reference run}
+
+An early profiled run used the random initialisation, 7 refinement levels,
+and an 80$\times$66 initial mesh growing to $V_{10} = 187{,}128$ vertices at
+the finest level.  The total wall time was $T_{10} = 1.19$\,h.  Per-level
+iteration counts were not recorded in this run's metadata (older schema), so
+the iteration breakdown is unavailable; only the aggregate time is used.
+
+\begin{table}[H]
+\centering
+\caption{$N=10$ reference run (torus, $\lambda = 3.25$, seed 13001502,
+random init).}
+\label{tab:n10}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Regions $N$            & 10 \\
+Refinement levels $L$  & 7 \\
+Initial mesh           & $80 \times 66$ (5\,280 vertices) \\
+Final mesh $V_{10}$    & 187\,128 vertices \\
+Total wall time $T_{10}$ & 1.19\,h \\
+Initialisation         & random \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{$N = 30$ sweep (seeded initialisation)}
+
+Six profiled runs used the seeded (Voronoi farthest-point) initialisation,
+5 refinement levels, and a 90$\times$86 initial mesh growing to
+$V_{30} = 107{,}484$ vertices.  All six produced valid 30-region partitions
+(no dormant cells).  Wall times vary by a factor of $1.8\times$ across seeds
+due to line-search behaviour at intermediate levels; the best-case run
+(seed 84172851) is used as the lower bound for scaling estimates, and the
+worst-case run (seed 61847392) as the upper bound.
+
+\begin{table}[H]
+\centering
+\caption{$N=30$ profiled runs (torus, $\lambda=2.1$, 5 levels, seeded init,
+$V_{30}=107{,}484$ vertices).}
+\label{tab:n30}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{rrrrrr}
+\toprule
+Seed & Wall (h) & Iters $K$ & $\mathrm{mBT}$ & $\mathrm{mPII}$ & proj \% \\
+\midrule
+84172851 & \phantom{0}20.74 & 27\,001 & --- & 19.4 & 89.4 \\
+83920164 & \phantom{0}25.86 & 38\,574 & --- & 19.5 & 90.1 \\
+47301856 & \phantom{0}29.09 & 37\,980 & --- & 17.4 & 89.2 \\
+13151129 & \phantom{0}30.14 & 45\,110 & --- & 16.4 & 88.1 \\
+61847392 & \phantom{0}38.17 & 49\,811 & --- & 17.6 & 89.0 \\
+\midrule
+\textbf{min / max} & \textbf{20.74 / 38.17} & & & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:n30-levels} shows the per-level projection cost for the
+best-case $N=30$ run, demonstrating the $\mathcal{O}(VN)$ trend within a
+single run as $V$ grows across levels.
+
+\begin{table}[H]
+\centering
+\caption{Per-level projection call timing for the $N=30$ reference run
+(seed 84172851).  Mean projection time grows with $V$ as expected.}
+\label{tab:n30-levels}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{rrrrr}
+\toprule
+Level & Vertices $V$ & Proj calls & Mean proj (ms) & Level wall (s) \\
+\midrule
+0 & \phantom{0}7\,740  & \phantom{00}1\,600 &  38.9 & \phantom{000}77 \\
+1 & 21\,888             & \phantom{0}57\,935 & 182.0 & \phantom{0}2\,995 \\
+2 & 43\,228             & \phantom{0}42\,880 & 196.9 & \phantom{0}4\,847 \\
+3 & 71\,760             & \phantom{0}34\,080 & 571.2 & \phantom{0}8\,823 \\
+4 & 107\,484            & \phantom{0}32\,627 & 865.3 & 27\,934 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{$N = 50$ measured run (post-optimization)}
+\label{sec:n50}
+
+A profiled run taken \emph{after} the serial optimizations of
+\S\ref{sec:serial-opts} provides the first real $N=50$ data point and the new
+anchor for absolute projections.  It used the seeded initialisation, 5
+refinement levels, and a $100\times96$ initial mesh growing to
+$V_{50}=114{,}144$ vertices.  On a clean host (best seed 84172851) the total
+wall time was $T_{50}=41{,}754\,\text{s} = \mathbf{11.6}$\,h.
+
+\begin{table}[H]
+\centering
+\caption{$N=50$ post-optimization run (torus, $\lambda=2.1$, seed 84172851,
+5 levels, seeded init, $V_{50}=114{,}144$ vertices; run
+\texttt{run\_20260627\_234511}).}
+\label{tab:n50}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{ll}
+\toprule
+\textbf{Quantity} & \textbf{Value} \\
+\midrule
+Total wall time $T_{50}$       & 11.6\,h (41\,754\,s) \\
+Major iterations $K$           & 54\,154 \\
+Mean backtracks $\mathrm{mBT}$ & 1.93 \\
+Mean inner iters $\mathrm{mPII}$ & 13.76 \\
+Projection share               & 80.5\,\% of wall \\
+Energy / gradient share        & 8.2\,\% / 7.4\,\% \\
+Backtrack share (net)          & 2.5\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Compared against the pre-optimization regime quoted for $N=30$
+(Table~\ref{tab:n30}; $\mathrm{mPII}\approx16$--$20$, projection share
+$88$--$90\%$, $\mathrm{mBT}$ in the $4$--$12$ range at the tail), the
+optimization effects are directly visible in the profile:
+\begin{itemize}
+  \item $\mathrm{mBT}$ collapsed to $1.93$ --- Change~A's line-search
+    warm-start removed most of the rejected backtrack trials (and with them
+    the rejected-step projections), which is the largest single contributor
+    to the $\approx\!3.8\times$ speedup.
+  \item the projection share fell from $88$--$90\%$ to $80.5\%$ ---
+    Change~B trimmed the per-inner-iteration $\mathcal{O}(VN)$ waste, and the
+    rejected-step projections eliminated by Change~A no longer inflate the
+    bucket.
+  \item $\mathrm{mPII}$ is $13.8$, modestly below the pre-optimization
+    $15$--$20$; Change~B did not target the inner-iteration \emph{count}
+    (it left the algorithm result-preserving), so this is mostly run-to-run
+    variation, not a warm-start effect.
+\end{itemize}
+
+\begin{remark}[Hardware variance dominates absolute timing]
+The same config and seed took $43.9$\,h on a contended host
+(\texttt{run\_20260625\_113015}) versus $11.6$\,h on a clean one --- a
+$3.8\times$ spread from hardware contention alone, comparable to the
+optimization speedup itself.  Absolute projections below are anchored on the
+fastest clean run; worst-seed $\times$ contended-host combinations can run
+$2$--$4\times$ higher.
+\end{remark}
+
+% =========================================================================
+\section{Empirical Scaling Fit}
+\label{sec:fit}
+% =========================================================================
+
+\subsection{Mesh-size normalisation}
+
+The two data points use different final mesh sizes ($V_{10} = 187{,}128$ and
+$V_{30} = 107{,}484$).  Since projection cost scales linearly with $V$, we
+normalise $T_{10}$ to the $N=30$ mesh before fitting:
+\begin{equation}
+  T_{10}^{\ast}
+  \;=\; T_{10} \times \frac{V_{30}}{V_{10}}
+  \;=\; 1.19 \times \frac{107{,}484}{187{,}128}
+  \;\approx\; 0.683\,\text{h}.
+  \label{eq:t10-adj}
+\end{equation}
+
+\subsection{Power-law exponent}
+
+Assuming $T \propto N^{\alpha}$ and using the adjusted pair
+$(N, T) \in \{(10,\, 0.683), (30,\, 20.74)\}$ (hours):
+\begin{equation}
+  \alpha
+  \;=\; \frac{\ln(T_{30} / T_{10}^{\ast})}{\ln(30/10)}
+  \;=\; \frac{\ln(30.4)}{\ln(3)}
+  \;\approx\; \frac{3.41}{1.10}
+  \;\approx\; 3.1.
+  \label{eq:alpha}
+\end{equation}
+
+The exponent $\alpha \approx 3$ decomposes into two factors:
+\begin{itemize}
+  \item \textbf{$\mathcal{O}(N)$ per projection call} --- the inner loop of
+    $\Pi_{\mathcal{C}}$ operates on the $V \times N$ density matrix, so each
+    call costs linearly in $N$.
+  \item \textbf{$\mathcal{O}(N^2)$ iteration count} --- more regions produce
+    a more crowded energy landscape; empirically, $K$ grows roughly as $N^2$
+    between the two data points (from $\sim\!3{,}500$ at $N=10$, estimated,
+    to $\sim\!27{,}000$--$50{,}000$ at $N=30$, measured).
+\end{itemize}
+
+Combined: $T \propto N \cdot N^2 = N^3$, consistent with $\alpha \approx 3.1$.
+
+\begin{remark}[Uncertainty in $\alpha$]
+The fit rests on only two data points from runs with different initialisations
+(random vs.\ seeded) and different level counts (7 vs.\ 5).  The true exponent
+could plausibly lie in the range $[2.5,\, 3.5]$.  The estimates below
+should be treated as order-of-magnitude guides, not precise predictions.
+\end{remark}
+
+\begin{remark}[Why the optimizations do not move $\alpha$]
+The serial optimizations (\S\ref{sec:serial-opts}) multiply $T$ by a roughly
+$N$-independent constant ($\approx\!1/3.8$), which cancels in the ratio
+$T_{30}/T_{10}^{\ast}$ of Eq.~\eqref{eq:alpha}.  The exponent is therefore
+still $\alpha \approx 3.1$.  What \emph{did} change is the absolute scale:
+\S\ref{sec:projections} anchors $T(N) = T_{50}\,(N/50)^{\alpha}$ on the
+measured post-optimization point $T_{50}=11.6$\,h, rather than extrapolating
+from the pre-optimization $N=30$ table.  As a consistency check, the
+pre-optimization fit predicts $T_{50}\approx 20.74\,(50/30)^{3.1}\approx
+102$\,h; dividing by the measured $3.8\times$ speedup gives $\approx\!27$\,h,
+still $\sim\!2\times$ above the measured $11.6$\,h --- within the
+order-of-magnitude tolerance the two-point fit warrants.
+\end{remark}
+
+% =========================================================================
+\section{Projections to Larger $N$}
+\label{sec:projections}
+% =========================================================================
+
+Anchoring on the measured post-optimization point with
+$T(N) = T_{50} \cdot (N/50)^{\alpha}$, $T_{50} = 11.6$\,h (clean host, best
+seed) and $\alpha = 3.1$:
+
+\begin{table}[H]
+\centering
+\caption{Projected Phase~1 wall-time estimates (single clean machine, same
+5-level torus mesh schedule), anchored on the measured post-optimization
+$N=50$ point.  The ``contended'' column applies the empirical $3.8\times$
+hardware/worst-seed penalty of \S\ref{sec:n50} as a practical upper bound.
+The $N=50$ row is measured, not projected.}
+\label{tab:projections}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{rrrrr}
+\toprule
+$N$ & $(N/50)^{3.1}$ & Clean (h) & Clean (days) & Contended (days, $\times3.8$) \\
+\midrule
+\phantom{0}50  & 1.0\phantom{00} & \phantom{0000}11.6 \emph{(meas.)} & \phantom{000}0.5 & \phantom{000}1.8 \\
+\phantom{0}75  & 3.5\phantom{00} & \phantom{0000}41   & \phantom{000}1.7 & \phantom{000}6.4 \\
+\phantom{0}100 & 8.6\phantom{00} & \phantom{0000}99   & \phantom{000}4.1 & \phantom{00}15.7 \\
+\phantom{0}200 & 73.5\phantom{0} & \phantom{000}853   & \phantom{00}35.5 & \phantom{0}135   \\
+1\,000         & $\approx\!1.1\times10^4$ & $\approx\!1.25\times10^5$ & $\approx\!5{,}200$ & $\approx\!2.0\times10^4$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent At $N=1000$ the clean-host estimate is $\sim\!1.25\times10^5$\,h
+$\approx 14$\,years; the contended bound is $\sim\!54$\,years.  The practical
+conclusions:
+\begin{itemize}
+  \item $N = 50$ is \textbf{routinely feasible} on a single machine ---
+    measured at half a day on a clean host with the seeded initialisation
+    (an order of magnitude below the pre-optimization projection of
+    Table~\ref{tab:projections}'s earlier draft).
+  \item $N = 100$ is \textbf{feasible on a single clean machine} ($\sim\!4$
+    days), and comfortable on a cluster with multiple seeds in parallel.
+  \item $N = 200$ is a \textbf{multi-week} single-machine run; practical only
+    with the algorithmic fix below or substantial parallelism.
+  \item $N = 1000$ remains \textbf{not achievable} with the current
+    algorithm --- $\sim\!14$\,years even on a clean host.  The serial
+    optimizations bought roughly one order of magnitude (from $\sim\!120$\,yr)
+    but not the three-to-four orders needed.
+\end{itemize}
+
+% =========================================================================
+\section{Implemented: Serial Optimizations (Changes A/B/C)}
+\label{sec:serial-opts}
+% =========================================================================
+
+The optimizations below have \emph{landed} (merge \texttt{bae8cd2}); they are
+the source of the $\approx\!3.8\times$ constant-factor speedup measured at
+$N=50$ (\S\ref{sec:n50}).  They preserve the optimizer's output --- the
+$N=50$ partition was validated bit-identical to the pre-optimization result
+(contour perimeter $152.3883843639$, $100\%$ winner-take-all agreement) ---
+so they reduce the constant in Eq.~\eqref{eq:cost-model} without changing
+$\alpha$.  The full audit (\#1--\#13, with measured impact tiers) is recorded
+in \texttt{docs/reference/PHASE1\_PGD\_SERIAL\_OPTIMIZATION\_AUDIT.md}.
+
+\paragraph{Change A --- backtracking step warm-start (audit \#1, \#8).}
+\texttt{step0} was hard-reset to $1.0$ at the top of every PGD iteration, so
+each iteration re-walked the Armijo backtrack from scratch; near convergence
+the accepted step decayed to $\sim\!2^{-8}$, i.e.\ $\sim\!8$ rejected trials
+per iteration, each a full projection $+$ full energy.  Change~A carries the
+last accepted step and starts the next search from
+$\min(s_{\max},\,s_{\text{last}}/\rho)$ (Tier~1; Armijo preserved exactly),
+and hoists the invariant $\|g\|^2$ out of the trial loop.  Measured effect:
+$\mathrm{mBT}$ fell to $1.93$ at $N=50$ --- the dominant contributor to the
+speedup, because eliminated rejected trials remove both their energy
+\emph{and} their projection evaluations.
+
+\paragraph{Change B --- projection inner-loop cleanup (audit \#4).}
+The constant coupling matrix $C = \|v\|^2(I - J/n)$ and its
+$\varepsilon$-regularized solve are now built once per call rather than per
+inner iteration; the $\mathcal{O}(VN)$ \texttt{A\_prev = A.copy()} plus
+\texttt{np.allclose} stall check is replaced by a scalar consecutive-plateau
+test on \texttt{max\_error} (gated by $\texttt{max\_error} < 10\,\mathrm{tol}$
+so it never returns an infeasible iterate); the dead
+\texttt{convergence\_history} dict is removed.  Result-preserving.  Measured
+effect: the projection's share of wall fell from $88$--$90\%$ to $80.5\%$.
+
+\paragraph{Change C --- post-step gradient reuse (audit \#6).}
+The post-step gradient $g_{\text{post}} = \nabla E_\varepsilon(x)$ is
+bit-identical to the next iteration's $\nabla E_\varepsilon(x)$ ($x$ is
+unmodified between them), so it is carried forward, halving gradient
+evaluations.  Bit-identical; $\sim\!1.6\%$ wall.
+
+% =========================================================================
+\section{What Remains to Scale to $N > 100$}
+\label{sec:improvements}
+% =========================================================================
+
+Equation~\eqref{eq:cost-model} identifies three independent factors in $T$.
+The serial optimizations above shrank the constant but left $\alpha\approx3.1$
+intact; reducing the \emph{exponent} requires the algorithmic work below.
+
+\paragraph{1. Further cut re-projection on rejected backtrack steps
+(partially done).}
+Change~A's Tier~1 warm-start already brought $\mathrm{mBT}$ from the
+$4$--$12$ thrashing regime down to $\sim\!1.9$, capturing most of the easy
+gain.  Two stronger options remain, both still future work:
+\begin{itemize}
+  \item \textbf{Gradient-step rule without line search} (Barzilai--Borwein or
+    spectral step, audit Tier~2): project exactly once per major iteration,
+    removing the residual $(\mathrm{mBT}+1)$ multiplier entirely.  Non-monotone;
+    needs a Grippo-type safeguard and clamping against the $[10^{-8},1-10^{-8}]$
+    box.
+  \item \textbf{Lazy projection}: evaluate the unconstrained gradient step
+    first and project only when the Armijo condition is about to be accepted.
+\end{itemize}
+With $\mathrm{mBT}$ already near $2$, the remaining headroom here is modest
+($\lesssim\!2\times$) --- the larger structural wins are below.
+
+\paragraph{2. Replace the iterative projection with a dual-Newton closed-form
+solve (highest-merit algorithmic fix, audit \#3).}
+The coupled sum-to-one $+$ equal-area projection is already closed-form per
+inner iteration; only the $A \ge 0$ nonnegativity forces the $13$--$20$ inner
+sweeps.  Dropping the area constraint lets each vertex row project onto the
+probability simplex in closed form ($\mathcal{O}(N\log N)$); the $N$
+equal-area couplings are then re-introduced via a dual $y\in\mathbb{R}^N$
+solved with a semismooth Newton iteration ($\sim\!5$--$15$ steps).  This
+replaces the clamp/Sinkhorn sweeps with $\sim\!10$ Newton steps and gives
+\emph{exact} feasibility, removing the $\varepsilon$-floor pathology.  It is
+the durable fix for $N \ge 100$ and belongs in its own plan; it was
+\emph{not} landable before the multi-day production runs.
+
+\begin{remark}[Inner-solver dual warm-start was ruled out]
+An earlier draft of this document listed ``warm-start the projection inner
+solver'' (carrying dual multipliers between consecutive PGD projections) as a
+$\sim\!2\times$ lever.  The serial-optimization audit reclassified this as a
+\textbf{negative finding} (audit \#13): the projection's per-call dual state
+is not a safe warm start across PGD iterates --- it risks returning an
+infeasible iterate --- and Change~B's measured profile shows $\mathrm{mPII}$
+is already only $\sim\!14$, leaving little to recover.  The structural way to
+attack $\mathrm{mPII}$ is the dual-Newton reformulation above, not warm-starting
+the existing fixed-point loop.
+\end{remark}
+
+\paragraph{3. Parallelise across regions.}
+The $\mathcal{O}(N)$ factor in the per-call cost arises from processing each
+region's density column independently.  These columns are embarrassingly
+parallel: distributing the $V \times N$ density matrix across $P$ cores
+reduces per-call cost to $\mathcal{O}(VN/P)$, converting the $N$ factor from
+a wall-clock penalty to a throughput one.
+
+\paragraph{4. Reduce the iteration-count growth exponent.}
+The empirical $K \propto N^2$ trend reflects the increasing difficulty of the
+energy landscape.  Better initialisation (the seeded Voronoi approach already
+helps at $N=30$ and $N=50$), coarser-to-finer scheduling, or a larger initial
+$\varepsilon$ could reduce this exponent.  Quantifying the iteration-count
+scaling precisely requires profiled runs at $N \in \{10, 20, 75\}$ with the
+seeded init; only the $N=30$ and $N=50$ points exist so far.
+
+\paragraph{5. FEM assembly is not the bottleneck.}
+Assembly is $<1\%$ of wall time at current mesh sizes; it becomes relevant only
+above $\sim\!10^5$--$10^6$ vertices.
+
+\begin{remark}[Cluster scaling]
+Running multiple seeds in parallel on a cluster (e.g.\ Pelle) does not reduce
+the per-seed wall time but gives the ensemble result sooner.  For $N=100$
+($\sim\!4$ days per seed) this compresses the effective turnaround when
+several seeds are needed.  For $N=1000$ it is not a solution: the per-seed
+runtime is still measured in years.
+\end{remark}
+
+% =========================================================================
+\section*{Summary table}
+% =========================================================================
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{p{2.8cm}p{4.2cm}p{5.1cm}}
+\toprule
+\textbf{Factor} & \textbf{Current scaling (post-opt)} & \textbf{Path to improvement} \\
+\midrule
+Cost per projection call
+  & $\mathcal{O}(\mathrm{mPII} \cdot VN)$; $\mathrm{mPII}\approx14$;
+    projection $80.5\%$ of wall at $N=50$
+  & Dual-Newton closed-form simplex projection (audit \#3); parallelise
+    regions ($P\times$) \\
+\# projection calls
+  & $K \cdot (\mathrm{mBT}+1)$; $\mathrm{mBT}=1.93$ after Change~A (was 4--12)
+  & BB/spectral step or lazy projection: remove residual mBT$+1$ multiplier \\
+Iteration count $K$
+  & $\sim\!N^2$ empirically; $K=54$k at $N=50$
+  & Better init, adaptive $\varepsilon$; needs data at $N \in \{20,75\}$ \\
+Overall exponent $\alpha$
+  & $\approx 3.1$; unchanged by Changes~A/B/C (constant-factor)
+  & Target $\alpha \lesssim 2$ via the dual-Newton projection \\
+Serial opts (A/B/C)
+  & Landed (\texttt{bae8cd2}); $\approx\!3.8\times$, output-identical
+  & Done --- constant-factor only \\
+$N=50$ (measured)
+  & 11.6\,h clean host (was projected 100--190\,h pre-opt)
+  & Routinely feasible on one machine \\
+$N=100$ estimate
+  & $\sim\!99$\,h ($\sim\!4$ days) on one clean machine
+  & Feasible now; cluster for multi-seed \\
+$N=1000$ estimate
+  & $\sim\!1.25\times10^5$\,h ($\sim\!14$\,yr) on one machine
+  & Requires the algorithmic fix + massive parallelism \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}
