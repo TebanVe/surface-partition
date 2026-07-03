@@ -27,7 +27,9 @@ from ..optimization.projection import (
     create_initial_condition_with_projection,
 )
 from ..optimization.initialization import create_seeded_initial_condition
-from ..partition.find_contours import ContourAnalyzer, detect_dormant_cells
+from ..partition.find_contours import (
+    ContourAnalyzer, detect_dormant_cells, detect_area_imbalance,
+)
 from ..partition.contour_partition import PartitionContour
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
 
@@ -117,6 +119,7 @@ class RelaxationResult:
     levels: list
     metadata: dict
     dormant_cells: dict = field(default_factory=dict)
+    area_imbalance: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable summary for the AI agent layer."""
@@ -305,8 +308,12 @@ def run_relaxation(provider, config: RelaxationConfig,
 
         final = results[-1]
 
-        dormant = detect_dormant_cells(
-            final['x_opt'].reshape(mesh.vertices.shape[0], config.n_partitions)
+        final_densities = final['x_opt'].reshape(
+            mesh.vertices.shape[0], config.n_partitions
+        )
+        dormant = detect_dormant_cells(final_densities)
+        area_imbalance = detect_area_imbalance(
+            final_densities, mesh.v, config.n_partitions
         )
 
         solution_path = _save_solution(
@@ -322,6 +329,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             config, provider, results, levels_meta, mesh,
             timestamp, solution_path, logfile_path, initial_perimeter,
             warm_start_path=warm_start_path, dormant_cells=dormant,
+            area_imbalance=area_imbalance,
         )
 
         with open(os.path.join(solution_dir, 'metadata.yaml'), 'w') as f:
@@ -352,6 +360,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             logger.info("Initial perimeter: could not be computed")
 
         _warn_if_dormant_cells(dormant, levels_meta, config, logger)
+        _warn_if_area_imbalance(area_imbalance, config, logger)
 
         overall_success = all(r['success'] for r in results)
         total_elapsed = sum(r['elapsed'] for r in results)
@@ -372,6 +381,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             levels=results,
             metadata=metadata,
             dormant_cells=dormant,
+            area_imbalance=area_imbalance,
         )
 
     finally:
@@ -721,11 +731,62 @@ def _warn_if_dormant_cells(dormant, levels_meta, config, logger) -> None:
     logger.warning("=" * 80)
 
 
+def _warn_if_area_imbalance(area_imbalance, config, logger) -> None:
+    """Log a prominent warning when discrete cell areas are grossly unequal.
+
+    Phase 1 satisfies the *continuous* equal-area constraint, but Phase 2
+    inherits the *discrete* winner-take-all areas. When those are far from equal
+    (a diffuse "runt" cell that is not dormant), Phase 2's equal-area constraint
+    starts infeasible: perimeter rises every iteration and IPOPT stalls at a
+    point of local infeasibility. Distinct from the dormant-cell warning, which
+    only catches cells that vanish entirely. See
+    docs/reference/phase2_high_n_equal_area_infeasibility.md.
+    """
+    if not area_imbalance or not area_imbalance.get('imbalanced'):
+        return
+
+    worst = area_imbalance.get('worst_cell')
+    logger.warning("=" * 80)
+    logger.warning(
+        f"DISCRETE AREA IMBALANCE - Phase 2 equal-area constraint will start "
+        f"infeasible for this {config.n_partitions}-region solution."
+    )
+    logger.warning(
+        "Phase 1's continuous equal-area constraint is satisfied, but the "
+        "winner-take-all (discrete) cell areas are not equal, so Phase 2 "
+        "refinement is likely to raise the perimeter and converge to a point "
+        "of local infeasibility rather than reduce it."
+    )
+    logger.warning(
+        f"  Worst cell {worst}: discrete area deviates "
+        f"{area_imbalance.get('worst_rel_dev', 0.0) * 100:.1f}% from target "
+        f"(abs {area_imbalance.get('worst_abs_dev', 0.0):.4g} = the Phase 2 "
+        f"iter-0 constraint violation)."
+    )
+    logger.warning(
+        f"  {area_imbalance.get('n_imbalanced')} cell(s) exceed the "
+        f"{area_imbalance.get('rel_threshold', 0.0) * 100:.0f}% threshold: "
+        f"{area_imbalance.get('imbalanced')}"
+    )
+    logger.warning(
+        f"  Area spread (std/target) = "
+        f"{area_imbalance.get('area_std_over_target', 0.0) * 100:.1f}%."
+    )
+    logger.warning(
+        "Likely cause: at high N cells shrink toward the mesh-tied interface "
+        "width, so winner-take-all loses a large fraction of a cell's area. A "
+        "finer mesh does NOT reliably help; try other seeds and/or tune "
+        "lambda_penalty. See docs/reference/phase2_high_n_equal_area_infeasibility.md."
+    )
+    logger.warning("=" * 80)
+
+
 def _collect_metadata(config, provider, results, levels_meta, mesh,
                       timestamp, solution_path, logfile_path,
                       initial_perimeter,
                       warm_start_path: Optional[str] = None,
-                      dormant_cells: Optional[dict] = None) -> dict:
+                      dormant_cells: Optional[dict] = None,
+                      area_imbalance: Optional[dict] = None) -> dict:
     """Assemble comprehensive metadata dictionary."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
@@ -804,5 +865,6 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
             if warm_start_path is not None else None
         ),
         'dormant_cells': dormant_cells,
+        'area_imbalance': area_imbalance,
     }
     return meta

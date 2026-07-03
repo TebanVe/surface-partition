@@ -13,6 +13,72 @@ from ..logging_config import get_logger
 # defining level (winner-take-all / 0.5 level-set), not a tunable parameter.
 WEAK_CELL_DENSITY_THRESHOLD = 0.5
 
+# A discrete (winner-take-all) cell area this far from the equal-area target
+# means Phase 2's equal-area constraint starts grossly infeasible. Empirically
+# a clean run sits <1% off (torus N=50: 0.76%); the failed torus N=100 runs sat
+# at 22-67%. 5% cleanly separates them. See
+# docs/reference/phase2_high_n_equal_area_infeasibility.md.
+AREA_IMBALANCE_REL_THRESHOLD = 0.05
+
+
+def detect_area_imbalance(densities: np.ndarray,
+                          lumped_mass: np.ndarray,
+                          n_partitions: int,
+                          rel_threshold: float = AREA_IMBALANCE_REL_THRESHOLD) -> dict:
+    """Measure the winner-take-all discrete cell-area imbalance of a solution.
+
+    Phase 1 enforces equal *continuous* areas (``integral u_k dA = total/N``) but
+    Phase 2 inherits equal *discrete* winner-take-all areas. At high N these
+    diverge: a "runt" cell can hold its full target mass diffusely (peak density
+    1.0, so it passes :func:`detect_dormant_cells`) while its argmax territory is
+    only a fraction of target. The worst cell's absolute area deviation returned
+    here equals the Phase 2 equal-area constraint violation at iteration 0, so a
+    large value predicts a Phase 2 run that raises perimeter and stalls at a
+    point of local infeasibility. See
+    ``docs/reference/phase2_high_n_equal_area_infeasibility.md``.
+
+    Args:
+        densities: (V, n) density matrix (rows approximately sum to 1).
+        lumped_mass: (V,) lumped P1 mass per vertex (``TriMesh.v``); a vertex's
+            area is assigned wholly to the cell that wins its argmax.
+        n_partitions: number of cells N.
+        rel_threshold: a cell is "imbalanced" if its discrete area deviates from
+            the equal-area target by more than this fraction.
+
+    Returns:
+        dict with keys: discrete_areas, target_area, worst_cell, worst_abs_dev
+        (== Phase 2 iter-0 constraint violation), worst_rel_dev,
+        area_std_over_target, n_imbalanced, imbalanced (cell indices over
+        threshold), rel_threshold.
+    """
+    phi = np.asarray(densities)
+    if phi.ndim != 2:
+        raise ValueError(f"densities must be 2-D (V, n); got shape {phi.shape}")
+    v = np.asarray(lumped_mass).ravel()
+    if v.shape[0] != phi.shape[0]:
+        raise ValueError(
+            f"lumped_mass length {v.shape[0]} != n_vertices {phi.shape[0]}"
+        )
+    N = int(n_partitions)
+    winners = np.argmax(phi, axis=1)
+    areas = np.zeros(N)
+    np.add.at(areas, winners, v)
+    target = float(v.sum()) / N if N else 0.0
+    dev = areas - target
+    rel = dev / target if target > 0 else np.zeros(N)
+    imbalanced = [k for k in range(N) if abs(rel[k]) > rel_threshold]
+    return {
+        'discrete_areas': [float(a) for a in areas],
+        'target_area': float(target),
+        'worst_cell': int(np.argmax(np.abs(rel))) if N else -1,
+        'worst_abs_dev': float(np.abs(dev).max()) if N else 0.0,
+        'worst_rel_dev': float(np.abs(rel).max()) if N else 0.0,
+        'area_std_over_target': float(areas.std() / target) if target > 0 else 0.0,
+        'n_imbalanced': len(imbalanced),
+        'imbalanced': imbalanced,
+        'rel_threshold': float(rel_threshold),
+    }
+
 
 def detect_dormant_cells(densities: np.ndarray,
                          weak_threshold: float = WEAK_CELL_DENSITY_THRESHOLD) -> dict:

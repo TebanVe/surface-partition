@@ -1,0 +1,145 @@
+# Experiment: 100-partition torus of revolution
+#
+# Parameter rationale (scaled from the N=50 config, Jun 2026):
+#
+#   lambda_penalty = 2.1
+#     Same value carried through N=30 -> N=50.  No empirical basis yet to
+#     change it for N=100; keep consistent with the established convention.
+#
+#   init_method = seeded
+#     REQUIRED for N >= 30.  Random init produces dormant cells at this N.
+#
+#   refinement_levels = 5  (same as N=30 / N=50)
+#     Mesh is SCALED UP by ~sqrt(2) per dimension vs N=50 to preserve the N=50
+#     vertices-per-cell margin at N=100 (see history note below).
+#     Level schedule:
+#       L0: 142×136 =  19,312 V  ( 193 V/cell)
+#       L1: 230×218 =  50,140 V  ( 501 V/cell)
+#       L2: 318×300 =  95,400 V  ( 954 V/cell)
+#       L3: 406×382 = 155,092 V  (1550 V/cell)
+#       L4: 494×464 = 229,216 V  (2292 V/cell)
+#
+#   n_theta = 142, n_phi = 136  (vs 100×96 for N=50)
+#     Each base dimension scaled by ~sqrt(2) since N doubles 50 -> 100, holding
+#     vertices-per-cell constant.  Gives 193 V/cell at L0 and 2292 at the finest
+#     level, matching the N=50 reference (192 / 2282).
+#
+#   n_theta_increment = 88, n_phi_increment = 82  (vs 62/58 for N=50)
+#     Per-level increments scaled by the same ~sqrt(2) factor so every level
+#     reproduces the N=50 V/cell schedule.
+#
+#   HISTORY (why the mesh was scaled up) -- HYPOTHESIS SUPERSEDED, see below:
+#     A first attempt kept the N=50 mesh unchanged (100×96, 1141 V/cell at the
+#     finest level).  Phase 1 succeeded (crisp partition, no dormant cells), but
+#     Phase 2 perimeter refinement FAILED: IPOPT could not satisfy the discrete
+#     equal-area constraint (violation plateaued at ~3.8% even with 1000 opt
+#     iterations), the perimeter rose every migration round, Type 1 vertex
+#     collapses vanished (0 vs ~350 at N=50), and the run crashed at iteration 5
+#     with "converged to a point of local infeasibility".  The hypothesis was:
+#     too few vertices per cell to move boundaries finely enough to equalise 100
+#     areas, so scale the mesh up by ~sqrt(2) to restore the N=50 per-cell margin.
+#
+#   CORRECTION (2026-07, run_20260701_143238 vs run_20260629_141012):
+#     The mesh scale-up did NOT fix Phase 2 -- it made it WORSE.  The finer mesh
+#     started ~3x MORE infeasible (worst-cell area deviation 0.160 vs 0.053; the
+#     Phase 2 iter-0 constraint violation) and failed the same way, one iteration
+#     later.  The bottleneck is NOT Phase 2 boundary resolution; it is Phase 1's
+#     partition geometry.  At N=100, Phase 1 leaves one or more diffuse "runt"
+#     cells whose winner-take-all area is a fraction of target even though their
+#     *continuous* area is exactly on target (cell 92: 1/3 of target; not dormant,
+#     peak density 1.0).  This seeds an infeasible discrete equal-area constraint
+#     that IPOPT fights by growing the runt cell -> perimeter rises -> local
+#     infeasibility.  N=50 and N=100-coarse used the IDENTICAL finest mesh, so the
+#     driver is N (cells shrink toward the mesh-tied interface width eps), not the
+#     mesh; the finer mesh actually has a smaller/sharper eps yet a worse runt, so
+#     finer-is-worse is non-convex local-minimum selection.  Making the mesh finer
+#     is the wrong lever.  Try other seeds and/or tune lambda_penalty (carried over
+#     unchanged from N=30/50) on the CHEAP coarse mesh first.  Full
+#     analysis + a discrete-area quality gate (now warns at end of Phase 1):
+#     docs/reference/phase2_high_n_equal_area_infeasibility.md.
+#
+#   max_iter = 30000  (per level — same as N=50)
+#     Generous per-level cap; refinement triggers normally fire well before it.
+#
+# Estimated wall time (single machine, seeded init):
+#   The coarse-mesh (100×96) attempt completed Phase 1 in 40.6 h total
+#   (run_20260629_141012, solution/timing_profile.yaml total_wall_s = 146,240 s).
+#   Projection cost scales ~linearly with vertices, and this finer mesh has ~2x
+#   the vertices at every level, so budget roughly:
+#       T ~= 40.6 h * ~2 ~= ~80 h ~= 3-4 days (single machine, seed 84172851).
+#   Hardware variance is large (a slow/contended host can ~2x this), and
+#   metadata.yaml's run_time_seconds is NOT the total (it captures only the last
+#   level -- use timing_profile total_wall_s).  Phase 1 scales empirically as
+#   T ~ N^3.1 (docs/math/05-phase1-nregion-scaling/main.pdf).  Feasible on a
+#   single machine, but Pelle is recommended for a multi-day unattended run
+#   (cluster/submit_relaxation.sh).
+
+experiment:
+  name: torus-100-partitions
+  surface: torus
+
+# Phase 1: Γ-convergence relaxation via Projected Gradient Descent
+relaxation:
+  n_partitions: 100
+  lambda_penalty: 2.1
+  seed: 84172851                      # best seed from N=30 runs; try others in sweep
+  max_iter: 30000
+  refinement_levels: 5
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  init_method: seeded                 # REQUIRED: random init causes dormant cells at N>=30
+
+  # PGD step-size control (unchanged from N=50)
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  # Multi-level refinement triggers
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  # PGD penalty controls
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  # Trace / logging
+  run_log_frequency: 500              # less frequent logging for long runs
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true                       # write solution/timing_profile.yaml
+
+# Surface geometry
+surface:
+  torus:
+    n_theta: 142                      # base resolution along major circle (~sqrt(2)·N=50)
+    n_phi: 136                        # base resolution along tube circle (~sqrt(2)·N=50)
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 88             # added per refinement level (~sqrt(2)·N=50)
+    n_phi_increment: 82               # added per refinement level (~sqrt(2)·N=50)
+
+# Phase 2: iterative perimeter refinement
+refinement:
+  method: ipopt
+  max_iterations: 20                   # start with 1 to inspect before committing to full run
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

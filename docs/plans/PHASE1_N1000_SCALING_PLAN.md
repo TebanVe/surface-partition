@@ -16,6 +16,19 @@ post-optimization N=50 point). Since that document, a controlled N=100 run
 has completed and sharpens the picture. Three independent walls stand between
 today's N ≈ 100 and the N = 1000 target. GPU hardware attacks only the first.
 
+> **Scope caveat — this plan addresses *performance*, not *partition validity*.**
+> The three walls below are compute/iteration/memory. There is a separate,
+> orthogonal wall that this plan does **not** solve: at high N, Phase 1's
+> winner-take-all *discrete* cell areas drift far from equal even though the
+> *continuous* equal-area constraint holds, producing diffuse "runt" cells that
+> make the Phase 2 equal-area constraint infeasible. The N=100 anchor run
+> (`run_20260629_141012`) exhibits exactly this — it is a valid *timing* anchor
+> but **not a usable N=100 partition** (its worst cell is 22% off target; the
+> finer-mesh retry was worse, 67%). Making Phase 1 fast at N=1000 is pointless
+> if the partition it produces cannot be refined. This must be solved in
+> parallel with the scaling work, and its detection is now a required gate (§6).
+> See `docs/reference/phase2_high_n_equal_area_infeasibility.md`.
+
 ### Empirical foundation (all measured, this repo)
 
 | Quantity | N=50 (doc 05, `run_20260627_234511`) | N=100 (`run_20260629_141012`) |
@@ -365,7 +378,13 @@ convention: *stage-C gates* (bit-level: max|dx| < 1e-12, energy rel < 1e-10)
 for result-preserving ports; *stage-A/B gates* (permutation-invariant
 partition agreement ≥ 99.5 %, contour perimeter rel < 1e-3, v-weighted areas
 rel < 1e-3; energy/max|dx| reported, not gated) for trajectory-altering
-changes. Every phase also requires a clean `detect_dormant_cells()` result.
+changes. Every phase also requires a clean `detect_dormant_cells()` result
+**and** a clean `detect_area_imbalance()` result (worst discrete cell area
+within `AREA_IMBALANCE_REL_THRESHOLD` of target; both in
+`src/partition/find_contours.py`). The second gate is not redundant: a runt
+cell passes the dormant check (peak density 1.0) while failing area balance,
+and it is the failure mode that grows with N — see
+`docs/reference/phase2_high_n_equal_area_infeasibility.md`.
 
 ### Phase 0 — Scaling reconnaissance and doc-05 re-anchor
 **Status:** Not Started · **Effort:** ~2–3 days · **Win:** de-risks everything downstream
@@ -373,6 +392,10 @@ changes. Every phase also requires a clean `detect_dormant_cells()` result.
   `docs/math/05-phase1-nregion-scaling/main.tex` (sync rule).
 - One profiled N=75 run + (config-only) level-schedule experiment at N=50
   (§3.3 item 3) to bound K(N) curvature and the cheap schedule win.
+- Record `detect_area_imbalance()` worst-cell deviation at N=50/75/100 to map
+  the onset of the discrete-area wall (N=50: 0.8%, N=100: 22%) — this locates
+  where partition validity, not just speed, breaks. Cheap: reads existing
+  solution files (no rerun for 50/100).
 - Verify Pelle GPU inventory (§4); record findings here.
 - **Gate:** none (measurement only).
 
@@ -416,9 +439,12 @@ changes. Every phase also requires a clean `detect_dormant_cells()` result.
   first), each with: dormant-cell check, area feasibility, support-occupancy
   histogram, measured K(N) appended to doc 05, and Phase-2 pipeline ingestion
   smoke test (contour extraction + one refinement iteration) at N=250.
-- **Gate per rung:** valid N-region partition (zero dead/weak cells), K and
-  wall within 3× of the §5 projection for the measured K scenario; explicit
-  go/no-go before the next rung.
+- **Gate per rung:** valid N-region partition — zero dead/weak cells *and*
+  `detect_area_imbalance()` worst-cell deviation within threshold (a runt cell
+  passes the former but fails Phase 2); K and wall within 3× of the §5
+  projection for the measured K scenario; explicit go/no-go before the next
+  rung. A rung that scales fast but produces an area-imbalanced partition is a
+  fail, not a pass.
 
 **Total effort: ~10–14 weeks** of focused work, front-loaded with the
 highest-certainty wins (Phase 1's GPU port and Phase 4's mBT elimination are
@@ -482,7 +508,8 @@ install is unaffected.
 - Reference: `docs/reference/PHASE1_PGD_SERIAL_OPTIMIZATION_AUDIT.md`
   (Changes A/B/C; audit #3 = dual-Newton projection, #13 = rejected dual
   warm-start), `docs/reference/phase1_dormant_cell_argmax_issue.md`,
-  `docs/reference/SCALABILITY_ANALYSIS.md`
+  `docs/reference/phase2_high_n_equal_area_infeasibility.md` (the discrete-area
+  validity wall the §6 gates now enforce), `docs/reference/SCALABILITY_ANALYSIS.md`
 - Plans: `docs/plans/PHASE1_SEEDED_INITIALIZATION_PLAN.md` (seeded init the
   sparse representation depends on)
 - Code: `src/optimization/pgd_optimizer.py`, `src/optimization/projection.py`,

@@ -154,6 +154,21 @@ def main():
         print("   Increase the initial mesh resolution (n_theta/n_phi) and re-run.")
         print("=" * 70)
 
+    ai = result.area_imbalance or {}
+    if ai.get('imbalanced'):
+        print("\n" + "=" * 70)
+        print("⚠️  WARNING: DISCRETE AREA IMBALANCE")
+        print("   Phase 1's continuous equal areas are satisfied, but the discrete")
+        print("   (winner-take-all) cell areas are not — so Phase 2 refinement will")
+        print("   likely RAISE the perimeter and stall at local infeasibility.")
+        print(f"   Worst cell {ai['worst_cell']}: {ai['worst_rel_dev'] * 100:.1f}% off "
+              f"target (= Phase 2 iter-0 constraint violation {ai['worst_abs_dev']:.4g}).")
+        print(f"   {ai['n_imbalanced']} cell(s) over {ai['rel_threshold'] * 100:.0f}%: "
+              f"{ai['imbalanced']}")
+        print("   A finer mesh does NOT reliably help; try other seeds and/or tune")
+        print("   lambda_penalty. See docs/reference/phase2_high_n_equal_area_infeasibility.md")
+        print("=" * 70)
+
     return 0
 
 
