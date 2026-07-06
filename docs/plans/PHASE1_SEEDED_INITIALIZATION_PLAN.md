@@ -7,7 +7,7 @@
 current uniform-random initialization as the default, and add a seeded
 (Voronoi) initialization that gives every cell a contiguous winning region from
 iteration 0. This is the root-cause fix for the dormant-cell failure documented
-in `docs/reference/phase1_dormant_cell_argmax_issue.md`.
+in `docs/reference/winner_take_all_partition_gap.md`.
 **Scope:** Initialization only. Do **not** change the energy, the constraint
 projection algorithm, the PGD loop, or the multi-level/interpolation logic.
 
@@ -30,7 +30,7 @@ partition. A run requesting `N` cells silently yields `N − k` regions, and the
 surviving cells are no longer equal-area (the lost area is absorbed unevenly).
 
 Empirical evidence (see the "Resolution Sweep" section of
-`docs/reference/phase1_dormant_cell_argmax_issue.md`): increasing the
+`docs/reference/winner_take_all_partition_gap.md`): increasing the
 coarsest-mesh resolution from 154 to 320 vertices/cell at fixed seed/λ did
 **not** reliably remove dormancy (dead-cell count `2 → 1 → 1 → 2`), and the
 dead-cell *index* changed every run — confirming the failure is a numerical
@@ -218,7 +218,7 @@ diagnostics):
    vs the PGD loop (KD-tree + FPS on ~10⁴–10⁵ vertices is milliseconds).
 
 Docs sync (standing rule):
-- `docs/reference/phase1_dormant_cell_argmax_issue.md`: mark mitigation
+- `docs/reference/winner_take_all_partition_gap.md`: mark mitigation
   **(3) Seeded initial condition** as implemented, pointing to the new code,
   and record the verification outcome.
 - `CLAUDE.md`: document the `init_method` option and the new module under the
@@ -263,7 +263,7 @@ Docs sync (standing rule):
 
 ## Related documents
 
-- Reference: `docs/reference/phase1_dormant_cell_argmax_issue.md` (the problem,
+- Reference: `docs/reference/winner_take_all_partition_gap.md` (the problem,
   the resolution-sweep evidence, and the mitigation list this implements).
 - Code: `src/pipeline/relaxation.py` (`RelaxationConfig`,
   `_create_initial_condition`), `src/optimization/projection.py`

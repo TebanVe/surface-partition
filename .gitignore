@@ -37,6 +37,11 @@ visualizations/
 *.pdf
 *.out
 
+# Exception: documentation figures under docs/reference are committed assets
+# (they are embedded in the .md reference docs), overriding the *.png ignore above.
+!docs/reference/figures/
+!docs/reference/figures/*.png
+
 # Specific files to ignore
 gradient_descend_with_projection.py
 manifold_partition.md

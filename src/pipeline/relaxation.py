@@ -740,7 +740,7 @@ def _warn_if_area_imbalance(area_imbalance, config, logger) -> None:
     starts infeasible: perimeter rises every iteration and IPOPT stalls at a
     point of local infeasibility. Distinct from the dormant-cell warning, which
     only catches cells that vanish entirely. See
-    docs/reference/phase2_high_n_equal_area_infeasibility.md.
+    docs/reference/winner_take_all_partition_gap.md.
     """
     if not area_imbalance or not area_imbalance.get('imbalanced'):
         return
@@ -776,7 +776,7 @@ def _warn_if_area_imbalance(area_imbalance, config, logger) -> None:
         "Likely cause: at high N cells shrink toward the mesh-tied interface "
         "width, so winner-take-all loses a large fraction of a cell's area. A "
         "finer mesh does NOT reliably help; try other seeds and/or tune "
-        "lambda_penalty. See docs/reference/phase2_high_n_equal_area_infeasibility.md."
+        "lambda_penalty. See docs/reference/winner_take_all_partition_gap.md."
     )
     logger.warning("=" * 80)
 

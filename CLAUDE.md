@@ -189,12 +189,13 @@ cluster/
 
 ### Documentation (`docs/`)
 
-The `docs/` tree is version-controlled and has four parts:
+The `docs/` tree is version-controlled and has five parts:
 
 ```
 docs/
 ├── math/        ← LaTeX derivations of the quantities computed in the code
 ├── guides/      ← LaTeX user guides and professional documents (compiled PDFs)
+├── experiments/ ← LaTeX measured studies (question→method→measurement→conclusion)
 ├── plans/       ← design plans for not-yet-implemented work
 └── reference/   ← permanent explanatory docs (methodology, known issues, primers)
 ```
@@ -235,6 +236,22 @@ docs/guides/
 Guides use the same `NN-slug/` numbering convention as math documents.
 `docs/guides/.gitignore` suppresses LaTeX build artifacts; sources and PDFs
 are tracked. Build with: `make -C docs/guides/NN-slug` or `make -C docs/guides all`.
+
+**`docs/experiments/`** — LaTeX **measured studies**: the empirical results of a
+`question → method → measurement → conclusion` study whose numbers come from
+running the code on specific inputs (convergence behaviour, error distributions,
+failure-mode forensics). Distinct genre from a math derivation (`docs/math/`) or a
+standing explanation (`docs/reference/`) — a measured study often *pairs with* a
+reference doc. Same `NN-slug/` LaTeX system, reusing the math shared macros; every
+report **must** open with a provenance block (date, source run(s) under `results/`,
+producing script, library versions, a numerical anchor) and carry a status label
+(**measured** / **partial** / **planned**). Figures are vector `fig_*.pdf` produced
+by a committed `make_figures.py` beside the report; `docs/experiments/.gitignore`
+suppresses build artifacts but tracks `main.pdf` + `fig_*.pdf`. Build with
+`make -C docs/experiments/NN-slug` or `make -C docs/experiments all` (needs
+`latexmk`; LaTeX at `/Library/TeX/texbin`). First report:
+`01-winner-take-all-partition-gap/` (pairs with
+`docs/reference/winner_take_all_partition_gap.md`). See `docs/experiments/README.md`.
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
 mesh-cleanup tool).
@@ -396,9 +413,9 @@ the Phase 1 breakdown).
 
    **Phase 1 timing profile:** `--profile` on `scripts/find_surface_partition.py` writes `<run_dir>/solution/timing_profile.yaml` with a per-level wall-clock breakdown by callback (`matrix_assembly`, `projection`, `energy`, `gradient`, `backtrack`, `h5_save`, …). Zero overhead when omitted. Parallels the Phase 2 `--profile` campaign profile. When the file is present, `optimization_analyzer.py` automatically produces `analysis/relaxation_timing_profile.png` (stacked wall-time bars, per-call scaling, projection inner-iter growth, backtrack rate — all across the 5 refinement levels).
 
-   **Dormant-cell detection:** `run_relaxation` calls `detect_dormant_cells()` (`src/partition/find_contours.py`) on the final solution. A cell is *dead* if it wins no vertex under winner-take-all argmax, or *weak* if its peak density stays below `WEAK_CELL_DENSITY_THRESHOLD = 0.5`. When any are found, a prominent warning is logged (console + `logs/relaxation.log`) and printed by the CLI — the solution is a consistent continuous minimizer but **not** a valid N-region partition (an under-resolved coarsest mesh is the usual cause; see `docs/reference/phase1_dormant_cell_argmax_issue.md`). The full result is persisted as the `dormant_cells` block in `solution/metadata.yaml`.
+   **Dormant-cell detection:** `run_relaxation` calls `detect_dormant_cells()` (`src/partition/find_contours.py`) on the final solution. A cell is *dead* if it wins no vertex under winner-take-all argmax, or *weak* if its peak density stays below `WEAK_CELL_DENSITY_THRESHOLD = 0.5`. When any are found, a prominent warning is logged (console + `logs/relaxation.log`) and printed by the CLI — the solution is a consistent continuous minimizer but **not** a valid N-region partition (an under-resolved coarsest mesh is the usual cause; see `docs/reference/winner_take_all_partition_gap.md`). The full result is persisted as the `dormant_cells` block in `solution/metadata.yaml`.
 
-   **Discrete-area-imbalance gate:** `run_relaxation` also calls `detect_area_imbalance()` (`src/partition/find_contours.py`) on the final solution. It computes the winner-take-all discrete cell areas (lumped mass assigned to each vertex's argmax cell) and flags cells whose area deviates from the equal-area target by more than `AREA_IMBALANCE_REL_THRESHOLD = 0.05`. This catches diffuse "runt" cells that pass the dormant check (peak density 1.0) but hold most of their mass outside their argmax territory — the worst cell's absolute deviation equals the Phase 2 equal-area constraint violation at iteration 0, so a large value predicts a Phase 2 run that *raises* perimeter and stalls at local infeasibility. Warning is logged + printed by the CLI (same pattern as dormant cells); the full result is the `area_imbalance` block in `solution/metadata.yaml`. This is a high-N failure distinct from dormant cells — a finer mesh does not reliably help; see `docs/reference/phase2_high_n_equal_area_infeasibility.md`.
+   **Discrete-area-imbalance gate:** `run_relaxation` also calls `detect_area_imbalance()` (`src/partition/find_contours.py`) on the final solution. It computes the winner-take-all discrete cell areas (lumped mass assigned to each vertex's argmax cell) and flags cells whose area deviates from the equal-area target by more than `AREA_IMBALANCE_REL_THRESHOLD = 0.05`. This catches diffuse "runt" cells that pass the dormant check (peak density 1.0) but hold most of their mass outside their argmax territory — the worst cell's absolute deviation equals the Phase 2 equal-area constraint violation at iteration 0, so a large value predicts a Phase 2 run that *raises* perimeter and stalls at local infeasibility. Warning is logged + printed by the CLI (same pattern as dormant cells); the full result is the `area_imbalance` block in `solution/metadata.yaml`. This is a high-N failure distinct from dormant cells — a finer mesh does not reliably help; see `docs/reference/winner_take_all_partition_gap.md`.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 
@@ -476,7 +493,7 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 
 ### Phase 1 Initial Condition (`init_method`)
 
-`relaxation.init_method` selects the level-0 initial condition: `random` (default; legacy uniform-random densities then projected, via `create_initial_condition_with_projection` in `src/optimization/projection.py`) or `seeded` (Voronoi seed regions via `create_seeded_initial_condition` in `src/optimization/initialization.py`). The seeded path picks `N` well-spread seed vertices by farthest-point sampling (deterministic given `seed`), labels every vertex by nearest seed (`scipy.spatial.cKDTree`), and projects the one-hot density with `orthogonal_projection_iterative`. It hands every cell a contiguous winning region from iteration 0, eliminating the dormant-cell symmetry-break failure at higher `N` (see `docs/reference/phase1_dormant_cell_argmax_issue.md`). Dispatch is in `_create_initial_condition` (`src/pipeline/relaxation.py`), level-0 branch only; finer levels still warm-start by interpolation. The dataclass default stays `random` for backward compatibility.
+`relaxation.init_method` selects the level-0 initial condition: `random` (default; legacy uniform-random densities then projected, via `create_initial_condition_with_projection` in `src/optimization/projection.py`) or `seeded` (Voronoi seed regions via `create_seeded_initial_condition` in `src/optimization/initialization.py`). The seeded path picks `N` well-spread seed vertices by farthest-point sampling (deterministic given `seed`), labels every vertex by nearest seed (`scipy.spatial.cKDTree`), and projects the one-hot density with `orthogonal_projection_iterative`. It hands every cell a contiguous winning region from iteration 0, eliminating the dormant-cell symmetry-break failure at higher `N` (see `docs/reference/winner_take_all_partition_gap.md`). Dispatch is in `_create_initial_condition` (`src/pipeline/relaxation.py`), level-0 branch only; finer levels still warm-start by interpolation. The dataclass default stays `random` for backward compatibility.
 
 ### Modifying Perimeter Optimization
 

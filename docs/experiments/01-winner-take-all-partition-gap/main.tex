@@ -1,0 +1,271 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../../math/shared/macros}   % shared notation (reused from docs/math/)
+\usepackage{graphicx}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {The winner-take-all partition gap at high N},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{The Winner-Take-All Partition Gap at High \(N\)}\\[0.5em]
+  \large Phase~1 satisfies the \emph{continuous} equal-area constraint but
+  \emph{manufactures} a grossly undersized ``runt'' cell during relaxation,
+  which makes Phase~2 perimeter refinement infeasible --- located to the
+  refinement level at which it happens, on three torus runs}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------
+% STATUS BANNER
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=green!5!white, colframe=green!55!black,
+                  title={Status --- measured: the failure is reproduced and its
+                  origin located across all five refinement levels of three runs},
+                  fontupper=\small]
+This report \textbf{characterises} the high-\(N\) failure whose standing
+explanation lives in \codefile{docs/reference/winner\_take\_all\_partition\_gap.md}
+and whose downstream cost gates \codefile{docs/plans/PHASE1\_N1000\_SCALING\_PLAN.md}.
+The numbers come from re-reading three completed Phase~1 runs (\emph{no new
+optimisation}); the reconstruction is anchored on a value it must reproduce (the
+Phase~2 iteration-0 constraint violation). It measures \emph{where} the runt is
+born; it does not implement or evaluate a fix (candidates are listed in
+\S\ref{sec:implications} and ranked in the reference doc).
+\end{tcolorbox}
+
+% ---------------------------------------------------------------------
+% PROVENANCE --- mandatory (docs/experiments/README.md)
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
+                  title={Provenance}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.66\linewidth}@{}}
+Date            & 2026-07-06 (analysis of runs completed 2026-06-25 / 06-29 / 07-01) \\[3pt]
+Surface         & torus \(T(R{=}1.0,\ r{=}0.6)\), \(\lambda_{\text{penalty}}{=}2.1\),
+                  seed \(84172851\), seeded init, 5 levels \\[3pt]
+Source runs     & N=50 \code{run\_20260625\_113015} (finest \(348{\times}328\),
+                  \(V{=}114{,}144\)); N=100 coarse \code{run\_20260629\_141012}
+                  (same finest mesh); N=100 finer \code{run\_20260701\_143238}
+                  (finest \(494{\times}464\), \(V{=}229{,}216\)) \\[3pt]
+Producing script& \codefile{make\_figures.py} (beside this report; run from repo
+                  root) \\[3pt]
+Method inputs   & per-level density snapshots from each run's \code{traces/};
+                  meshes rebuilt with \codefile{src/surfaces/torus.py} \\[3pt]
+Versions        & Python 3.12.13, numpy 2.4.4, scipy 1.17.1, matplotlib 3.10.8,
+                  h5py 3.16.0 \\[3pt]
+Anchor          & finer-run cell 92 winner-take-all area \(=0.0774\), worst-cell
+                  abs.\ deviation \(=0.160\) --- matching the Phase~2 iteration-0
+                  constraint violation \(1.60\mathrm{e}{-}1\) in that run's
+                  \code{refinement.log} \\
+\end{tabular}
+\end{tcolorbox}
+
+\begin{abstract}
+\textbf{Status: measured.} Phase~1 minimises a \(\Gamma\)-convergence energy over
+\emph{continuous density functions} and enforces equal areas on them; the actual
+partition is then extracted by a \emph{winner-take-all} (argmax) hard decision.
+These two representations disagree at high \(N\): a cell can hold its full
+continuous mass \(\int u_k\,dA = A/N\) exactly while its discrete winner-take-all
+territory is a fraction of \(A/N\). On the torus at \(N=100\), two runs failed
+Phase~2 perimeter refinement --- the perimeter \emph{rose} every iteration and the
+solver stopped at a point of local infeasibility --- because one such ``runt''
+cell makes the Phase~2 equal-area constraint infeasible from iteration~0. Tracking
+every cell's territory across all five refinement levels shows the decisive fact:
+the seeded initial condition is \emph{equally unequal} for the working \(N=50\) run
+and both failing \(N=100\) runs, but the relaxation equalises the \emph{bulk} in
+every case and, at \(N=100\), does so by \emph{sacrificing a single cell}. The runt
+is therefore \textbf{manufactured during relaxation}, at the level where cells
+condense into compact blobs, and only at high \(N\); it is not inherited from the
+initial condition, and a finer mesh deepens rather than heals it.
+\end{abstract}
+
+% =====================================================================
+\section{Question}
+% =====================================================================
+Phase~1 (the \(\Gamma\)-convergence relaxation, \codefile{src/optimization/pgd\_optimizer.py})
+optimises a density field \(u\in\mathbb{R}^{V\times N}\), \(u_k(x)\in[0,1]\)
+(``how strongly cell \(k\) claims vertex \(x\)''), minimising
+\[
+E(u)=\varepsilon\textstyle\sum_k u_k^{\top}\Ki\,u_k
+ +\tfrac{1}{\varepsilon}\sum_k \big(u_k^2(1-u_k)^2\big)^{\top}\Mmat\big(u_k^2(1-u_k)^2\big)
+ +\lambda\,P(u),
+\]
+subject to sum-to-one (\(\sum_k u_k(x)=1\)) and \textbf{equal areas}
+(\(\int u_k\,dA = A/N\) for every cell), both enforced exactly at every step by
+\codefile{src/optimization/projection.py}. The interface width is tied to the
+mesh, \(\varepsilon=\sqrt{\text{mean triangle area}}\approx h\).
+
+The partition that Phase~2 consumes is not the density field but its
+\emph{winner-take-all} classification: each vertex is awarded to the cell of
+largest density, and a cell's \emph{territory} is the area of the vertices it
+wins. Nothing in \(E\) or the constraints references the argmax, so two different
+``areas'' coexist: the \emph{continuous mass} \(\int u_k\,dA\) (held at \(A/N\)
+exactly) and the \emph{discrete territory} (uncontrolled). For a healthy cell
+(density \(\approx 1\) on a compact blob) they agree. The question: \emph{why, at
+\(N=100\), do they diverge so badly that Phase~2 fails --- and where does that
+divergence originate?}
+
+% =====================================================================
+\section{Method}
+% =====================================================================
+The discrete territory of a solution is the winner-take-all lumped-mass area:
+with \(v\) the lumped P1 mass per vertex and \(w_i=\arg\max_k u_k(x_i)\), cell
+\(k\)'s territory is \(a_k=\sum_{i:\,w_i=k} v_i\). We compute \(a_k\) for
+(i) the final solution of each run (from \code{solution/}) and (ii) the
+end-of-level density snapshot at each of the five refinement levels (from each
+run's \code{traces/} HDF5), rebuilding the per-level mesh at its resolution with
+\codefile{src/surfaces/torus.py}. Cell identity is preserved across levels (the
+inter-level interpolation keeps the column index), so a single cell can be tracked
+level to level. Two summaries per snapshot: the \emph{spread} (\(\mathrm{std}(a_k)/(A/N)\))
+and the \emph{worst-cell error} (\(\max_k|a_k-A/N|/(A/N)\)).
+
+\emph{Anchor.} The worst-cell \emph{absolute} deviation \(\max_k|a_k-A/N|\) equals
+the Phase~2 equal-area constraint violation at iteration~0 (the two are the same
+quantity). For the finer \(N=100\) run this reconstruction gives \(0.160\),
+matching the \(1.60\mathrm{e}{-}1\) logged by Phase~2 --- confirming the mesh
+rebuild and density reshape are correct before any conclusion is drawn.
+
+% =====================================================================
+\section{Results}
+% =====================================================================
+
+\subsection{The failure and its seed}
+\label{sec:failure}
+Both \(N=100\) runs failed Phase~2: the perimeter rose every iteration and IPOPT
+stopped with ``converged to a point of local infeasibility.'' The cause is a
+grossly infeasible \emph{start}: the worst cell is far from the equal-area target,
+so the feasibility-first solver spends the run fighting the area imbalance ---
+growing the undersized cell pushes boundaries outward, which lengthens perimeter.
+Table~\ref{tab:runs} contrasts the two failures with the clean \(N=50\) run.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & N=50 (works) & N=100 coarse & N=100 finer \\
+\midrule
+finest mesh \((V)\)         & \(348{\times}328\) (114{,}144) & \(348{\times}328\) (114{,}144) & \(494{\times}464\) (229{,}216) \\
+final \(\varepsilon\)       & 0.010186 & 0.010186 & 0.007188 \\
+worst-cell area deviation   & \textbf{0.8\%} (0.0036) & 22.5\% (0.053) & \textbf{67.3\%} (0.160) \\
+Phase~2 perimeter           & \(152\!\to\!\mathbf{130}\ (\mathbf{-14.5\%})\) & \(217\!\to\!229\) (rises) & \(216\!\to\!226\) (rises) \\
+Phase~2 outcome             & converges (viol \(\to 10^{-11}\)) & infeasibility crash & infeasibility crash \\
+\bottomrule
+\end{tabular}
+\caption{The Phase~2 failure is seeded by the Phase~1 partition. \(N=50\) and
+\(N=100\)-coarse ran on the \emph{identical} finest mesh, so the driver is \(N\),
+not the mesh; the finer mesh has a \emph{sharper} \(\varepsilon\) yet a
+\emph{worse} runt.}
+\label{tab:runs}
+\end{table}
+
+\subsection{The runt cell}
+In the finer run, cell~92 holds its full continuous mass
+(\(\int u_{92}\,dA = 0.2369 = A/N\) exactly) but wins only \(33\%\) of it as
+territory (\(0.0774\)); the other \(67\%\) is a diffuse low halo over its
+neighbours' ground (Fig.~\ref{fig:mass}). It is \emph{not} dormant --- peak
+density \(1.0\), wins \(689\) vertices --- merely tiny on the map.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{fig_mass_vs_territory}
+\caption{Same continuous mass, very different territory. The runt (cell~92) and a
+healthy cell hold the same paint (\(\int u\,dA = A/N\), grey), but the runt's
+winner-take-all territory is a third of target because two-thirds of its mass is
+diffuse halo.}
+\label{fig:mass}
+\end{figure}
+
+\subsection{Where the runt is born}
+\label{sec:trajectory}
+Tracking every cell's territory across the five levels (Fig.~\ref{fig:traj},
+Table~\ref{tab:traj}) gives the central result. The \emph{spread} collapses for
+all three runs (left panel) --- the relaxation equalises the bulk everywhere, at a
+``condensation'' level (L1 for \(N=50\), L2 for \(N=100\)) where cells sharpen into
+compact blobs. But the \emph{worst cell} (right panel) tells the opposite story at
+\(N=100\): while the bulk tightens, one cell is left behind and \emph{deepens}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig_area_trajectory}
+\caption{Across refinement levels. \emph{Left:} the standard deviation of cell
+areas falls for every run --- the bulk equalises. \emph{Right:} the single worst
+cell --- \(N=50\) collapses below 1\%, the \(N=100\) coarse run stalls near 22\%,
+the \(N=100\) finer run \emph{deepens} to 67\%.}
+\label{fig:traj}
+\end{figure}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+worst-cell error (\% of target) & L0 (init) & L1 & L2 & L3 & L4 (final) \\
+\midrule
+N=50           & 54.2 & 2.8  & 1.6  & 0.8  & \textbf{0.8}  \\
+N=100 coarse   & 54.6 & 45.9 & 34.7 & 28.4 & \textbf{22.5} \\
+N=100 finer    & 47.8 & 39.7 & 62.3 & 65.6 & \textbf{67.3} \\
+\bottomrule
+\end{tabular}
+\caption{Worst-cell area error by level. All three seeded inits are badly unequal
+(\(\sim 50\%\)); \(N=50\) recovers fully by L1, both \(N=100\) runs do not --- the
+finer run's runt is \emph{created} at L2 (from \(-27\%\) to \(-62\%\) for cell~92)
+and only worsens.}
+\label{tab:traj}
+\end{table}
+
+Three facts follow. (1) The seeded init is \textbf{equally unequal for all three
+runs} (spread \(16\)--\(19\%\), worst cell \(\sim 50\%\)) --- so the init is
+\emph{not} the discriminator. (2) The relaxation equalises the \textbf{bulk} in
+every run. (3) At \(N=100\) it equalises the bulk by \textbf{sacrificing one
+cell}, which absorbs the residual imbalance --- permitted because the
+equal-\emph{continuous}-mass constraint is satisfied by parking the lost territory
+as halo. The sacrificed cell is not the init's worst cell (cell~92 was middling at
+\(-27\%\) at L0; the initially-worst cell recovers), so the runt cannot be
+predicted from the starting point.
+
+\subsection{The final distribution}
+The end state makes the ``single sacrifice'' explicit (Fig.~\ref{fig:dist}): at
+\(N=100\) exactly one cell is a catastrophic outlier (\(-22\%\) coarse,
+\(-67\%\) finer) while the other \(99\) sit within a few percent of target.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\linewidth]{fig_final_distribution}
+\caption{Final per-cell area deviation, sorted. One catastrophic outlier at
+\(N=100\); every other cell is within \(\pm5\%\). \(N=50\) is uniformly tight.}
+\label{fig:dist}
+\end{figure}
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+The high-\(N\) Phase~2 failure is a Phase~1 partition-quality problem, and the
+runt is \textbf{manufactured during relaxation}, at the condensation level, and
+only at high \(N\) --- not inherited from the initial condition. The driver is
+\(N\) (cells shrink toward the mesh-tied interface width \(\varepsilon\)), not the
+mesh: \(N=50\) and \(N=100\)-coarse share the identical finest mesh, and the finer
+mesh --- with a \emph{sharper} \(\varepsilon\) --- produces a \emph{deeper} runt
+(\(67\%\) vs.\ \(22\%\)), the loser of a more decisive condensation. A finer mesh
+is thus the wrong lever.
+
+% =====================================================================
+\section{Implications for a fix}
+\label{sec:implications}
+% =====================================================================
+Because the relaxation \emph{actively} manufactures the runt --- nothing forbids a
+cell from parking its mass as halo --- the fix must change what the optimiser is
+\emph{required} to achieve, not merely its starting point. This reorders the
+candidates (full ranking in the reference doc \code{winner\_take\_all\_partition\_gap.md}):
+an \textbf{additional constraint} on discrete territory (a hard crispness floor, or
+annealed soft-territory equality) is the front-runner; \textbf{improving the
+initial condition is downgraded} (the working \(N=50\) run starts equally unequal);
+soft \(\lambda\) tuning is insufficient; a seed re-roll is a non-scaling stopgap.
+The cheapest next step is to prototype the crispness floor on a fast proxy and
+check whether the level-2 sacrifice disappears, before spending a \(\sim 40\)~h
+\(N=100\) run.
+\end{document}

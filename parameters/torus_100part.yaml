@@ -56,7 +56,7 @@
 #     is the wrong lever.  Try other seeds and/or tune lambda_penalty (carried over
 #     unchanged from N=30/50) on the CHEAP coarse mesh first.  Full
 #     analysis + a discrete-area quality gate (now warns at end of Phase 1):
-#     docs/reference/phase2_high_n_equal_area_infeasibility.md.
+#     docs/reference/winner_take_all_partition_gap.md.
 #
 #   max_iter = 30000  (per level — same as N=50)
 #     Generous per-level cap; refinement triggers normally fire well before it.

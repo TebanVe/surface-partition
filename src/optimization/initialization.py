@@ -3,7 +3,7 @@
 Provides the seeded (Voronoi) initialization, which hands every cell a
 contiguous winning region before optimization begins. This is the root-cause
 fix for the dormant-cell failure documented in
-``docs/reference/phase1_dormant_cell_argmax_issue.md``: with a seeded layout
+``docs/reference/winner_take_all_partition_gap.md``: with a seeded layout
 there is no symmetry-break "land grab" for a cell to lose.
 
 The legacy uniform-random initialization lives in

@@ -1,0 +1,26 @@
+# LaTeX / BibTeX build products (sources: *.tex *.bib *.py Makefile *.md remain tracked)
+*.aux
+*.bbl
+*.blg
+*.bcf
+*.fdb_latexmk
+*.fls
+*.run.xml
+*.synctex.gz
+*.synctex.gz(busy)
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+*-blx.bib
+
+# Re-include compiled main.pdf outputs (the repo-root .gitignore has a broad
+# *.pdf rule; without this exception new report subdirs' main.pdf would be
+# silently ignored).
+!main.pdf
+
+# Re-include report figures (the repo-root .gitignore has a broad *.pdf rule;
+# fig_*.pdf are vector sources the report embeds and must be tracked).
+!fig_*.pdf

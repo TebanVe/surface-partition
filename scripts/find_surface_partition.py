@@ -166,7 +166,7 @@ def main():
         print(f"   {ai['n_imbalanced']} cell(s) over {ai['rel_threshold'] * 100:.0f}%: "
               f"{ai['imbalanced']}")
         print("   A finer mesh does NOT reliably help; try other seeds and/or tune")
-        print("   lambda_penalty. See docs/reference/phase2_high_n_equal_area_infeasibility.md")
+        print("   lambda_penalty. See docs/reference/winner_take_all_partition_gap.md")
         print("=" * 70)
 
     return 0

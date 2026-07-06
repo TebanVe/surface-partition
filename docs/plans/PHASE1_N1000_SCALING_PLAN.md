@@ -27,7 +27,7 @@ today's N ≈ 100 and the N = 1000 target. GPU hardware attacks only the first.
 > finer-mesh retry was worse, 67%). Making Phase 1 fast at N=1000 is pointless
 > if the partition it produces cannot be refined. This must be solved in
 > parallel with the scaling work, and its detection is now a required gate (§6).
-> See `docs/reference/phase2_high_n_equal_area_infeasibility.md`.
+> See `docs/reference/winner_take_all_partition_gap.md`.
 
 ### Empirical foundation (all measured, this repo)
 
@@ -384,7 +384,7 @@ within `AREA_IMBALANCE_REL_THRESHOLD` of target; both in
 `src/partition/find_contours.py`). The second gate is not redundant: a runt
 cell passes the dormant check (peak density 1.0) while failing area balance,
 and it is the failure mode that grows with N — see
-`docs/reference/phase2_high_n_equal_area_infeasibility.md`.
+`docs/reference/winner_take_all_partition_gap.md`.
 
 ### Phase 0 — Scaling reconnaissance and doc-05 re-anchor
 **Status:** Not Started · **Effort:** ~2–3 days · **Win:** de-risks everything downstream
@@ -507,9 +507,9 @@ install is unaffected.
   re-anchors), `docs/math/04-phase1-timing-profile/` (projection cost model)
 - Reference: `docs/reference/PHASE1_PGD_SERIAL_OPTIMIZATION_AUDIT.md`
   (Changes A/B/C; audit #3 = dual-Newton projection, #13 = rejected dual
-  warm-start), `docs/reference/phase1_dormant_cell_argmax_issue.md`,
-  `docs/reference/phase2_high_n_equal_area_infeasibility.md` (the discrete-area
-  validity wall the §6 gates now enforce), `docs/reference/SCALABILITY_ANALYSIS.md`
+  warm-start), `docs/reference/winner_take_all_partition_gap.md` (dormant &
+  runt cells — the discrete-area validity wall the §6 gates now enforce),
+  `docs/reference/SCALABILITY_ANALYSIS.md`
 - Plans: `docs/plans/PHASE1_SEEDED_INITIALIZATION_PLAN.md` (seeded init the
   sparse representation depends on)
 - Code: `src/optimization/pgd_optimizer.py`, `src/optimization/projection.py`,

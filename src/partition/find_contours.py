@@ -17,7 +17,7 @@ WEAK_CELL_DENSITY_THRESHOLD = 0.5
 # means Phase 2's equal-area constraint starts grossly infeasible. Empirically
 # a clean run sits <1% off (torus N=50: 0.76%); the failed torus N=100 runs sat
 # at 22-67%. 5% cleanly separates them. See
-# docs/reference/phase2_high_n_equal_area_infeasibility.md.
+# docs/reference/winner_take_all_partition_gap.md.
 AREA_IMBALANCE_REL_THRESHOLD = 0.05
 
 
@@ -35,7 +35,7 @@ def detect_area_imbalance(densities: np.ndarray,
     here equals the Phase 2 equal-area constraint violation at iteration 0, so a
     large value predicts a Phase 2 run that raises perimeter and stalls at a
     point of local infeasibility. See
-    ``docs/reference/phase2_high_n_equal_area_infeasibility.md``.
+    ``docs/reference/winner_take_all_partition_gap.md``.
 
     Args:
         densities: (V, n) density matrix (rows approximately sum to 1).
