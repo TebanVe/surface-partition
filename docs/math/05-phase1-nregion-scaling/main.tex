@@ -12,40 +12,59 @@
 }
 
 \title{\textbf{Phase~1 Wall-Time Scaling with Number of Regions}\\[0.5em]
-  \large Empirical Measurements, Power-Law Fit, and the Path to $N>100$}
+  \large Empirical Measurements, a Corrected Power-Law Fit, and the Path to $N>100$}
 \author{}
-\date{June 2026}
+\date{July 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
 This document analyses how Phase~1 (PGD relaxation) wall time grows with the
-number of regions~$N$.  Two pre-optimization data points --- $N=10$ (1.2\,h, 7
-levels, torus, random init) and $N=30$ (20.7\,h--38.2\,h, 5 levels, torus,
-seeded init) --- yield an empirical power-law exponent of approximately
-$\alpha \approx 3.1$, meaning wall time scales roughly as $N^3$.  Since these
-measurements were taken, the serial optimizations of
-\S\ref{sec:serial-opts} (the backtracking step warm-start, the projection
-inner-loop cleanup, and post-step gradient reuse) landed; they are
-\emph{constant-factor} wins ($\approx\!3.8\times$ at $N=50$) and so do
-\textbf{not} change~$\alpha$, but they re-anchor every absolute estimate
-below.  A profiled post-optimization run measures $N=50$ at
-$\mathbf{11.6}$~\textbf{h} (clean host, best seed, 5 levels).  Anchored on
-that measured point with $\alpha = 3.1$, the projections become
-$\sim\!\mathbf{4}$~\textbf{days} for $N=100$ and $\sim\!\mathbf{14}$
-\textbf{years} for $N=1000$ --- the latter still infeasible at scale on a
-single machine, though an order of magnitude below the pre-optimization
-$\sim\!120$\,yr.  The dominant cost remains the orthogonal projection, whose
-share fell from $88$--$90\%$ to $\approx\!80\%$ after the inner-loop cleanup
-and which still scales as $\mathcal{O}(N)$ per call.  The $N^3$ overall
-scaling arises because both the per-call cost and the number of iterations
-grow with~$N$.  The remaining levers --- the durable algorithmic fix is a
+number of regions~$N$, using profiled runs on the torus.  An earlier draft of
+this document fit a power law of exponent $\alpha \approx 3.1$ ($T \sim N^3$)
+to two \emph{pre-optimization} points --- $N=10$ (random init, 7 levels) and
+$N=30$ (seeded init, 5 levels) --- and extrapolated it to conclude that
+$N=1000$ would take $\sim\!14$ years and is ``not achievable.''  \textbf{That
+conclusion was an artifact of the fit and is retracted here.}  The two points
+confounded three variables at once (random vs.\ seeded initialisation, $7$
+vs.\ $5$ refinement levels, and pre- vs.\ post-optimization code), and the
+accompanying claim that the outer iteration count $K$ grows as $\sim\!N^2$ is
+contradicted by direct measurement.
+
+New post-optimization, same-init (seeded) runs at $N=50$ and $N=100$ pin the
+scaling far more honestly.  At an equal finest mesh
+($348\times328$, $V=114{,}144$), $K$ is essentially \emph{flat} ---
+$54{,}154$ at $N=50$ versus $54{,}536$ at $N=100$ --- not $\sim\!N^2$ (which
+would predict a $4\times$ increase).  Total wall grows from
+$\mathbf{11.6}$~h ($N=50$) to $\mathbf{40.6}$~h ($N=100$) at equal mesh, an
+effective exponent $\alpha\approx1.8$; matched instead at constant per-cell
+resolution ($\sim\!2290$ vertices/cell) it grows from $11.6$~h to
+$\mathbf{29.3}$~h, $\alpha\approx1.3$ --- but that finer run also converged in
+about a third of the outer iterations, so $1.3$ is a cost-at-fixed-quality
+figure that \emph{understates} the intrinsic $N$-exponent, which the cost model
+places nearer $\alpha\approx1.8$--$2.2$ (\S\ref{sec:fit}).  Both $N=100$ runs
+produce \emph{valid} $100$-region partitions.  What actually grows with $N$ is the
+per-call projection cost --- the mean projection inner-iteration count
+$\mathrm{mPII}$ climbs $13.8\to21\to33$ --- while the outer iteration count
+stays flat.
+
+The corrected outlook: post-optimization seeded scaling between $N=50$ and
+$N=100$ measures $\alpha\approx1.3$--$1.8$, and the intrinsic (fixed-iteration)
+$N$-exponent likely sits at or above the top of that band ($\approx1.8$--$2.2$).
+Under $\alpha\approx1.5$--$2$ this puts $N=1000$ at a matter of
+\textbf{weeks-to-months} (an illustrative $\alpha\approx1.5$ gives $\sim\!43$
+days; $\alpha\approx2$ gives $\sim\!190$ days), \emph{not} years.  That figure is
+an extrapolation from only two-to-three post-optimization points over a
+$20\times$ range in~$N$ and cannot be trusted beyond an order of magnitude; the
+observed $\mathrm{mPII}$ growth could steepen the effective exponent further at
+large~$N$.  The essential correction is
+that the catastrophic ``$\sim\!14$ years / not achievable'' framing is
+\textbf{not supported by the data}.  The dominant cost remains the orthogonal
+projection ($80$--$87\%$ of wall), whose per-call cost scales as
+$\mathcal{O}(\mathrm{mPII}\cdot VN)$; the durable algorithmic fix is a
 closed-form simplex projection with a dual-Newton equal-area coupling
-(\S\ref{sec:improvements}), plus parallelising across regions --- are
-required before the method can scale to $N > 100$.  Inner-solver dual
-warm-start, listed as future work in an earlier draft, has since been
-ruled out on correctness grounds.
+(\S\ref{sec:improvements}), which attacks $\mathrm{mPII}$ directly.
 \end{abstract}
 
 \tableofcontents
@@ -58,26 +77,38 @@ ruled out on correctness grounds.
 The long-term goal of the surface-partition project is to compute
 minimal-perimeter partitions for $N \gg 30$ regions, with $N = 1000$ as a
 target.  Document~04 (\emph{Phase~1 Timing Profile}) established that
-$88$--$90\%$ of Phase~1 wall time is spent in the orthogonal projection
+$80$--$90\%$ of Phase~1 wall time is spent in the orthogonal projection
 $\Pi_{\mathcal{C}}$ onto the partition-of-unity and equal-area constraints,
 and that the projection cost per call is $\mathcal{O}(\mathrm{mPII} \cdot V
 N)$, where $V$ is the number of mesh vertices and $\mathrm{mPII}$ is the
 mean inner-iteration count.
 
 This document quantifies how total Phase~1 wall time actually grows with $N$
-using the $N$ values for which profiled data exist, projects the fit to
-larger~$N$, and identifies which factors in the cost model are responsible
-for the steep scaling.
+using the $N$ values for which profiled data exist, identifies which factors
+in the cost model are responsible for the growth, and projects --- with
+explicit caveats --- to larger~$N$.
 
-\begin{remark}[Optimization status]
+\begin{remark}[A retracted conclusion]
+\label{rem:retraction}
+An earlier version of this document concluded $\alpha\approx3.1$ ($T\sim N^3$)
+and, from it, $N=1000\approx14$~years and ``not achievable.''  Both figures are
+\textbf{withdrawn}.  They came from a two-point fit
+(\S\ref{sec:why-old-fit-wrong}) that mixed initialisation methods, level
+counts, and pre- vs.\ post-optimization code, and that assumed an empirically
+false $K\sim N^2$ iteration-count growth.  The corrected analysis below uses
+only the post-optimization, same-init runs at $N=50$ and $N=100$, which are the
+first genuinely comparable pair.
+\end{remark}
+
+\begin{remark}[Optimization status of each run]
 The $N=10$ and $N=30$ runs of \S\ref{sec:data} predate the Phase~1 PGD serial
 optimizations (Changes~A/B/C; see \S\ref{sec:serial-opts} and
 \texttt{docs/reference/PHASE1\_PGD\_SERIAL\_OPTIMIZATION\_AUDIT.md}).  The
-$N=50$ run of \S\ref{sec:n50} is post-optimization.  Because Changes~A/B/C
-are constant-factor wins, the \emph{exponent} $\alpha$ derived from the
-pre-optimization pair is unchanged, but the \emph{absolute} projections of
-\S\ref{sec:projections} are re-anchored on the measured post-optimization
-$N=50$ point.
+$N=50$ run (\S\ref{sec:n50}) and \emph{both} $N=100$ runs (\S\ref{sec:n100})
+are post-optimization.  Only the post-optimization, same-init points are used
+to estimate the exponent; the pre-optimization points are retained for context
+only and are explicitly \emph{not} fit together with the post-optimization
+data.
 \end{remark}
 
 % =========================================================================
@@ -91,10 +122,13 @@ Throughout this document:
   \item $N$ --- number of regions (partition cells).
   \item $V$ --- number of mesh vertices at the finest refinement level.
   \item $L$ --- number of refinement levels.
-  \item $T$ --- total Phase~1 wall time (seconds or hours).
+  \item $T$ --- total Phase~1 wall time (seconds or hours).  Taken from
+    \texttt{summary.total\_wall\_s} in \texttt{solution/timing\_profile.yaml}.
   \item $\mathrm{mBT}$ --- mean Armijo backtrack trial steps per major iteration.
   \item $\mathrm{mPII}$ --- mean inner-iteration count per projection call.
   \item $K$ --- total major (outer) PGD iterations summed across all levels.
+  \item ``V/cell'' --- finest-level vertices per region, $V/N$, a proxy for the
+    per-cell mesh resolution.
 \end{itemize}
 
 The cost model from document~04 is
@@ -105,103 +139,67 @@ The cost model from document~04 is
   \underbrace{\mathrm{mPII} \cdot V N}_{\text{cost per call}}.
   \label{eq:cost-model}
 \end{equation}
+The analysis below tracks each factor separately across $N$, rather than
+collapsing them into a single exponent up front.
 
 % =========================================================================
 \section{Measured Data Points}
 \label{sec:data}
 % =========================================================================
 
-\subsection{$N = 10$ reference run}
+All wall times are read from \texttt{summary.total\_wall\_s}; all validity
+statements are read from the \texttt{dormant\_cells} block of
+\texttt{solution/metadata.yaml} (a partition is valid when both \texttt{dead}
+and \texttt{weak} lists are empty).
 
-An early profiled run used the random initialisation, 7 refinement levels,
-and an 80$\times$66 initial mesh growing to $V_{10} = 187{,}128$ vertices at
-the finest level.  The total wall time was $T_{10} = 1.19$\,h.  Per-level
-iteration counts were not recorded in this run's metadata (older schema), so
-the iteration breakdown is unavailable; only the aggregate time is used.
+\subsection{$N = 10$ and $N=30$: pre-optimization context (not fittable)}
+\label{sec:pre-opt}
+
+Two families of pre-optimization runs exist.  They are recorded here for
+context, but --- being pre-optimization and, in the $N=10$ case, differently
+initialised --- they \textbf{must not} be fit together with the
+post-optimization points to produce an exponent (see
+\S\ref{sec:why-old-fit-wrong}).
+
+The $N=10$ reference run used the \emph{random} initialisation, 7 refinement
+levels, and an $80\times66$ initial mesh growing to $V_{10} = 187{,}128$
+vertices; total wall time $T_{10} = 1.19$\,h.  Per-level iteration counts were
+not recorded (older schema).
+
+The $N=30$ family used the \emph{seeded} (Voronoi farthest-point)
+initialisation, 5 levels, and a $90\times86$ initial mesh growing to
+$V_{30} = 107{,}484$ vertices.  All produced valid 30-region partitions.  The
+best-case run is seed 84172851: $T_{30}=74{,}670.9\,\text{s}=\mathbf{20.74}$\,h,
+$K=27{,}001$, $\mathrm{mBT}=6.26$, $\mathrm{mPII}=19.39$, projection share
+$89.4\%$, valid (\texttt{dead}$=[\,]$, \texttt{weak}$=[\,]$).
 
 \begin{table}[H]
 \centering
-\caption{$N=10$ reference run (torus, $\lambda = 3.25$, seed 13001502,
-random init).}
-\label{tab:n10}
+\caption{Pre-optimization reference runs (torus).  Retained for context only;
+\emph{not} used to estimate the exponent.  The $N=10$ run additionally differs
+in initialisation (random) and level count (7).}
+\label{tab:pre-opt}
 \renewcommand{\arraystretch}{1.2}
-\begin{tabular}{ll}
+\begin{tabular}{rllrrl}
 \toprule
-\textbf{Parameter} & \textbf{Value} \\
+$N$ & init & levels & $V$ (finest) & Wall (h) & valid \\
 \midrule
-Regions $N$            & 10 \\
-Refinement levels $L$  & 7 \\
-Initial mesh           & $80 \times 66$ (5\,280 vertices) \\
-Final mesh $V_{10}$    & 187\,128 vertices \\
-Total wall time $T_{10}$ & 1.19\,h \\
-Initialisation         & random \\
+10 & random & 7 & 187\,128 & \phantom{0}1.19 & yes \\
+30 & seeded & 5 & 107\,484 & 20.74 & yes \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{$N = 30$ sweep (seeded initialisation)}
-
-Six profiled runs used the seeded (Voronoi farthest-point) initialisation,
-5 refinement levels, and a 90$\times$86 initial mesh growing to
-$V_{30} = 107{,}484$ vertices.  All six produced valid 30-region partitions
-(no dormant cells).  Wall times vary by a factor of $1.8\times$ across seeds
-due to line-search behaviour at intermediate levels; the best-case run
-(seed 84172851) is used as the lower bound for scaling estimates, and the
-worst-case run (seed 61847392) as the upper bound.
-
-\begin{table}[H]
-\centering
-\caption{$N=30$ profiled runs (torus, $\lambda=2.1$, 5 levels, seeded init,
-$V_{30}=107{,}484$ vertices).}
-\label{tab:n30}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{rrrrrr}
-\toprule
-Seed & Wall (h) & Iters $K$ & $\mathrm{mBT}$ & $\mathrm{mPII}$ & proj \% \\
-\midrule
-84172851 & \phantom{0}20.74 & 27\,001 & --- & 19.4 & 89.4 \\
-83920164 & \phantom{0}25.86 & 38\,574 & --- & 19.5 & 90.1 \\
-47301856 & \phantom{0}29.09 & 37\,980 & --- & 17.4 & 89.2 \\
-13151129 & \phantom{0}30.14 & 45\,110 & --- & 16.4 & 88.1 \\
-61847392 & \phantom{0}38.17 & 49\,811 & --- & 17.6 & 89.0 \\
-\midrule
-\textbf{min / max} & \textbf{20.74 / 38.17} & & & & \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:n30-levels} shows the per-level projection cost for the
-best-case $N=30$ run, demonstrating the $\mathcal{O}(VN)$ trend within a
-single run as $V$ grows across levels.
-
-\begin{table}[H]
-\centering
-\caption{Per-level projection call timing for the $N=30$ reference run
-(seed 84172851).  Mean projection time grows with $V$ as expected.}
-\label{tab:n30-levels}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{rrrrr}
-\toprule
-Level & Vertices $V$ & Proj calls & Mean proj (ms) & Level wall (s) \\
-\midrule
-0 & \phantom{0}7\,740  & \phantom{00}1\,600 &  38.9 & \phantom{000}77 \\
-1 & 21\,888             & \phantom{0}57\,935 & 182.0 & \phantom{0}2\,995 \\
-2 & 43\,228             & \phantom{0}42\,880 & 196.9 & \phantom{0}4\,847 \\
-3 & 71\,760             & \phantom{0}34\,080 & 571.2 & \phantom{0}8\,823 \\
-4 & 107\,484            & \phantom{0}32\,627 & 865.3 & 27\,934 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{$N = 50$ measured run (post-optimization)}
+\subsection{$N = 50$ measured run (post-optimization, seeded)}
 \label{sec:n50}
 
 A profiled run taken \emph{after} the serial optimizations of
-\S\ref{sec:serial-opts} provides the first real $N=50$ data point and the new
-anchor for absolute projections.  It used the seeded initialisation, 5
-refinement levels, and a $100\times96$ initial mesh growing to
-$V_{50}=114{,}144$ vertices.  On a clean host (best seed 84172851) the total
-wall time was $T_{50}=41{,}754\,\text{s} = \mathbf{11.6}$\,h.
+\S\ref{sec:serial-opts} provides the first post-optimization anchor.  It used
+the seeded initialisation, 5 refinement levels, and a $100\times96$ initial
+mesh growing to $V_{50}=114{,}144$ vertices ($2{,}283$ V/cell).  On a clean
+host (seed 84172851) the total wall time was
+$T_{50}=41{,}754.3\,\text{s} = \mathbf{11.6}$\,h.  The partition is valid
+(\texttt{dead}$=[\,]$, \texttt{weak}$=[\,]$; minimum peak density $\approx1.0$).
 
 \begin{table}[H]
 \centering
@@ -214,158 +212,336 @@ wall time was $T_{50}=41{,}754\,\text{s} = \mathbf{11.6}$\,h.
 \toprule
 \textbf{Quantity} & \textbf{Value} \\
 \midrule
-Total wall time $T_{50}$       & 11.6\,h (41\,754\,s) \\
+Total wall time $T_{50}$       & 11.6\,h ($41{,}754$\,s) \\
 Major iterations $K$           & 54\,154 \\
 Mean backtracks $\mathrm{mBT}$ & 1.93 \\
 Mean inner iters $\mathrm{mPII}$ & 13.76 \\
 Projection share               & 80.5\,\% of wall \\
 Energy / gradient share        & 8.2\,\% / 7.4\,\% \\
 Backtrack share (net)          & 2.5\,\% \\
+Validity                       & valid ($\mathrm{dead}=\mathrm{weak}=\varnothing$) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Compared against the pre-optimization regime quoted for $N=30$
-(Table~\ref{tab:n30}; $\mathrm{mPII}\approx16$--$20$, projection share
-$88$--$90\%$, $\mathrm{mBT}$ in the $4$--$12$ range at the tail), the
-optimization effects are directly visible in the profile:
+\subsection{$N = 100$ measured runs (post-optimization, seeded)}
+\label{sec:n100}
+
+Two post-optimization $N=100$ runs, both seeded and both producing
+\emph{valid} 100-region partitions, form the first genuinely comparable pair
+with $N=50$:
+
 \begin{itemize}
-  \item $\mathrm{mBT}$ collapsed to $1.93$ --- Change~A's line-search
-    warm-start removed most of the rejected backtrack trials (and with them
-    the rejected-step projections), which is the largest single contributor
-    to the $\approx\!3.8\times$ speedup.
-  \item the projection share fell from $88$--$90\%$ to $80.5\%$ ---
-    Change~B trimmed the per-inner-iteration $\mathcal{O}(VN)$ waste, and the
-    rejected-step projections eliminated by Change~A no longer inflate the
-    bucket.
-  \item $\mathrm{mPII}$ is $13.8$, modestly below the pre-optimization
-    $15$--$20$; Change~B did not target the inner-iteration \emph{count}
-    (it left the algorithm result-preserving), so this is mostly run-to-run
-    variation, not a warm-start effect.
+  \item \textbf{Equal-mesh run} (\texttt{run\_20260629\_141012}): the
+    \emph{same} $348\times328$ finest mesh as the $N=50$ run
+    ($V=114{,}144$, hence $1{,}141$ V/cell --- under-resolved for $100$
+    cells but still valid, minimum peak density $0.991$).  This isolates the
+    $N$-dependence of the algorithm at fixed mesh.
+  \item \textbf{Resolution-matched run} (\texttt{run\_20260701\_143238}): a
+    finer $494\times464$ mesh, $V=229{,}216$, $2{,}292$ V/cell --- matched to
+    the $N=50$ run's per-cell resolution.  Valid, minimum peak density
+    $0.976$.  This is the fair ``same partition quality'' comparison, but it
+    also doubles~$V$.
 \end{itemize}
-
-\begin{remark}[Hardware variance dominates absolute timing]
-The same config and seed took $43.9$\,h on a contended host
-(\texttt{run\_20260625\_113015}) versus $11.6$\,h on a clean one --- a
-$3.8\times$ spread from hardware contention alone, comparable to the
-optimization speedup itself.  Absolute projections below are anchored on the
-fastest clean run; worst-seed $\times$ contended-host combinations can run
-$2$--$4\times$ higher.
-\end{remark}
-
-% =========================================================================
-\section{Empirical Scaling Fit}
-\label{sec:fit}
-% =========================================================================
-
-\subsection{Mesh-size normalisation}
-
-The two data points use different final mesh sizes ($V_{10} = 187{,}128$ and
-$V_{30} = 107{,}484$).  Since projection cost scales linearly with $V$, we
-normalise $T_{10}$ to the $N=30$ mesh before fitting:
-\begin{equation}
-  T_{10}^{\ast}
-  \;=\; T_{10} \times \frac{V_{30}}{V_{10}}
-  \;=\; 1.19 \times \frac{107{,}484}{187{,}128}
-  \;\approx\; 0.683\,\text{h}.
-  \label{eq:t10-adj}
-\end{equation}
-
-\subsection{Power-law exponent}
-
-Assuming $T \propto N^{\alpha}$ and using the adjusted pair
-$(N, T) \in \{(10,\, 0.683), (30,\, 20.74)\}$ (hours):
-\begin{equation}
-  \alpha
-  \;=\; \frac{\ln(T_{30} / T_{10}^{\ast})}{\ln(30/10)}
-  \;=\; \frac{\ln(30.4)}{\ln(3)}
-  \;\approx\; \frac{3.41}{1.10}
-  \;\approx\; 3.1.
-  \label{eq:alpha}
-\end{equation}
-
-The exponent $\alpha \approx 3$ decomposes into two factors:
-\begin{itemize}
-  \item \textbf{$\mathcal{O}(N)$ per projection call} --- the inner loop of
-    $\Pi_{\mathcal{C}}$ operates on the $V \times N$ density matrix, so each
-    call costs linearly in $N$.
-  \item \textbf{$\mathcal{O}(N^2)$ iteration count} --- more regions produce
-    a more crowded energy landscape; empirically, $K$ grows roughly as $N^2$
-    between the two data points (from $\sim\!3{,}500$ at $N=10$, estimated,
-    to $\sim\!27{,}000$--$50{,}000$ at $N=30$, measured).
-\end{itemize}
-
-Combined: $T \propto N \cdot N^2 = N^3$, consistent with $\alpha \approx 3.1$.
-
-\begin{remark}[Uncertainty in $\alpha$]
-The fit rests on only two data points from runs with different initialisations
-(random vs.\ seeded) and different level counts (7 vs.\ 5).  The true exponent
-could plausibly lie in the range $[2.5,\, 3.5]$.  The estimates below
-should be treated as order-of-magnitude guides, not precise predictions.
-\end{remark}
-
-\begin{remark}[Why the optimizations do not move $\alpha$]
-The serial optimizations (\S\ref{sec:serial-opts}) multiply $T$ by a roughly
-$N$-independent constant ($\approx\!1/3.8$), which cancels in the ratio
-$T_{30}/T_{10}^{\ast}$ of Eq.~\eqref{eq:alpha}.  The exponent is therefore
-still $\alpha \approx 3.1$.  What \emph{did} change is the absolute scale:
-\S\ref{sec:projections} anchors $T(N) = T_{50}\,(N/50)^{\alpha}$ on the
-measured post-optimization point $T_{50}=11.6$\,h, rather than extrapolating
-from the pre-optimization $N=30$ table.  As a consistency check, the
-pre-optimization fit predicts $T_{50}\approx 20.74\,(50/30)^{3.1}\approx
-102$\,h; dividing by the measured $3.8\times$ speedup gives $\approx\!27$\,h,
-still $\sim\!2\times$ above the measured $11.6$\,h --- within the
-order-of-magnitude tolerance the two-point fit warrants.
-\end{remark}
-
-% =========================================================================
-\section{Projections to Larger $N$}
-\label{sec:projections}
-% =========================================================================
-
-Anchoring on the measured post-optimization point with
-$T(N) = T_{50} \cdot (N/50)^{\alpha}$, $T_{50} = 11.6$\,h (clean host, best
-seed) and $\alpha = 3.1$:
 
 \begin{table}[H]
 \centering
-\caption{Projected Phase~1 wall-time estimates (single clean machine, same
-5-level torus mesh schedule), anchored on the measured post-optimization
-$N=50$ point.  The ``contended'' column applies the empirical $3.8\times$
-hardware/worst-seed penalty of \S\ref{sec:n50} as a practical upper bound.
-The $N=50$ row is measured, not projected.}
-\label{tab:projections}
-\renewcommand{\arraystretch}{1.3}
-\begin{tabular}{rrrrr}
+\caption{Post-optimization $N=100$ runs (torus, $\lambda=2.1$, seed 84172851,
+5 levels, seeded init).  Both are valid partitions
+($\mathrm{dead}=\mathrm{weak}=\varnothing$).  The $N=50$ row is repeated for
+comparison.  ``$K$ flat'' is the key observation: at equal mesh $K$ barely
+moves.}
+\label{tab:n100}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lrrrrr}
 \toprule
-$N$ & $(N/50)^{3.1}$ & Clean (h) & Clean (days) & Contended (days, $\times3.8$) \\
+Run & $N$ & finest mesh & $V$ & V/cell & Wall (h) \\
 \midrule
-\phantom{0}50  & 1.0\phantom{00} & \phantom{0000}11.6 \emph{(meas.)} & \phantom{000}0.5 & \phantom{000}1.8 \\
-\phantom{0}75  & 3.5\phantom{00} & \phantom{0000}41   & \phantom{000}1.7 & \phantom{000}6.4 \\
-\phantom{0}100 & 8.6\phantom{00} & \phantom{0000}99   & \phantom{000}4.1 & \phantom{00}15.7 \\
-\phantom{0}200 & 73.5\phantom{0} & \phantom{000}853   & \phantom{00}35.5 & \phantom{0}135   \\
-1\,000         & $\approx\!1.1\times10^4$ & $\approx\!1.25\times10^5$ & $\approx\!5{,}200$ & $\approx\!2.0\times10^4$ \\
+\texttt{234511} & \phantom{0}50 & $348\times328$ & 114\,144 & 2\,283 & 11.6 \\
+\texttt{141012} & 100 & $348\times328$ & 114\,144 & 1\,141 & 40.6 \\
+\texttt{143238} & 100 & $494\times464$ & 229\,216 & 2\,292 & 29.3 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent At $N=1000$ the clean-host estimate is $\sim\!1.25\times10^5$\,h
-$\approx 14$\,years; the contended bound is $\sim\!54$\,years.  The practical
-conclusions:
+\begin{table}[H]
+\centering
+\caption{Profile detail for the same three runs.  Note $K$ (major iterations)
+is flat between the two equal-mesh runs while $\mathrm{mPII}$ (per-call
+projection inner iterations) climbs steadily with $N$ and mesh size.}
+\label{tab:n100-profile}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lrrrrr}
+\toprule
+Run & $N$ / mesh & $K$ & $\mathrm{mBT}$ & $\mathrm{mPII}$ & proj \% \\
+\midrule
+\texttt{234511} & 50 / $348^2$-class  & 54\,154 & 1.93 & 13.76 & 80.5 \\
+\texttt{141012} & 100 / same mesh     & 54\,536 & 1.96 & 21.15 & 86.0 \\
+\texttt{143238} & 100 / finer mesh    & 16\,908 & 1.48 & 32.95 & 87.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The single most important number in this document is in
+Table~\ref{tab:n100-profile}: at an \emph{equal} finest mesh, doubling $N$ from
+$50$ to $100$ moved $K$ from $54{,}154$ to $54{,}536$ --- a $0.7\%$ change.  The
+old $K\sim N^2$ assumption would have predicted $K$ near $216{,}000$
+(a $4\times$ increase).  The iteration count does \emph{not} blow up with $N$.
+
+% =========================================================================
+\section{Why the Old $N^3$ / 14-Year Fit Was an Artifact}
+\label{sec:why-old-fit-wrong}
+% =========================================================================
+
+The retracted $\alpha\approx3.1$ came from fitting $T\propto N^{\alpha}$ to
+exactly two points, $N=10$ and $N=30$, after mesh-normalising $T_{10}$.  Three
+independent defects make that fit unsafe, and a fourth defect propagated into
+the projection.
+
+\paragraph{Defect 1 --- only two points.}
+A power law has two free parameters; fitting it to two points leaves zero
+degrees of freedom, so the exponent is whatever the pair happens to imply, with
+no residual to expose a bad fit.
+
+\paragraph{Defect 2 --- the initialisation confound.}
+$N=10$ used the \emph{random} initialisation; $N=30$ used the \emph{seeded}
+initialisation.  These are different algorithms with different convergence
+behaviour (the seeded path hands each cell a contiguous winning region from
+iteration~0).  The observed $T_{10}\to T_{30}$ jump therefore blends an
+$N$-effect with an init-method effect, and the two cannot be separated from a
+single pair.
+
+\paragraph{Defect 3 --- the pre- vs.\ post-optimization confound, and level
+counts.}
+Both points predate Changes~A/B/C, and they used different level counts (7 vs.\
+5).  The serial optimizations changed $\mathrm{mBT}$ and the projection share
+substantially (\S\ref{sec:serial-opts}); a scaling law calibrated on
+pre-optimization runs does not transfer cleanly to the current code.
+
+\paragraph{Defect 4 --- the empirically false $K\sim N^2$ assumption.}
+The old derivation decomposed $\alpha\approx3$ as ``$\mathcal{O}(N)$ per call
+$\times$ $\mathcal{O}(N^2)$ iteration count.''  The $N^2$ factor was
+\emph{inferred from the same confounded pair} (an estimated $K\approx3{,}500$ at
+$N=10$ against a measured $K\approx27{,}000$--$50{,}000$ at $N=30$), not
+measured at fixed init and code.  The post-optimization same-init data refute
+it directly: at equal mesh, $K = 54{,}154 \to 54{,}536$ from $N=50$ to $N=100$
+(Table~\ref{tab:n100-profile}).  $K$ is flat, so the $N^2$ term --- the sole
+source of the ``extra'' two powers of $N$ that produced $N^3$ --- does not
+exist in the measured regime.
+
+\medskip
+With the $K\sim N^2$ factor removed, the surviving $N$-dependence is the
+per-call cost of the projection, which the cost model
+\eqref{eq:cost-model} puts at $\mathcal{O}(\mathrm{mPII}\cdot VN)$.  That is a
+low-order growth, not a cubic one, and it is what the next section measures.
+
+% =========================================================================
+\section{Corrected Empirical Scaling}
+\label{sec:fit}
+% =========================================================================
+
+We estimate the exponent using \emph{only} the post-optimization, same-init
+(seeded) points: the $N=50$ run and the two $N=100$ runs.  Two honest
+comparisons are available, and they measure different things.
+
+\subsection{Equal-mesh comparison (fixed $V$)}
+
+Holding the finest mesh fixed at $348\times328$ ($V=114{,}144$) and doubling
+$N$ from $50$ to $100$:
+\begin{equation}
+  \frac{T_{100}^{\text{eq}}}{T_{50}}
+  = \frac{146{,}240.4\,\text{s}}{41{,}754.3\,\text{s}}
+  = 3.50,
+  \qquad
+  \alpha_{\text{eq}}
+  = \frac{\ln 3.50}{\ln 2}
+  = \frac{1.253}{0.693}
+  \approx \mathbf{1.81}.
+  \label{eq:alpha-eq}
+\end{equation}
+This isolates the pure $N$-effect at fixed mesh work.  It is an \emph{upper}
+estimate of the practically relevant exponent, because at fixed $V$ the
+$N=100$ partition is under-resolved ($1{,}141$ V/cell), which forces more
+projection inner iterations per call ($\mathrm{mPII}$: $13.76\to21.15$).
+
+\subsection{Resolution-matched comparison (fixed V/cell)}
+
+Comparing instead at constant per-cell resolution --- the $N=50$ run
+($V=114{,}144$, $2{,}283$ V/cell) against the finer $N=100$ run
+($V=229{,}216$, $2{,}292$ V/cell):
+\begin{equation}
+  \frac{T_{100}^{\text{fine}}}{T_{50}}
+  = \frac{105{,}601.0\,\text{s}}{41{,}754.3\,\text{s}}
+  = 2.53,
+  \qquad
+  \alpha_{\text{rm}}
+  = \frac{\ln 2.53}{\ln 2}
+  = \frac{0.928}{0.693}
+  \approx \mathbf{1.34}.
+  \label{eq:alpha-rm}
+\end{equation}
+This is the fair ``same partition quality'' comparison --- adding regions in
+practice requires a proportionally finer mesh, and it folds in the mesh growth
+($V$ also doubled here).  But $\alpha_{\text{rm}}=1.34$ must \textbf{not} be read
+as a clean pure-$N$ exponent: the finer run is fast largely because its outer
+iteration count \emph{collapsed} to $K=16{,}908$, about a third of the
+$\sim\!54{,}000$ of the other two runs (Table~\ref{tab:n100-profile}), with
+fewer backtracks ($\mathrm{mBT}$ $1.48$ vs.\ $1.93$).  That $K$ drop is
+unexplained and may be specific to this mesh/level schedule rather than an
+$N$-scaling property.  Crucially it \emph{contradicts} the ``$K$ flat''
+finding this document leans on elsewhere: had $K$ stayed at $54{,}154$, the
+resolution-matched ratio would be $8.1$ and $\alpha_{\text{rm}}\approx3.0$.
+Indeed, holding $K$ fixed with $V\propto N$ (constant V/cell), the cost model
+\eqref{eq:cost-model} gives $T\sim\mathrm{mPII}\cdot V N\sim\mathrm{mPII}\cdot
+N^2$, i.e.\ $\alpha_{\text{rm}}\gtrsim2$ before the $\mathrm{mPII}$ rise is even
+counted.  So $1.34$ is a \emph{lower engineering bound} (cost at fixed quality,
+this run's convergence included), while the intrinsic $N$-exponent for
+resolution-matched work is more plausibly $\approx1.8$--$2.2$.  The honest
+bracket is therefore ``$\alpha$ between about $1.3$ measured and $\approx2.2$
+implied,'' with the two $N=100$ runs disagreeing on where in that band the truth
+lies.
+
+\subsection{What the decomposition says}
+
+The two exponents \eqref{eq:alpha-eq}--\eqref{eq:alpha-rm} bracket the
+post-optimization scaling at $\alpha\approx1.3$--$1.8$.  The cost model
+\eqref{eq:cost-model} explains the equal-mesh factor of $3.50$ cleanly:
 \begin{itemize}
-  \item $N = 50$ is \textbf{routinely feasible} on a single machine ---
-    measured at half a day on a clean host with the seeded initialisation
-    (an order of magnitude below the pre-optimization projection of
-    Table~\ref{tab:projections}'s earlier draft).
-  \item $N = 100$ is \textbf{feasible on a single clean machine} ($\sim\!4$
-    days), and comfortable on a cluster with multiple seeds in parallel.
-  \item $N = 200$ is a \textbf{multi-week} single-machine run; practical only
-    with the algorithmic fix below or substantial parallelism.
-  \item $N = 1000$ remains \textbf{not achievable} with the current
-    algorithm --- $\sim\!14$\,years even on a clean host.  The serial
-    optimizations bought roughly one order of magnitude (from $\sim\!120$\,yr)
-    but not the three-to-four orders needed.
+  \item \textbf{Projection-call count} $K\cdot(\mathrm{mBT}+1)$:
+    $\dfrac{54{,}536\times2.96}{54{,}154\times2.93}\approx1.02$ --- essentially
+    flat.  The iteration count does not grow.
+  \item \textbf{Per-call cost} $\mathrm{mPII}\cdot VN$ at fixed $V$:
+    $\dfrac{21.15\times100}{13.76\times50}\approx3.08$ --- this is where all the
+    growth lives, split into a factor $2$ from $N$ and a factor $1.54$ from the
+    rising $\mathrm{mPII}$.
 \end{itemize}
+Their product ($\approx3.13$) is close to the measured $3.50$; the residual
+reflects super-linear per-call overheads (larger $V\times N$ density matrices)
+not captured by the leading-order model.  For the equal-mesh comparison the
+effective exponent is thus $\approx1.7$--$1.8$, nowhere near~$3$.
+
+The same decomposition applied to the resolution-matched factor of $2.53$ is
+what exposes $\alpha_{\text{rm}}=1.34$ as an artifact of the iteration-count
+drop rather than favourable per-call scaling:
+\begin{itemize}
+  \item \textbf{Projection-call count} $K\cdot(\mathrm{mBT}+1)$:
+    $\dfrac{16{,}908\times2.48}{54{,}154\times2.93}\approx0.26$ --- it
+    \emph{fell} $\sim\!4\times$, driven entirely by the $K$ collapse in the
+    finer run.
+  \item \textbf{Per-call cost} $\mathrm{mPII}\cdot VN$:
+    $\dfrac{32.95\times229{,}216\times100}{13.76\times114{,}144\times50}
+    \approx9.6$ --- it \emph{rose} nearly $10\times$ (doubled $V$, doubled $N$,
+    $2.4\times$ $\mathrm{mPII}$).
+\end{itemize}
+Their product ($0.26\times9.6\approx2.5$) recovers the measured factor.  So the
+low $1.34$ comes from doing $4\times$ fewer projection calls, not from cheap
+per-call scaling --- the per-call cost actually grew steeply.  If that
+call-count windfall does not recur at larger $N$ (i.e.\ if $K$ stays flat as it
+did at equal mesh), resolution-matched scaling is $\alpha\gtrsim2$.
+
+\begin{remark}[The real driver: per-call projection cost, not iteration count]
+Across the three post-optimization runs, $\mathrm{mPII}$ climbs
+$13.8\to21\to33$ (Table~\ref{tab:n100-profile}) while $K$ stays flat at equal
+mesh.  The growth with $N$ is therefore concentrated in the \emph{cost per
+projection call}, consistent with the $\mathcal{O}(\mathrm{mPII}\cdot VN)$
+model.  This is exactly the quantity the dual-Newton reformulation of
+\S\ref{sec:improvements} attacks.
+\end{remark}
+
+\begin{remark}[Uncertainty in $\alpha$]
+Even the corrected estimate rests on few points: one $N=50$ run and two $N=100$
+runs, all at a single seed.  Run-to-run and host-to-host variance is large (the
+same $N=50$ config took $43.9$\,h on a contended host versus $11.6$\,h on a
+clean one --- a $3.8\times$ spread from hardware alone).  \textbf{This host
+spread ($3.8\times$) exceeds the entire equal-mesh $N$-signal ($3.5\times$)},
+so the exponent is only separable from hardware noise if all three runs
+executed on comparably clean, uncontended hosts.  The $N=50$ anchor is the
+verified clean run; the two $N=100$ runs are \emph{assumed} comparable but this
+has not been independently confirmed, and it should be before the bracket is
+treated as anything firmer than order-of-magnitude.  Treat
+$\alpha\approx1.3$--$1.8$ (measured) / $\approx1.8$--$2.2$ (intrinsic) as an
+order-of-magnitude characterisation of the $50\to100$ regime, not a precise law,
+and see \S\ref{sec:projections} for why it must not be pushed confidently to
+$N=1000$.
+\end{remark}
+
+% =========================================================================
+\section{Projections to Larger $N$ (Honestly Hedged)}
+\label{sec:projections}
+% =========================================================================
+
+Anchoring on the measured post-optimization point $T_{50}=11.6$\,h and applying
+$T(N)=T_{50}\,(N/50)^{\alpha}$ across the bracket $\alpha\in[1.34,1.81]$ (with
+$\alpha=1.5$ as an illustrative midpoint) gives Table~\ref{tab:projections}.
+By construction the two $N=100$ columns reproduce the two measured $N=100$ runs
+($29.3$\,h at $\alpha=1.34$, $40.6$\,h at $\alpha=1.81$), which is the honest
+statement that our two measured points \emph{define} the bracket rather than
+test it.
+
+\begin{table}[H]
+\centering
+\caption{Illustrative Phase~1 wall-time extrapolations on a single clean
+machine, anchored on the measured $N=50$ point ($11.6$\,h).  The $N=50$ row and
+both $N=100$ entries are \emph{measured}; the $N=200$ and $N=1000$ rows are
+extrapolations from only these points and are shown as a range, not a
+prediction.  See the caveats below --- especially that $\mathrm{mPII}$ growth
+could steepen the effective exponent beyond this bracket.}
+\label{tab:projections}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{rrrr}
+\toprule
+$N$ & $\alpha=1.34$ & $\alpha=1.5$ (illus.) & $\alpha=1.81$ \\
+\midrule
+\phantom{0}50   & 11.6\,h \emph{(meas.)} & 11.6\,h \emph{(meas.)} & 11.6\,h \emph{(meas.)} \\
+100  & 29.3\,h \emph{(meas.)} & 32.8\,h & 40.6\,h \emph{(meas.)} \\
+200  & 74\,h ($\sim$3\,d)   & 93\,h ($\sim$4\,d)   & 143\,h ($\sim$6\,d) \\
+1000 & $\sim$640\,h ($\sim$27\,d) & $\sim$1040\,h ($\sim$43\,d) & $\sim$2630\,h ($\sim$110\,d) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Read literally, the measured bracket puts $N=1000$ at roughly
+\textbf{one to four months} on a single clean machine; allowing for the steeper
+intrinsic (fixed-iteration) exponent $\alpha\approx2$--$2.2$ discussed in
+\S\ref{sec:fit} pushes the upper end toward \textbf{$\sim\!6$ months}.  Either
+way the honest statement is \textbf{weeks-to-months, not years}.  The practical
+conclusions, stated with the appropriate hedging:
+\begin{itemize}
+  \item $N=50$ is \textbf{routinely feasible} --- measured at half a day on a
+    clean host with the seeded initialisation.
+  \item $N=100$ is \textbf{measured and feasible} on a single machine: $29.3$\,h
+    at matched resolution, $40.6$\,h on the coarser (under-resolved but still
+    valid) mesh.  Both produce valid $100$-region partitions.
+  \item $N=200$ is a \textbf{multi-day} single-machine run under this bracket
+    (roughly $3$--$6$ days); still untested, so treat as an extrapolation.
+  \item $N=1000$ is, on this evidence, \textbf{plausibly a weeks-to-months
+    single-machine run} rather than an impossibility.  This is an
+    \emph{extrapolation from two-to-three points over a $20\times$ range in
+    $N$}; it cannot be trusted to better than an order of magnitude.  The
+    former ``$\sim\!14$ years / not achievable'' conclusion is
+    \textbf{withdrawn} --- it was an artifact of the confounded $N^3$ fit
+    (\S\ref{sec:why-old-fit-wrong}), not a property of the algorithm.
+\end{itemize}
+
+\begin{remark}[Why $N=1000$ remains genuinely uncertain]
+Two-to-three post-optimization points cannot pin a power law over a $20\times$
+extrapolation.  The clearest reason the effective exponent could \emph{steepen}
+is the very quantity this document identifies as the driver, $\mathrm{mPII}$.
+Its growth must be read carefully: of the full $13.8\to21\to33$ climb, only the
+first step is $N$-driven ($13.76\to21.15$ at a \emph{fixed} $348\times328$ mesh
+as $N$ doubles, a $1.54\times$ rise), while the second ($21.15\to32.95$) is
+\emph{mesh}-driven (fixed $N=100$, mesh refined $114$k$\to229$k vertices).  So
+the genuinely $N$-attributable growth is the $1.54\times$ per doubling.  If even
+that portion is super-constant in $N$, the per-call cost carries more than the
+one power of $N$ assumed in \eqref{eq:cost-model}, and $T(N)$ bends upward at
+large $N$; a resolution-matched extrapolation compounds it with the
+mesh-driven rise as well.  Conversely, the
+dual-Newton reformulation (\S\ref{sec:improvements}) would cap $\mathrm{mPII}$
+and flatten it.  The point of Table~\ref{tab:projections} is not to assert
+$\sim\!43$ days at $N=1000$; it is to show that nothing in the measured data
+supports a catastrophic figure, while also refusing to over-commit to an
+optimistic one.
+\end{remark}
 
 % =========================================================================
 \section{Implemented: Serial Optimizations (Changes A/B/C)}
@@ -374,12 +550,13 @@ conclusions:
 
 The optimizations below have \emph{landed} (merge \texttt{bae8cd2}); they are
 the source of the $\approx\!3.8\times$ constant-factor speedup measured at
-$N=50$ (\S\ref{sec:n50}).  They preserve the optimizer's output --- the
-$N=50$ partition was validated bit-identical to the pre-optimization result
-(contour perimeter $152.3883843639$, $100\%$ winner-take-all agreement) ---
-so they reduce the constant in Eq.~\eqref{eq:cost-model} without changing
-$\alpha$.  The full audit (\#1--\#13, with measured impact tiers) is recorded
-in \texttt{docs/reference/PHASE1\_PGD\_SERIAL\_OPTIMIZATION\_AUDIT.md}.
+$N=50$.  They preserve the optimizer's output --- the $N=50$ partition was
+validated bit-identical to the pre-optimization result (contour perimeter
+$152.3883843639$, $100\%$ winner-take-all agreement) --- so they reduce the
+constant in Eq.~\eqref{eq:cost-model} without changing which factors carry the
+$N$-dependence.  The full audit (\#1--\#13, with measured impact tiers) is
+recorded in
+\texttt{docs/reference/PHASE1\_PGD\_SERIAL\_OPTIMIZATION\_AUDIT.md}.
 
 \paragraph{Change A --- backtracking step warm-start (audit \#1, \#8).}
 \texttt{step0} was hard-reset to $1.0$ at the top of every PGD iteration, so
@@ -389,9 +566,10 @@ per iteration, each a full projection $+$ full energy.  Change~A carries the
 last accepted step and starts the next search from
 $\min(s_{\max},\,s_{\text{last}}/\rho)$ (Tier~1; Armijo preserved exactly),
 and hoists the invariant $\|g\|^2$ out of the trial loop.  Measured effect:
-$\mathrm{mBT}$ fell to $1.93$ at $N=50$ --- the dominant contributor to the
-speedup, because eliminated rejected trials remove both their energy
-\emph{and} their projection evaluations.
+$\mathrm{mBT}$ fell to $1.93$ at $N=50$ (from $6.26$ in the pre-optimization
+$N=30$ run) --- the dominant contributor to the speedup, because eliminated
+rejected trials remove both their energy \emph{and} their projection
+evaluations.
 
 \paragraph{Change B --- projection inner-loop cleanup (audit \#4).}
 The constant coupling matrix $C = \|v\|^2(I - J/n)$ and its
@@ -401,7 +579,9 @@ inner iteration; the $\mathcal{O}(VN)$ \texttt{A\_prev = A.copy()} plus
 test on \texttt{max\_error} (gated by $\texttt{max\_error} < 10\,\mathrm{tol}$
 so it never returns an infeasible iterate); the dead
 \texttt{convergence\_history} dict is removed.  Result-preserving.  Measured
-effect: the projection's share of wall fell from $88$--$90\%$ to $80.5\%$.
+effect: the projection's share of wall fell from $88$--$90\%$ (pre-opt) to
+$80.5\%$ at $N=50$.  (At $N=100$ the share climbs back to $86$--$87\%$, driven
+by the higher $\mathrm{mPII}$, not by a regression in Change~B.)
 
 \paragraph{Change C --- post-step gradient reuse (audit \#6).}
 The post-step gradient $g_{\text{post}} = \nabla E_\varepsilon(x)$ is
@@ -409,20 +589,31 @@ bit-identical to the next iteration's $\nabla E_\varepsilon(x)$ ($x$ is
 unmodified between them), so it is carried forward, halving gradient
 evaluations.  Bit-identical; $\sim\!1.6\%$ wall.
 
+\begin{remark}[Constant-factor wins do not change the shape of the scaling]
+Changes~A/B/C multiply $T$ by a roughly $N$-independent constant
+($\approx\!1/3.8$).  They therefore shift every absolute number in
+Table~\ref{tab:projections} down but leave the \emph{exponent} to be measured
+from the post-optimization runs themselves --- which is exactly what
+\S\ref{sec:fit} does, rather than importing a pre-optimization exponent.
+\end{remark}
+
 % =========================================================================
 \section{What Remains to Scale to $N > 100$}
 \label{sec:improvements}
 % =========================================================================
 
 Equation~\eqref{eq:cost-model} identifies three independent factors in $T$.
-The serial optimizations above shrank the constant but left $\alpha\approx3.1$
-intact; reducing the \emph{exponent} requires the algorithmic work below.
+The serial optimizations above shrank the constant; the measured data
+(\S\ref{sec:fit}) show the remaining $N$-growth is concentrated in the per-call
+projection cost ($\mathrm{mPII}\cdot VN$), \emph{not} in the iteration count.
+The durable lever is therefore whatever caps $\mathrm{mPII}$.
 
 \paragraph{1. Further cut re-projection on rejected backtrack steps
 (partially done).}
 Change~A's Tier~1 warm-start already brought $\mathrm{mBT}$ from the
-$4$--$12$ thrashing regime down to $\sim\!1.9$, capturing most of the easy
-gain.  Two stronger options remain, both still future work:
+$4$--$12$ thrashing regime (e.g.\ $6.26$ at pre-opt $N=30$) down to $\sim\!1.9$,
+capturing most of the easy gain.  Two stronger options remain, both still
+future work:
 \begin{itemize}
   \item \textbf{Gradient-step rule without line search} (Barzilai--Borwein or
     spectral step, audit Tier~2): project exactly once per major iteration,
@@ -437,27 +628,30 @@ With $\mathrm{mBT}$ already near $2$, the remaining headroom here is modest
 
 \paragraph{2. Replace the iterative projection with a dual-Newton closed-form
 solve (highest-merit algorithmic fix, audit \#3).}
-The coupled sum-to-one $+$ equal-area projection is already closed-form per
-inner iteration; only the $A \ge 0$ nonnegativity forces the $13$--$20$ inner
-sweeps.  Dropping the area constraint lets each vertex row project onto the
-probability simplex in closed form ($\mathcal{O}(N\log N)$); the $N$
-equal-area couplings are then re-introduced via a dual $y\in\mathbb{R}^N$
-solved with a semismooth Newton iteration ($\sim\!5$--$15$ steps).  This
-replaces the clamp/Sinkhorn sweeps with $\sim\!10$ Newton steps and gives
-\emph{exact} feasibility, removing the $\varepsilon$-floor pathology.  It is
-the durable fix for $N \ge 100$ and belongs in its own plan; it was
-\emph{not} landable before the multi-day production runs.
+This is the direct attack on the growing $\mathrm{mPII}$ identified in
+\S\ref{sec:fit}.  The coupled sum-to-one $+$ equal-area projection is already
+closed-form per inner iteration; only the $A \ge 0$ nonnegativity forces the
+$14$--$33$ inner sweeps we now measure.  Dropping the area constraint lets each
+vertex row project onto the probability simplex in closed form
+($\mathcal{O}(N\log N)$); the $N$ equal-area couplings are then re-introduced
+via a dual $y\in\mathbb{R}^N$ solved with a semismooth Newton iteration
+($\sim\!5$--$15$ steps).  This replaces the clamp/Sinkhorn sweeps with
+$\sim\!10$ Newton steps and gives \emph{exact} feasibility, removing the
+$\varepsilon$-floor pathology.  Because $\mathrm{mPII}$ is the quantity that
+grows with $N$, capping it is the single change most likely to flatten the
+effective exponent; it is the durable fix for $N \ge 100$ and belongs in its
+own plan.
 
 \begin{remark}[Inner-solver dual warm-start was ruled out]
-An earlier draft of this document listed ``warm-start the projection inner
-solver'' (carrying dual multipliers between consecutive PGD projections) as a
-$\sim\!2\times$ lever.  The serial-optimization audit reclassified this as a
-\textbf{negative finding} (audit \#13): the projection's per-call dual state
-is not a safe warm start across PGD iterates --- it risks returning an
-infeasible iterate --- and Change~B's measured profile shows $\mathrm{mPII}$
-is already only $\sim\!14$, leaving little to recover.  The structural way to
-attack $\mathrm{mPII}$ is the dual-Newton reformulation above, not warm-starting
-the existing fixed-point loop.
+An earlier draft listed ``warm-start the projection inner solver'' (carrying
+dual multipliers between consecutive PGD projections) as a $\sim\!2\times$
+lever.  The serial-optimization audit reclassified this as a \textbf{negative
+finding} (audit \#13): the projection's per-call dual state is not a safe warm
+start across PGD iterates --- it risks returning an infeasible iterate --- and
+the measured profile shows $\mathrm{mPII}$ is only $\sim\!14$ at $N=50$.  The
+structural way to attack $\mathrm{mPII}$ (which does grow with $N$) is the
+dual-Newton reformulation above, not warm-starting the existing fixed-point
+loop.
 \end{remark}
 
 \paragraph{3. Parallelise across regions.}
@@ -467,13 +661,16 @@ parallel: distributing the $V \times N$ density matrix across $P$ cores
 reduces per-call cost to $\mathcal{O}(VN/P)$, converting the $N$ factor from
 a wall-clock penalty to a throughput one.
 
-\paragraph{4. Reduce the iteration-count growth exponent.}
-The empirical $K \propto N^2$ trend reflects the increasing difficulty of the
-energy landscape.  Better initialisation (the seeded Voronoi approach already
-helps at $N=30$ and $N=50$), coarser-to-finer scheduling, or a larger initial
-$\varepsilon$ could reduce this exponent.  Quantifying the iteration-count
-scaling precisely requires profiled runs at $N \in \{10, 20, 75\}$ with the
-seeded init; only the $N=30$ and $N=50$ points exist so far.
+\paragraph{4. Iteration count is \emph{not} the bottleneck (corrected).}
+An earlier draft claimed $K\propto N^2$ and listed reducing that exponent as a
+priority.  The measured post-optimization data refute the premise: at equal
+mesh $K$ is flat ($54{,}154\to54{,}536$ from $N=50$ to $N=100$;
+Table~\ref{tab:n100-profile}).  There is no $N^2$ iteration-count growth to
+remove.  Better initialisation (the seeded Voronoi approach) and adaptive
+$\varepsilon$ remain worthwhile for robustness, but they are not the lever for
+$N$-scaling --- the per-call projection cost is.  Confirming the flat-$K$ trend
+at a third $N$ (e.g.\ $N=200$) with the seeded init would further solidify the
+corrected picture.
 
 \paragraph{5. FEM assembly is not the bottleneck.}
 Assembly is $<1\%$ of wall time at current mesh sizes; it becomes relevant only
@@ -482,9 +679,11 @@ above $\sim\!10^5$--$10^6$ vertices.
 \begin{remark}[Cluster scaling]
 Running multiple seeds in parallel on a cluster (e.g.\ Pelle) does not reduce
 the per-seed wall time but gives the ensemble result sooner.  For $N=100$
-($\sim\!4$ days per seed) this compresses the effective turnaround when
-several seeds are needed.  For $N=1000$ it is not a solution: the per-seed
-runtime is still measured in years.
+($\sim\!1.2$--$1.7$ days per seed, measured) this compresses the effective
+turnaround when several seeds are needed.  For $N=1000$ --- a weeks-to-months
+per-seed run under the current bracket --- an ensemble shortens turnaround but
+does not change the per-seed cost; the dual-Newton projection is the lever that
+does.
 \end{remark}
 
 % =========================================================================
@@ -493,36 +692,42 @@ runtime is still measured in years.
 
 \begin{center}
 \renewcommand{\arraystretch}{1.35}
-\begin{tabular}{p{2.8cm}p{4.2cm}p{5.1cm}}
+\begin{tabular}{p{2.8cm}p{4.6cm}p{5.1cm}}
 \toprule
-\textbf{Factor} & \textbf{Current scaling (post-opt)} & \textbf{Path to improvement} \\
+\textbf{Factor} & \textbf{Current scaling (post-opt, measured)} & \textbf{Path to improvement} \\
 \midrule
 Cost per projection call
-  & $\mathcal{O}(\mathrm{mPII} \cdot VN)$; $\mathrm{mPII}\approx14$;
-    projection $80.5\%$ of wall at $N=50$
-  & Dual-Newton closed-form simplex projection (audit \#3); parallelise
-    regions ($P\times$) \\
+  & $\mathcal{O}(\mathrm{mPII}\cdot VN)$; $\mathrm{mPII}$ grows
+    $13.8\to21\to33$ across the measured runs; projection $80$--$87\%$ of wall
+  & Dual-Newton closed-form simplex projection (audit \#3) --- the lever;
+    parallelise regions ($P\times$) \\
 \# projection calls
-  & $K \cdot (\mathrm{mBT}+1)$; $\mathrm{mBT}=1.93$ after Change~A (was 4--12)
-  & BB/spectral step or lazy projection: remove residual mBT$+1$ multiplier \\
+  & $K\cdot(\mathrm{mBT}+1)$; $\mathrm{mBT}=1.93$ after Change~A (was $4$--$12$)
+  & BB/spectral step or lazy projection: remove residual $\mathrm{mBT}+1$
+    multiplier \\
 Iteration count $K$
-  & $\sim\!N^2$ empirically; $K=54$k at $N=50$
-  & Better init, adaptive $\varepsilon$; needs data at $N \in \{20,75\}$ \\
+  & \textbf{Flat}, not $\sim\!N^2$: $54{,}154\to54{,}536$ ($N{=}50\to100$,
+    equal mesh)
+  & Not a scaling bottleneck; better init aids robustness only \\
 Overall exponent $\alpha$
-  & $\approx 3.1$; unchanged by Changes~A/B/C (constant-factor)
-  & Target $\alpha \lesssim 2$ via the dual-Newton projection \\
+  & Measured $\approx1.3$--$1.8$ ($N{=}50\to100$); intrinsic (fixed-$K$)
+    $\approx1.8$--$2.2$ --- the $1.3$ end is inflated by a one-off $4\times$
+    iteration-count drop.  Either way \emph{not} $3.1$
+  & Cap $\mathrm{mPII}$ via the dual-Newton projection to flatten it \\
 Serial opts (A/B/C)
   & Landed (\texttt{bae8cd2}); $\approx\!3.8\times$, output-identical
   & Done --- constant-factor only \\
 $N=50$ (measured)
-  & 11.6\,h clean host (was projected 100--190\,h pre-opt)
+  & $11.6$\,h clean host, valid partition
   & Routinely feasible on one machine \\
-$N=100$ estimate
-  & $\sim\!99$\,h ($\sim\!4$ days) on one clean machine
+$N=100$ (measured, both valid)
+  & $29.3$\,h (matched mesh) / $40.6$\,h (coarser mesh)
   & Feasible now; cluster for multi-seed \\
-$N=1000$ estimate
-  & $\sim\!1.25\times10^5$\,h ($\sim\!14$\,yr) on one machine
-  & Requires the algorithmic fix + massive parallelism \\
+$N=1000$ (extrapolated)
+  & $\sim\!43$\,d ($\alpha{=}1.5$) to $\sim\!190$\,d ($\alpha{=}2$);
+    \emph{weeks-to-months}, uncertain to $>\!1$ order of magnitude
+  & Dual-Newton projection $+$ parallelism; ``14\,yr / not achievable''
+    retracted \\
 \bottomrule
 \end{tabular}
 \end{center}
