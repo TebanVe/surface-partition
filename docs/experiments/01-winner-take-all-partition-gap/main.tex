@@ -253,6 +253,16 @@ mesh --- with a \emph{sharper} \(\varepsilon\) --- produces a \emph{deeper} runt
 (\(67\%\) vs.\ \(22\%\)), the loser of a more decisive condensation. A finer mesh
 is thus the wrong lever.
 
+\paragraph{Operating range.} The method is proven at \(N\le 50\): the \(N=50\)
+control here yields a clean equal-area partition, and \(N=30\) --- stable across
+seeds once seeded initialisation removed the low-\(N\) \emph{dormant} manifestation
+of the same continuous-vs-discrete gap --- is the partition currently consumed by
+the downstream \code{link-list-torus} project. This high-\(N\) failure is therefore
+not a cosmetic edge case: it is the wall that gates scaling the pipeline past its
+proven range to the region counts the downstream comparison targets. The two
+manifestations are the same disease across \(N\): controlled at low \(N\) (dormant,
+fixed by seeded init), it re-emerges as the runt at \(N=100\).
+
 % =====================================================================
 \section{Implications for a fix}
 \label{sec:implications}
