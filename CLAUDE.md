@@ -390,7 +390,7 @@ the Phase 1 breakdown).
 | `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
 | `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
 | `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
-| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·(u²(1-u)²)^T·M·(u²(1-u)²) + penalty. Constraints: partition sum-to-one, equal areas. |
+| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·(u²(1-u)²)^T·M·(u²(1-u)²) + penalty. Constraints: partition sum-to-one, equal areas. **KNOWN BUG:** the interface term is mis-discretized — it should use `u(1-u)`, not `u²(1-u)²` (a typo copied from the paper), so the coded energy is `∫u⁴(1-u)⁴` and its gradient is inconsistent. Not yet fixed; see `docs/reference/phase1_energy_discretization_bug.md`. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |

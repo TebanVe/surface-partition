@@ -31,6 +31,17 @@ field `u ∈ ℝ^(V×N)`, `u_k(x) ∈ [0,1]` = "how strongly cell k claims verte
 E(u) = ε · Σ_k u_kᵀ K u_k  +  (1/ε) · Σ_k (u_k²(1−u_k)²)ᵀ M (u_k²(1−u_k)²)  +  λ · P(u)
 ```
 
+> **Caveat (found after this study).** The interface term above is the form the
+> code *currently* computes, but it is **mis-discretized** — it should use `u(1−u)`,
+> not `u²(1−u)²` (a typo copied from the paper), making the coded well `∫u⁴(1−u)⁴`
+> and its gradient inconsistent. See
+> `docs/reference/phase1_energy_discretization_bug.md`. Every measurement in this
+> document was taken under these (buggy) dynamics; the runt is priced ~25× too
+> cheaply and its restoring force is attenuated, so the runt may soften once the
+> energy is corrected. The mass-vs-territory *mechanism* is unaffected (it is a
+> property of winner-take-all, not of the well), but the runt's *severity* must be
+> re-measured after the fix.
+
 subject to two constraints, both enforced exactly at every step by
 `src/optimization/projection.py`:
 
