@@ -1,0 +1,75 @@
+# N=30 dormancy test for the Phase 1 energy-discretization fix.
+# Branch: fix/phase1-energy-discretization  (interface_vec = u*(1-u), the corrected
+# double-well; see docs/reference/phase1_energy_discretization_bug.md).
+#
+# QUESTION: with the corrected (~25x stronger) well, does RANDOM init still produce
+# dormant cells at N=30 — i.e. was the buggy well behind the dormancy that forced
+# seeded init, and can we drop seeding?
+#
+# THIS FILE:  init=random, seed=84172851, lambda_penalty=2.1  (PRIMARY test)
+#   Reproduces the documented dormant setup (torus, base 60x46, 3 levels, lam 2.1,
+#   seed 84172851) which historically gave RANDOM -> dead cells [15, 19].
+#   Watch the "DORMANT CELLS" dead/weak warning at the end of Phase 1 (and the
+#   discrete-area-imbalance gate). Compare against the seeded control.
+
+experiment:
+  name: torus-30-random-s84172851
+  surface: torus
+
+relaxation:
+  n_partitions: 30
+  lambda_penalty: 2.1
+  seed: 84172851
+  init_method: random                 # <-- explicit: uniform-random densities then projected
+  max_iter: 30000
+  refinement_levels: 3
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 200
+  h5_save_stride: 200
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 60                        # base level; levels: 60x46, 122x104, 184x162
+    n_phi: 46
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 16
+  max_opt_iter: 300
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
