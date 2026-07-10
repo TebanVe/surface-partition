@@ -1,0 +1,85 @@
+# N=100 runt test on the CORRECTED energy (seeded, coarse mesh).
+# Branch: fix/phase1-energy-discretization (interface_vec = u*(1-u); see
+# docs/reference/phase1_energy_discretization_bug.md).
+#
+# QUESTION: does the corrected double-well SOFTEN the runt at N=100? Under the
+# buggy (25x-too-weak) well, the diffuse "runt" halo was priced ~25x too cheaply;
+# the corrected well penalises it properly, so the runt may shrink.
+#
+# MESH CHOICE: COARSE (100x96, the proven N=50-per-cell resolution), NOT the finer
+# 142x136 mesh in torus_100part.yaml. Our own analysis showed the finer mesh made
+# the runt WORSE (67% vs 22%) and costs ~2x more -- see the CORRECTION note in
+# torus_100part.yaml and docs/reference/winner_take_all_partition_gap.md.
+#
+# BASELINE TO BEAT (buggy energy, this exact config = run_20260629_141012):
+#   worst-cell winner-take-all area deviation = 22.5% (the runt; cell 28).
+# READOUT: the end-of-Phase-1 DISCRETE AREA IMBALANCE banner / the area_imbalance
+#   block in metadata.yaml. Lower worst-cell % = the fix softened the runt.
+#
+# COST WARNING: the corrected energy is stiffer (~more iterations/level than the
+# buggy one), and the buggy coarse N=100 already took ~40 h. Expect this to be
+# SLOWER -- plausibly multi-day locally. For a cheaper first look, drop
+# refinement_levels to 3 (the runt is manufactured at level 2, so 3 levels still
+# shows the direction) before committing to the full 5-level run.
+
+experiment:
+  name: torus-100-coarse-seeded-fixedenergy-3lvl
+  surface: torus
+
+relaxation:
+  n_partitions: 100
+  lambda_penalty: 5.1
+  seed: 84172851
+  init_method: seeded                 # required at high N (random init traps on the corrected energy)
+  max_iter: 30000
+  refinement_levels: 3
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # base; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
