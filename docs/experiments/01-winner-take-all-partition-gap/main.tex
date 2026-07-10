@@ -37,7 +37,14 @@ The numbers come from re-reading three completed Phase~1 runs (\emph{no new
 optimisation}); the reconstruction is anchored on a value it must reproduce (the
 Phase~2 iteration-0 constraint violation). It measures \emph{where} the runt is
 born; it does not implement or evaluate a fix (candidates are listed in
-\S\ref{sec:implications} and ranked in the reference doc).
+\S\ref{sec:implications} and ranked in the reference doc).\\[3pt]
+\textbf{Update (2026-07-09):} these measurements were taken under a Phase~1 energy
+whose double well was later found \emph{mis-discretized} ($\sim\!25\times$ too weak; a
+paper typo). On the \emph{corrected} energy with a moderate $\lambda$, the runt
+\textbf{resolves} and Phase~2 converges --- see the follow-up report
+\codefile{02-corrected-energy-highn-validation/} and
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md}. The \emph{mechanism}
+below (continuous mass vs discrete territory) is unchanged; only the runt's severity is.
 \end{tcolorbox}
 
 % ---------------------------------------------------------------------

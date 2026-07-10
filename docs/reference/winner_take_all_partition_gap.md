@@ -11,13 +11,20 @@ we have hit as the number of regions **N** grows:
   regions and got N−k. **Status: resolved** for the regimes tested, via seeded
   initialization.
 - **Runt cells** — a cell wins *some* territory but far too little (⅓ of target);
-  the partition has N regions but grossly unequal areas, which makes Phase 2
+  the partition has N regions but grossly unequal areas, which *made* Phase 2
   perimeter refinement infeasible (perimeter rises, then "local infeasibility").
-  **Status: open.**
+  **Status: resolved.** The runt turned out to be largely an artifact of a
+  **mis-discretized energy** — the double well was coded ~25× too weak, so the
+  diffuse "halo" that becomes a runt was priced far too cheaply and the crispness
+  weight λ was an inert lever (see
+  `docs/reference/phase1_energy_discretization_bug.md`). On the **corrected** energy
+  with a moderate `lambda_penalty=5.1`, the N=100 worst-cell area error drops from
+  **22.5% → 0.8%** and Phase 2 refinement *decreases* perimeter (**−13.6%**) instead
+  of crashing. See §4 and §8.
 
 They are two severities of the same disease. This document unifies both: the
 shared mechanism, what was tried, what worked, what did not, the results analysis
-that located the runt's origin, and the open problem. It supersedes the earlier
+that located the runt's origin, and how it was resolved. It supersedes the earlier
 `phase1_dormant_cell_argmax_issue.md` and `phase2_high_n_equal_area_infeasibility.md`.
 
 ---
@@ -31,16 +38,19 @@ field `u ∈ ℝ^(V×N)`, `u_k(x) ∈ [0,1]` = "how strongly cell k claims verte
 E(u) = ε · Σ_k u_kᵀ K u_k  +  (1/ε) · Σ_k (u_k²(1−u_k)²)ᵀ M (u_k²(1−u_k)²)  +  λ · P(u)
 ```
 
-> **Caveat (found after this study).** The interface term above is the form the
-> code *currently* computes, but it is **mis-discretized** — it should use `u(1−u)`,
-> not `u²(1−u)²` (a typo copied from the paper), making the coded well `∫u⁴(1−u)⁴`
-> and its gradient inconsistent. See
-> `docs/reference/phase1_energy_discretization_bug.md`. Every measurement in this
-> document was taken under these (buggy) dynamics; the runt is priced ~25× too
-> cheaply and its restoring force is attenuated, so the runt may soften once the
-> energy is corrected. The mass-vs-territory *mechanism* is unaffected (it is a
-> property of winner-take-all, not of the well), but the runt's *severity* must be
-> re-measured after the fix.
+> **Caveat / update (this is the pre-fix energy).** The interface term written above
+> is the **buggy** form the code used when the §4–§5 measurements were taken: it used
+> `u²(1−u)²` where the correct quantity is `q = u(1−u)` (a typo copied from the paper),
+> making the coded well `∫u⁴(1−u)⁴` — ~25× too weak — with an inconsistent gradient.
+> This has since been **fixed** (`interface_vec = u(1−u)`; see
+> `docs/reference/phase1_energy_discretization_bug.md`). Every measurement in §4–§5
+> below was taken under the *buggy* dynamics, where the runt's diffuse halo was priced
+> ~25× too cheaply and its restoring force was attenuated. **Re-measured on the
+> corrected energy the runt resolves** (see §8): the mass-vs-territory *mechanism* is
+> unchanged (it is a property of winner-take-all, not of the well), but its *severity*
+> collapses once the well is priced correctly and λ — now an effective lever — is set
+> to a moderate 5.1. The correct discretized energy is
+> `E(u) = ε·Σ_k u_kᵀ K u_k + (1/ε)·Σ_k q_kᵀ M q_k + λ·P(u)` with `q_k = u_k(1−u_k)`.
 
 subject to two constraints, both enforced exactly at every step by
 `src/optimization/projection.py`:
@@ -81,7 +91,7 @@ failure.
 | What breaks | wrong cell **count** | unequal **areas** → Phase 2 infeasible |
 | Caught by `detect_dormant_cells()` | **yes** (0 wins / peak < 0.5) | **no** (peak = 1.0, wins > 0) |
 | Caught by `detect_area_imbalance()` | yes (territory 0) | **yes** (territory ≪ target) |
-| Status | **resolved** (seeded init) | **open** |
+| Status | **resolved** (seeded init) | **resolved** (corrected energy + moderate λ) |
 
 Dormant = the extreme where territory collapses to zero. Runt = territory nonzero
 but nowhere near fair. Same root cause; different severity and different symptom.
@@ -114,14 +124,33 @@ a run requesting 30 regions produced 28.
 *dead* (0 argmax wins) and *weak* (peak density < 0.5) cells; `run_relaxation`
 warns and writes the `dormant_cells` block to `metadata.yaml`.
 
-**Status: resolved for the regimes tested (N ≤ 50).** But seeded init does *not*
-prevent the runt at N=100 (see §5) — it fixes the *count*, not the *area balance*.
+> **Seeded init is now mandatory for a *second*, stronger reason (energy fix).** The
+> double-well correction (`docs/reference/phase1_energy_discretization_bug.md`) made
+> the well ~25× steeper, which turned the *symmetric diffuse state* (every cell at
+> `1/N` everywhere) into a genuine local minimum: there the projected gradient damps
+> perturbations rather than amplifying them, so **random** init freezes without ever
+> breaking symmetry. Head-to-head at N=30, `lambda_penalty=2.1`, corrected energy:
+> random init ends with **23 imbalanced cells / 43% worst-cell** area error, seeded
+> init ends **clean (0.7%)**. Under the old (flatter, buggy) well this trap was weak,
+> so random "worked" at low N. On the corrected energy, seeded is not optional.
 
-## 4. Manifestation B — Runt cells (OPEN)
+**Status: resolved for the regimes tested (N ≤ 100).** Seeded init fixes the *count*;
+on the *buggy* energy it did **not** by itself fix the *area balance* (the runt at
+N=100 — see §5). What fixed the runt was the **energy correction plus a moderate λ**
+(§8), which seeded init then complements: seeded gives every cell a start, the
+corrected well + λ keeps every cell crisp and equal-territory through relaxation.
 
-**The failure.** Two N=100 torus runs (λ=2.1, seed 84172851) both failed Phase 2:
-instead of decreasing, the total perimeter *rose* every iteration and IPOPT stopped
-with "Algorithm converged to a point of local infeasibility." Root cause: the
+## 4. Manifestation B — Runt cells (RESOLVED)
+
+> **This section documents the pre-fix failure; the resolution is in §8.** The runs
+> below used the buggy (~25×-too-weak) double well. On the corrected energy with
+> `lambda_penalty=5.1` the same N=100 case has worst-cell 0.8% and Phase 2 *decreases*
+> perimeter (−13.6%). The forensic record is kept because it locates *where* and *why*
+> the runt formed, which is what made the fix (§8) targeted rather than a guess.
+
+**The failure (pre-fix).** Two N=100 torus runs (λ=2.1, seed 84172851) both failed
+Phase 2: instead of decreasing, the total perimeter *rose* every iteration and IPOPT
+stopped with "Algorithm converged to a point of local infeasibility." Root cause: the
 Phase 1 solution has one grossly undersized cell, so Phase 2's equal-area
 constraint is violated by a huge margin from iteration 0. IPOPT (feasibility-first)
 fights the imbalance by pushing the runt's boundaries outward — which lengthens
@@ -186,6 +215,14 @@ Three findings, each consequential:
    equal-*continuous-mass* constraint permits this because the lost territory just
    becomes diffuse halo.
 
+   > **Corrected-energy update.** This "cannot fit 100 equal blobs at N=100" was an
+   > artifact of the ~25×-too-weak well, **not** a geometric barrier. The under-priced
+   > halo made sacrificing a cell nearly free, and the mis-scaled interface term left
+   > λ unable to force crispness. On the corrected well with `lambda_penalty=5.1` the
+   > relaxation *does* equalize all 100 cells (worst-cell **0.8%**, `n_imbalanced=0`).
+   > So the "one sacrifice at high N" is a property of the *buggy* energy, not of N.
+   > See §8.
+
 The final distribution makes the "one sacrifice" explicit: at N=100 a single cell
 sits at −22%/−67% while the other 99 are within a few percent of target.
 
@@ -208,11 +245,12 @@ finer mesh did not help.
 
 | Lever | Effect on **dormant** | Effect on **runt** | Verdict |
 |---|---|---|---|
-| Seeded init (equal-mass Voronoi) | **fixes it** ✅ | does **not** fix it (all inits equally unequal; runt made *during* relaxation) | resolves count, not area balance |
-| More / finer mesh | weak, non-monotonic | **counterproductive** (finer = deeper runt) | wrong lever |
-| λ tuning (soft crispness penalty) | no fix (swept 1–10) | soft λ=2.1 insufficient; a *hard* crispness floor is the plausible form | not sufficient as a soft penalty |
-| Detection gate | `detect_dormant_cells()` ✅ | `detect_area_imbalance()` ✅ | both catch, neither fixes |
-| Discrete-territory / crispness **constraint** | n/a | **untested — the front-runner** (see §8) | open |
+| **Energy discretization fix** (`u²(1−u)²`→`u(1−u)`) | n/a | **root cause** — the coded well was ~25× too weak, under-pricing the halo *and* leaving λ inert; correcting it is what makes the runt fixable | **the fix** ✅ |
+| λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
+| Seeded init (equal-mass Voronoi) | **fixes it** ✅ | necessary complement — avoids the corrected-energy symmetric trap (§3) and gives every cell a start, but not sufficient *alone* (seeded-λ2.1 still runts) | required, not sufficient |
+| More / finer mesh | weak, non-monotonic | **counterproductive** (finer = deeper runt, under the buggy well) | wrong lever |
+| Detection gate | `detect_dormant_cells()` ✅ | `detect_area_imbalance()` ✅ | both catch |
+| Hard discrete-territory / crispness **constraint** | n/a | **not needed** — once the well is correct, the *soft* λ penalty suffices; the hard-floor idea is superseded | superseded |
 
 ## 7. Detection (both gates implemented)
 
@@ -236,44 +274,65 @@ worst_rel = np.abs(areas-target).max()/target     # == Phase 2 iter-0 constraint
   from target. Catches both dormant (territory 0) and runts. Verified: fires on both
   N=100 solutions (0.160 / 0.053), silent on N=50 (0.0036).
 
-## 8. Open problem: fixing the runt
+## 8. Resolution — the corrected energy plus a moderate λ
 
-Step 0 (§5) reorders the candidate fixes — the relaxation *actively manufactures*
-the runt because nothing forbids a cell from parking its mass as halo, so the fix
-must change what the optimizer is *required* to achieve, not just its starting
-point.
+The candidate fixes in §5–§6 were framed as "the equal-continuous-mass constraint is
+too weak, so we must *add a hard crispness/territory constraint*." That framing had the
+symptom right but the cause wrong. The reason the relaxation could park a cell's mass
+as diffuse halo essentially for free is that the **double-well energy was mis-discretized
+~25× too weak** — a typo copied from the paper (`docs/reference/phase1_energy_discretization_bug.md`).
+Two consequences of that bug manufactured the runt:
 
-1. **Additional constraint on discrete territory / crispness — the front-runner.**
-   The equal-continuous-mass constraint is too weak: it is satisfied by the halo.
-   Either (a) a **hard crispness floor** (require every cell's density variance ≥
-   ~90% of a sharp indicator's; then "crisp + equal mass ⟹ equal territory",
-   enforced), or (b) **annealed soft-territory equality** (constrain a
-   temperature-softened territory to be equal and anneal temperature → 0, driving
-   the *actual* winner-take-all territory toward equal). Both make the projection a
-   harder nonlinear solve and are best folded into the projection redesign the
-   N=1000 scaling plan already calls for.
-2. **Improve the initial condition (equal-area / Lloyd seeding) — downgraded.** N=50
-   succeeds from an equally-bad init and the runt is created during relaxation, so a
-   cleaner init is neither necessary nor clearly sufficient. May reduce the residual
-   the relaxation concentrates, but not the mechanism.
-3. **λ as a hard constraint, not a bigger soft penalty.** Same idea as 1(a);
-   soft λ=2.1 already failed.
-4. **Re-roll the seed — cheapest empirical shot at N=100 specifically**, but a
-   lottery that does not scale (more cells → higher odds one loses the squeeze).
-5. **Downstream band-aids (no Phase-1 rerun):** an area-restoration relabel that
-   grows the runt's territory before Phase 2, or a Phase-2 area-homotopy. Cheapest
-   to try; could salvage the existing N=100 solutions without new compute.
+1. The halo was **under-priced ~25×**, so leaving a cell diffuse cost almost nothing.
+2. The mis-scaled interface term **dominated the crispness reward**, so **λ was an inert
+   lever** — which is exactly why the earlier λ∈{1…10} sweep (§6) found nothing.
 
-**Next experiment (compute-aware):** prototype the hard crispness floor and check
-whether the level-2 sacrifice disappears — testable first on a *fast proxy* (small
-surface or truncated levels), before any full ~40 h N=100 run.
+Correcting the discretization (`interface_vec = u(1−u)`) removes both: the halo is now
+priced correctly, and λ is restored as an effective knob. With a **moderate
+`lambda_penalty=5.1`** (up from 2.1) and seeded init, the N=100 relaxation equalizes
+*all* 100 cells:
+
+| | N=100 buggy, λ=2.1 (pre-fix) | N=100 corrected, λ=2.1 | N=100 corrected, λ=5.1 |
+|---|---|---|---|
+| worst-cell area error | 22.5% | 21.8% (barely moved) | **0.8%** |
+| `n_imbalanced` (> 5%) | ≥ 1 | 1 | **0** |
+| Phase 2 outcome | perimeter *rises*, infeasibility | (not run to completion) | **perimeter −13.6%, converges** |
+
+The middle column is the key control: **correcting the energy alone was not enough** —
+at the old λ=2.1 the runt barely moved (21.8%). The cure is the energy fix *and* raising
+λ into its now-effective range. Extreme λ over-crisps (N=30, λ=50: perimeter +48% vs
+moderate λ), so the operating point is **seeded init + corrected energy + moderate λ
+(≈5)**. No hard crispness/territory constraint was needed; the soft λ penalty suffices
+once the well is priced correctly.
+
+This is measured end-to-end in
+`docs/experiments/02-corrected-energy-highn-validation/` (the λ sweep, the runt
+collapse, the Phase-2 convergence, and the random-init trap). The forensic §5 analysis
+remains valid as a description of *how* the buggy runs failed — it is what made the fix
+targeted rather than a guess.
+
+**Residual / minor open items.** Near Phase-2 convergence the migration subsystem still
+churns (the campaign does not reach `pending_migration=False`; the best iterate is
+optimal and is the one exported), and at large λ the finer levels can hit the iteration
+cap. Neither blocks a valid N=100 partition. The discrete-territory *constraint* ideas
+(hard crispness floor, annealed soft-territory equality) are no longer needed for the
+torus at these N, but remain on the table should a surface/N be found where a moderate
+λ on the corrected energy is insufficient.
 
 ## 9. Related documents, code, and data
 
+- Reference: `docs/reference/phase1_energy_discretization_bug.md` — the
+  mis-discretized double well that was the runt's root cause; its fix (with a moderate
+  λ) is what resolved the runt (§8).
 - Experiment: `docs/experiments/01-winner-take-all-partition-gap/` — the measured
   study behind §4–5 (the level-by-level trajectory reconstruction and the three
-  figures, as a reproducible LaTeX report with provenance). This reference doc is
-  the standing explanation; that report is the measurement.
+  figures, as a reproducible LaTeX report with provenance), taken under the *buggy*
+  energy; and `docs/experiments/02-corrected-energy-highn-validation/` — the
+  post-fix validation behind §8 (λ sweep, runt 22.5%→0.8%, Phase-2 −13.6%,
+  random-init trap). This reference doc is the standing explanation; those reports
+  are the measurements.
+- Math: `docs/math/06-phase1-energy-discretization/` — the corrected Γ-convergence
+  energy discretization derived from the implemented code.
 - Plan: `docs/plans/PHASE1_N1000_SCALING_PLAN.md` (the §6 validation gates now
   require `detect_area_imbalance`; the runt is the "partition validity" wall that
   plan flags as orthogonal to its performance walls),
@@ -286,8 +345,11 @@ surface or truncated levels), before any full ~40 h N=100 run.
   `src/partition/find_contours.py` (`detect_dormant_cells`, `detect_area_imbalance`,
   winner-take-all classification),
   `src/optimization/perimeter_optimizer.py` (Phase 2 equal-area constraint).
-- Data: the three anchor runs under `results/` (N=50 `run_20260625_113015`,
-  N=100 coarse `run_20260629_141012`, N=100 finer `run_20260701_143238`); figures
+- Data: the pre-fix anchor runs under `results/` (N=50 `run_20260625_113015`,
+  N=100 coarse `run_20260629_141012`, N=100 finer `run_20260701_143238`); and the
+  post-fix corrected-energy runs (N=30 seeded/random head-to-head
+  `run_20260707_080824` / `run_20260707_002828`; N=100 λ=5.1 production
+  `run_20260709_081548`, worst-cell 0.8%, Phase-2 perimeter 185.25). Figures
   regenerated from their `traces/` and `solution/` HDF5.
 - Method: Bogosel & Oudet, *Partitions of Minimal Length on Manifolds*,
   Experimental Mathematics (2023); arXiv:1606.02873 — ε ∝ h, winner-take-all

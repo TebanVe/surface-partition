@@ -212,7 +212,9 @@ docs/math/
 ├── 01-phase2-derivatives/      ← Phase 2 regular perimeter/area derivatives; Steiner forward values
 ├── 02-phase2-timing-profile/   ← empirical IPOPT callback timing profile
 ├── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
-└── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
+├── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
+├── 05-phase1-nregion-scaling/  ← empirical wall-time scaling with number of regions
+└── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
@@ -249,9 +251,11 @@ producing script, library versions, a numerical anchor) and carry a status label
 by a committed `make_figures.py` beside the report; `docs/experiments/.gitignore`
 suppresses build artifacts but tracks `main.pdf` + `fig_*.pdf`. Build with
 `make -C docs/experiments/NN-slug` or `make -C docs/experiments all` (needs
-`latexmk`; LaTeX at `/Library/TeX/texbin`). First report:
-`01-winner-take-all-partition-gap/` (pairs with
-`docs/reference/winner_take_all_partition_gap.md`). See `docs/experiments/README.md`.
+`latexmk`; LaTeX at `/Library/TeX/texbin`). Reports:
+`01-winner-take-all-partition-gap/` (the high-N runt failure, measured under the
+buggy energy) and `02-corrected-energy-highn-validation/` (its post-fix resolution:
+runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap) — both pair with
+`docs/reference/winner_take_all_partition_gap.md`. See `docs/experiments/README.md`.
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
 mesh-cleanup tool).
@@ -390,7 +394,7 @@ the Phase 1 breakdown).
 | `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
 | `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
 | `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
-| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·(u²(1-u)²)^T·M·(u²(1-u)²) + penalty. Constraints: partition sum-to-one, equal areas. **KNOWN BUG:** the interface term is mis-discretized — it should use `u(1-u)`, not `u²(1-u)²` (a typo copied from the paper), so the coded energy is `∫u⁴(1-u)⁴` and its gradient is inconsistent. Not yet fixed; see `docs/reference/phase1_energy_discretization_bug.md`. |
+| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |
@@ -493,7 +497,7 @@ Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.c
 
 ### Phase 1 Initial Condition (`init_method`)
 
-`relaxation.init_method` selects the level-0 initial condition: `random` (default; legacy uniform-random densities then projected, via `create_initial_condition_with_projection` in `src/optimization/projection.py`) or `seeded` (Voronoi seed regions via `create_seeded_initial_condition` in `src/optimization/initialization.py`). The seeded path picks `N` well-spread seed vertices by farthest-point sampling (deterministic given `seed`), labels every vertex by nearest seed (`scipy.spatial.cKDTree`), and projects the one-hot density with `orthogonal_projection_iterative`. It hands every cell a contiguous winning region from iteration 0, eliminating the dormant-cell symmetry-break failure at higher `N` (see `docs/reference/winner_take_all_partition_gap.md`). Dispatch is in `_create_initial_condition` (`src/pipeline/relaxation.py`), level-0 branch only; finer levels still warm-start by interpolation. The dataclass default stays `random` for backward compatibility.
+`relaxation.init_method` selects the level-0 initial condition: `random` (default; legacy uniform-random densities then projected, via `create_initial_condition_with_projection` in `src/optimization/projection.py`) or `seeded` (Voronoi seed regions via `create_seeded_initial_condition` in `src/optimization/initialization.py`). The seeded path picks `N` well-spread seed vertices by farthest-point sampling (deterministic given `seed`), labels every vertex by nearest seed (`scipy.spatial.cKDTree`), and projects the one-hot density with `orthogonal_projection_iterative`. It hands every cell a contiguous winning region from iteration 0, eliminating the dormant-cell symmetry-break failure at higher `N` (see `docs/reference/winner_take_all_partition_gap.md`). Dispatch is in `_create_initial_condition` (`src/pipeline/relaxation.py`), level-0 branch only; finer levels still warm-start by interpolation. The dataclass default stays `random` for backward compatibility, but **`seeded` is effectively mandatory on the corrected double-well energy** (see the `ProjectedGradientOptimizer` row above): the steeper corrected well makes the symmetric diffuse state a local minimum, so random init now *traps* (N=30: 43% worst-cell area error / 23 imbalanced cells vs 0.7% seeded). Every `parameters/*.yaml` config we run at N ≥ 30 sets `init_method: seeded`.
 
 ### Modifying Perimeter Optimization
 
