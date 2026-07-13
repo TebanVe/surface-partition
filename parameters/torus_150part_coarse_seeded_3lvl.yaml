@@ -1,0 +1,104 @@
+# N=150 dormant-cell / area-imbalance VALIDITY TEST on the corrected energy.
+# Branch: fix/phase1-energy-discretization (interface_vec = u*(1-u); see
+# docs/reference/phase1_energy_discretization_bug.md).
+#
+# QUESTION: at N=150, does the corrected double-well + a moderate crispness
+# penalty still yield a valid partition (no dormant cells, worst-cell discrete
+# area deviation under the 5% gate)?
+#
+# THE LEVER IS lambda, NOT THE MESH. Our own analysis
+# (docs/reference/winner_take_all_partition_gap.md, sec. 7-8) found:
+#   - lambda (crispness penalty): the fix. On the corrected well, moderate
+#     lambda ~5 took the N=100 worst-cell area error 22.5% -> 0.8%.
+#   - mesh resolution: "wrong lever", even "counterproductive (finer = deeper
+#     runt)"; "the driver is N, not the mesh".
+# So we change ONLY lambda and N, and leave the mesh EXACTLY as the proven N=100
+# coarse recipe (base 100x96). We do NOT touch it at all -- not finer per cell,
+# and not scaled with N either. Isolating lambda is the whole point of the test.
+#
+# lambda_penalty = 6.0: a modest bump above the N=100 sweet spot (5.1), since
+# N=150 is strictly harder (more, smaller cells). PRIMARY KNOB TO TUNE: if the
+# area_imbalance gate still trips, RAISE lambda (6 -> 7 -> 8), do NOT refine the
+# mesh. If it's clean at 6.0, 5.1 may well suffice too.
+#
+# MESH: unchanged from the N=100 coarse config -- base 100x96, levels (3):
+# 100x96, 162x154, 224x212. At N=150 that is ~64 verts/cell at L0 and ~316
+# verts/cell at L2. Deliberately fine on both counts we care about:
+#   - dormancy is a BINARY L0 check ("does each cell win >=1 vertex?"); 64
+#     verts/cell hosts 150 seeds with room to spare.
+#   - area-imbalance precision comes from the FINEST level (L2, ~316 verts/cell),
+#     not the base -- so the readout stays trustworthy.
+#
+# LEVELS = 3 (test tier): L0 decides dormancy (it cannot be created or cured by
+# refinement above it -- warm-start interpolation preserves the winner-take-all
+# structure); L1/L2 let the discrete-area number settle out of coarse-mesh
+# quantization noise so the area_imbalance gate is trustworthy.
+#   - Cheapest dormancy-only probe: set refinement_levels: 1 (L0 alone).
+#   - Production run once validity is confirmed: set refinement_levels: 5.
+#
+# READOUT (solution/metadata.yaml + console banners):
+#   - dormant_cells block: dead/weak must be empty (all 150 cells alive).
+#   - area_imbalance block: n_imbalanced == 0, worst_rel_dev well under 0.05.
+#     This is the high-N failure to watch -- more than dormancy.
+
+experiment:
+  name: torus-150-coarse-seeded-3lvl
+  surface: torus
+
+relaxation:
+  n_partitions: 150
+  lambda_penalty: 6.0                  # PRIMARY anti-dormancy lever; raise (7,8) if area gate trips
+  seed: 84172851
+  init_method: seeded                 # mandatory at high N (random init traps on the corrected energy)
+  max_iter: 30000
+  refinement_levels: 5                # resuming L3 completed run to 5 levels via --resume-from
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED from N=100 coarse; levels (3): 100x96, 162x154, 224x212
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

@@ -1,0 +1,102 @@
+# N=200 relaxation on the CORRECTED energy (seeded, proven coarse mesh).
+# Branch: fix/phase1-energy-discretization (interface_vec = u*(1-u); see
+# docs/reference/phase1_energy_discretization_bug.md).
+#
+# Built on what the N=100 and N=150 runs taught us:
+#
+# 1. lambda IS THE LEVER, NOT THE MESH (docs/reference/winner_take_all_partition_gap.md).
+#    Anti-dormancy penalty by N:  N=100 -> 5.1,  N=150 -> 6.0 (kept all 150 alive),
+#    so N=200 -> 7.0 (same ~+0.9 per +50 cells). If any cell comes back dead/weak,
+#    RAISE lambda (7 -> 8), do NOT touch the mesh.
+#
+# 2. MESH UNCHANGED from the proven N=100/N=150 coarse recipe: base 100x96,
+#    increments +62/+58. We do NOT scale it with N -- finer-per-cell is
+#    "counterproductive (deeper runt)" and "the driver is N, not the mesh".
+#    Levels: 100x96, 162x154, 224x212, 286x270, 348x328.
+#    Verts/cell at N=200:  L0 48,  L1 125,  L2 237,  L3 386,  L4 571.
+#    CAVEAT: L0 is only ~48 verts/cell (vs 64 at N=150). That is fine for the
+#    BINARY dormancy check, but it is the lowest we have run -- watch the dormant
+#    banner. The remedy if it trips is lambda, per (1), not resolution.
+#
+# 3. AREA IMBALANCE IS A RESOLUTION-LIMITED ARTIFACT on the corrected energy.
+#    The worst cell's winner-take-all area deviation HALVES per refinement level
+#    (N=150: -10.6% at L1 -> -5.84% at L2, converging toward 0). At N=200 cells
+#    are smaller, so expect it worse at low resolution and to need the FULL 5
+#    levels to clear the 5% gate. This is NOT a lambda problem -- the offending
+#    cell is already crisp; only resolution moves it.
+#
+# STAGING (matches the N=150 workflow):
+#   Step 1 -- run THIS file as-is (3 levels): confirms dormancy at L0 (the real
+#     unknown: does lambda=7 hold 200 cells?) and gives an L2 area reading to
+#     extrapolate. ~cheap (N=150 3-level was ~2.5 h; triggers fire early).
+#   Step 2 -- if dormancy is clean, set refinement_levels: 5 and resume WITHOUT
+#     redoing L0-L2:
+#       python scripts/find_surface_partition.py --config parameters/torus_200part_coarse_seeded.yaml \
+#         --resume-from results/<this_run>/solution/surface_part200_*.h5 --profile
+#
+# READOUT (solution/metadata.yaml + console banners):
+#   - dormant_cells: dead/weak must be empty (all 200 alive).
+#   - area_imbalance: n_imbalanced == 0, worst_rel_dev < 0.05 (expected only
+#     after the full 5 levels).
+
+experiment:
+  name: torus-200-coarse-seeded
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 7.0                  # PRIMARY anti-dormancy lever (extrapolated 5.1->6.0->7.0); raise to 8 if dormancy trips
+  seed: 84172851
+  init_method: seeded                 # mandatory at high N (random init traps on the corrected energy)
+  max_iter: 30000
+  refinement_levels: 3                # Step 1 validity check; resume to 5 via --resume-from (see header)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED from N=100/N=150; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
