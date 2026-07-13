@@ -46,6 +46,12 @@ python scripts/export_partition.py \
  --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
  --config parameters/torus_10part.yaml \
  --output results/<run>/partition/torus_partition_<run-id>.h5
+# If Phase 2 stalled in the migration-cycling plateau (pending_migration never
+# clears), add --force-finalised to write finalised=True on the best iterate:
+python scripts/export_partition.py \
+ --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
+ --config parameters/torus_10part.yaml \
+ --output results/<run>/partition/torus_partition_<run-id>.h5 --force-finalised
 
 # Analysis (auto-includes relaxation_timing_profile.png when --profile was used)
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
@@ -583,6 +589,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 - **Cluster scripts** target UPPMAX Pelle. Edit `cluster/pelle_config.sh` to set your project ID and paths before first use. Verify the Python module version with `module spider python` on Pelle.
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
+- **Phase 2 migration-cycling plateau (high N).** At higher region counts (observed at N=100 and again at N=150), Phase 2 does not reach a clean convergence. After the large first-iteration perimeter drop, per-iteration gains decay to noise (~0.003%) and the topology *oscillates*: migrations (Type 1/2) periodically raise the perimeter by a hair and the next optimize step claws it back, so `pending_migration` never clears and `optimization_success` stays `False`. It runs to the iteration cap without converging — this is a **plateau, not a failure or a bug**. The exported geometry at the best iterate is complete and valid; it just wasn't topologically frozen. **Standard workflow:** pick the minimum-`final_perimeter` iteration across the campaign (scan `final_perimeter` on every `iteration_*.h5`) and export it. Because that iterate carries `pending_migration=True`, `scripts/export_partition.py` writes `finalised=False` by default (`finalised = not pending_migration` in `src/export/writer.py`); for the accepted final deliverable, pass **`--force-finalised`** — it writes `finalised=True` plus an explanatory `finalised_note` (best iterate at the plateau) in one reproducible step, so external repos that gate on `finalised==True` accept it. `--force-finalised` is mutually exclusive with `--strict`. The N=100 deliverables were finalised by hand-patching the attr (before the flag existed); the N=150 deliverable uses `--force-finalised`.
 
 ## Dependencies
 

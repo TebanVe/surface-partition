@@ -53,6 +53,7 @@ def export_partition(
     n_theta_final: int,
     n_phi_final: int,
     strict: bool = False,
+    force_finalised: bool = False,
 ) -> None:
     """Export a finalised torus partition to the link-list-torus HDF5 schema.
 
@@ -69,18 +70,47 @@ def export_partition(
     The ``finalised`` flag is set to ``not pending_migration``. When
     ``pending_migration`` is True, a warning is emitted (or, with
     ``strict=True``, an error is raised) but the export is not blocked unless
-    ``strict`` is set.
+    ``strict`` is set. Passing ``force_finalised=True`` overrides this and
+    writes ``finalised=True`` regardless of ``pending_migration``, together
+    with an explanatory ``finalised_note`` — the reproducible equivalent of
+    hand-patching the attr when the Phase-2 refinement is stuck in the
+    migration-cycling plateau and the best iterate is the accepted final
+    result (see CLAUDE.md 'Phase 2 migration-cycling plateau'). ``strict`` and
+    ``force_finalised`` are mutually exclusive.
     """
+    if strict and force_finalised:
+        raise ValueError("strict and force_finalised are mutually exclusive")
+
+    finalised_note = None
     if pending_migration:
-        msg = (
-            "This checkpoint has a pending topology migration; the partition "
-            "state may shift in the next iteration. Exporting with "
-            "finalised=False."
-        )
-        if strict:
-            raise RuntimeError(msg)
-        logger.warning(msg)
-        print(f"WARNING: {msg}")
+        if force_finalised:
+            finalised_note = (
+                f"Best iterate (iteration {int(source_iteration)}, perimeter "
+                f"{float(final_perimeter):.3f}) exported with finalised=True via "
+                f"force_finalised despite pending_migration=True. Typical cause: "
+                f"the Phase-2 refinement reached the migration-cycling plateau "
+                f"(perimeter oscillates on migrations with no further reduction, "
+                f"so pending_migration never clears). The minimum-perimeter iterate "
+                f"is the accepted final deliverable. See CLAUDE.md 'Phase 2 "
+                f"migration-cycling plateau'."
+            )
+            msg = (
+                "Checkpoint has a pending topology migration, but force_finalised "
+                "is set: writing finalised=True (accepted migration-cycling "
+                "plateau best iterate)."
+            )
+            logger.warning(msg)
+            print(f"NOTE: {msg}")
+        else:
+            msg = (
+                "This checkpoint has a pending topology migration; the partition "
+                "state may shift in the next iteration. Exporting with "
+                "finalised=False."
+            )
+            if strict:
+                raise RuntimeError(msg)
+            logger.warning(msg)
+            print(f"WARNING: {msg}")
 
     torus_cfg = config["surface"]["torus"]
     R = float(torus_cfg["R"])
@@ -130,7 +160,7 @@ def export_partition(
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
-    finalised = not pending_migration
+    finalised = force_finalised or (not pending_migration)
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with h5py.File(output_path, "w") as f:
@@ -140,6 +170,8 @@ def export_partition(
         f.attrs["R"] = R
         f.attrs["r"] = r
         f.attrs["finalised"] = bool(finalised)
+        if finalised_note is not None:
+            f.attrs["finalised_note"] = finalised_note
         f.attrs["source_run_id"] = source_run_id
         f.attrs["source_iteration"] = int(source_iteration)
         f.attrs["seed"] = int(seed)
