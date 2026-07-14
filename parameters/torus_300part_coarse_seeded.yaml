@@ -1,0 +1,96 @@
+# N=300 relaxation on the CORRECTED energy (seeded, proven coarse mesh).
+# Branch: fix/phase1-energy-discretization. Overnight Step-1 validity test.
+#
+# LAMBDA ESTIMATE = 14.0. Basis (valid-partition ladder):
+#   N=100 -> 5.1,  N=150 -> 6.0,  N=200 -> 11 (clean, seed 61803399).
+# The shallow N=100->150 trend (+0.9/50 cells) UNDER-predicted N=200, so the
+# required lambda grows faster than linear as cells shrink. N=200 clean at 11;
+# N=300 is 50% more cells and only 32 verts/cell at L0, so bias above 11.
+# 14.0 is a ~27% bump -- clear of the failing lambda=9 regime, not wildly high.
+# NOTE: higher lambda at a GOOD seed is FAST (N=200 lambda=11 ran in 6 h), so
+# this is not a time risk. If deep runts still appear, the fix is a DIFFERENT
+# SEED (that, not lambda, is what rescued N=200), not a bigger lambda.
+#
+# SEED = 61803399: the seed that gave a clean N=200. BUT farthest-point seeding
+# is N-specific, so a good seed at N=200 is NOT guaranteed good at N=300 -- seed
+# is a lottery at each new N. If this run shows 2+ deep (-30%) runts, re-run with
+# another seed before pushing lambda higher (that is exactly how N=200 was fixed).
+#
+# MESH UNCHANGED (proven base 100x96), per policy: mesh is not the lever, finer
+# is counterproductive for runts. Levels: 100x96, 162x154, 224x212, 286x270,
+# 348x328. Verts/cell at N=300: L0 32, L1 83, L2 158, L3 257, L4 380.
+# CAVEAT: L0 = 32 verts/cell is the LOWEST we have run (N=150 had 64, N=200 had
+# 48). Dormancy has held at those via lambda+seed, but 32 is where the coarsest
+# mesh may finally be too coarse to seed 300 clean regions. If cells come back
+# DEAD/WEAK (not just area-imbalanced), that is the L0 representability floor --
+# a genuinely different failure from the runt, and the one place a finer L0 (not
+# lambda) would be the honest fix. Watch the dormant banner first.
+#
+# STAGING: this is the 3-level Step-1 check (dormancy + area extrapolation).
+# If clean, resume the winner to 5 levels via --resume-from (see N=200 workflow).
+#
+# READOUT (solution/metadata.yaml + banners):
+#   - dormant_cells: dead/weak empty (all 300 alive)  <-- the primary N=300 risk.
+#   - area_imbalance: n_imbalanced small, worst_rel_dev extrapolating under 0.05.
+
+experiment:
+  name: torus-300-coarse-seeded
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 15.0                 # estimated for N=300 (see header); raise only after ruling out seed
+  seed: 61803399                       # track record at N=200; seed is a lottery at each new N
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000                      # if L0 caps without settling, raise
+  refinement_levels: 3                # Step-1 validity check; resume winner to 5 via --resume-from
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8       # 1e-9 sits below the iterative-projection floor at N=300 (row residual bottoms at ~1.3e-9 -> harmless 'stalled' warnings); 1e-8 converges cleanly, ~6 orders tighter than the 5% area gate
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

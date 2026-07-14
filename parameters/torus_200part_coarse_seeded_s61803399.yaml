@@ -28,7 +28,7 @@ experiment:
 
 relaxation:
   n_partitions: 200
-  lambda_penalty: 7.0                  # UNCHANGED from the baseline run -- isolate the seed
+  lambda_penalty: 11.0                  # UNCHANGED from the baseline run -- isolate the seed
   seed: 61803399                       # NEW independent draw (was 84172851)
   init_method: seeded                 # mandatory at high N
   max_iter: 30000
@@ -73,7 +73,7 @@ surface:
 
 refinement:
   method: ipopt
-  max_iterations: 19
+  max_iterations: 20
   max_opt_iter: 200
   tolerance: 1.0e-7
   boundary_tol: 0.001
