@@ -1,0 +1,257 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../../math/shared/macros}   % shared notation (reused from docs/math/)
+\usepackage{graphicx}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Validating the corrected Phase 1 energy at high N},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Validating the Corrected Phase~1 Energy at High \(N\)}\\[0.5em]
+  \large The energy-discretization fix plus a moderate \(\lambda\) resolves the
+  ``runt'' cell of report~01, so Phase~2 refinement \emph{decreases} perimeter
+  instead of crashing --- with the corrected well, seeded initialization becomes
+  mandatory}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------
+% STATUS BANNER
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=green!5!white, colframe=green!55!black,
+                  title={Status --- measured: the fix is validated end-to-end at
+                  N=30 and N=100 on the torus},
+                  fontupper=\small]
+This report \textbf{validates} the double-well discretization fix explained in
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md} and derived in
+\codefile{docs/math/06-phase1-energy-discretization/}. It is the post-fix companion
+to report~\codefile{01-winner-take-all-partition-gap/}, which characterised the
+high-\(N\) ``runt'' failure \emph{under the buggy energy}. The numbers come from five
+completed runs (three \(N{=}100\), two \(N{=}30\)); the reconstruction is anchored on
+the production run's worst-cell area deviation and final perimeter (below).
+\end{tcolorbox}
+
+% ---------------------------------------------------------------------
+% PROVENANCE --- mandatory (docs/experiments/README.md)
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
+                  title={Provenance}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.66\linewidth}@{}}
+Date            & 2026-07-09 (runs of 2026-06-29 and 2026-07-07 \(\ldots\) 07-09) \\[3pt]
+Surface         & torus \(T(R{=}1.0,\ r{=}0.6)\), seed \(84172851\) throughout \\[3pt]
+Fix commit      & \code{6ff71a0} (\code{interface\_vec = u*(1-u)}), branch
+                  \code{fix/phase1-energy-discretization} \\[3pt]
+Source runs     & \textbf{N=100:} buggy \(\lambda{=}2.1\) \code{run\_20260629\_141012}
+                  (report 01 anchor, 5 levels, \(348{\times}328\)); corrected
+                  \(\lambda{=}2.1\) \code{run\_20260707\_192154} (3 levels,
+                  \(224{\times}212\)); corrected \(\lambda{=}5.1\)
+                  \code{run\_20260709\_081548} (\emph{production}, 5 levels,
+                  \(348{\times}328\), \(V{=}114{,}144\)).
+                  \textbf{N=30 (\(\lambda{=}2.1\)):} random init
+                  \code{run\_20260707\_002828}; seeded init
+                  \code{run\_20260707\_080824}. \\[3pt]
+Producing script& \codefile{make\_figures.py} (beside this report; run from repo root) \\[3pt]
+Method inputs   & final \code{solution/} density fields (worst-cell + distributions);
+                  the production Phase~2 campaign's \code{iteration\_*.h5}
+                  (\code{final\_perimeter}, \code{constraint\_violations}) \\[3pt]
+Versions        & Python 3.12.13, numpy 2.4.4, scipy 1.17.1, matplotlib 3.10.8,
+                  h5py 3.16.0 \\[3pt]
+Anchors         & production worst-cell area deviation \(=0.0078\) (\(0.8\%\),
+                  matching \code{metadata.yaml} \code{worst\_rel\_dev}); production
+                  Phase~2 final perimeter \(=185.2546\) (matching
+                  \code{iteration\_020} \code{final\_perimeter}); extracted Phase~1
+                  perimeter \(=214.3413\) \\
+\end{tabular}
+\end{tcolorbox}
+
+\begin{abstract}
+\textbf{Status: measured.} Report~01 traced the high-\(N\) Phase~2 failure to a
+``runt'' cell manufactured during Phase~1 relaxation, but its measurements were taken
+under an energy whose double well was later found to be \emph{mis-discretized}
+(coded as \(u^2(1-u)^2\) rather than \(q=u(1-u)\), making the well \(\sim\!25\times\)
+too weak; \codefile{docs/reference/phase1\_energy\_discretization\_bug.md}). This
+report re-runs the high-\(N\) case on the \emph{corrected} energy. Three findings.
+\textbf{(1)} Correcting the well \emph{alone} does not cure the runt: at the original
+\(\lambda{=}2.1\) the \(N{=}100\) worst-cell area error is \(21.8\%\), essentially
+unchanged from the buggy \(22.5\%\) --- because the mis-scaled well had also made
+\(\lambda\) an inert lever. \textbf{(2)} The correction \emph{restores} \(\lambda\) as
+an effective knob: a moderate \(\lambda{=}5.1\) drives the worst cell to \(0.8\%\)
+(zero cells beyond the \(5\%\) gate), after which Phase~2 refinement \emph{decreases}
+perimeter (\(214.34\!\to\!185.25\), \(-13.6\%\)) and stays feasible (equal-area
+violation \(\leq 3\times10^{-6}\)) --- where the buggy energy made perimeter rise
+(\(217\!\to\!229\)) and crash on infeasibility. \textbf{(3)} The steeper corrected
+well introduces a new requirement: at \(N{=}30\), random initialization now
+\emph{traps} in the symmetric diffuse state (\(43\%\) worst cell, \(23\) imbalanced
+cells) while seeded initialization stays clean (\(0.7\%\)). The operating point is
+\emph{corrected energy \(+\) seeded init \(+\) moderate \(\lambda\)}.
+\end{abstract}
+
+% =====================================================================
+\section{Question}
+% =====================================================================
+Report~01 (\codefile{01-winner-take-all-partition-gap/}) showed that on the torus at
+\(N{=}100\), Phase~1 satisfies the \emph{continuous} equal-area constraint yet the
+\emph{discrete} winner-take-all partition contains one grossly undersized ``runt''
+cell, which makes Phase~2 perimeter refinement infeasible (perimeter rises, then
+``local infeasibility''). Every measurement there was taken with the Phase~1 energy's
+double-well term coded as \(\varepsilon^{-1}(u^2(1-u)^2)^{\top}M(u^2(1-u)^2)\). That
+term was subsequently found to be a mis-transcription of the paper: the intended
+discretization is \(\varepsilon^{-1}q^{\top}Mq\) with \(q=u(1-u)\), so the coded well
+was \(\int u^4(1-u)^4\) --- eighth-degree and \(\sim\!25\times\) too weak --- with a
+gradient inconsistent with it (full audit:
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md}; derivation of the
+corrected form: \codefile{docs/math/06-phase1-energy-discretization/}).
+
+The question this report answers: \emph{on the corrected energy, does the runt
+resolve, does Phase~2 then converge, and what re-tuning does the \(\sim\!25\times\)
+scale shift require?}
+
+% =====================================================================
+\section{Method}
+% =====================================================================
+All runs share the torus \(T(1.0,0.6)\), seed \(84172851\), and the corrected energy
+(except the report-01 buggy anchor, kept for contrast). Two families:
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{N=100 runt sweep.} Three runs: the buggy \(\lambda{=}2.1\) anchor from
+  report~01; the corrected energy at the \emph{same} \(\lambda{=}2.1\) (isolating the
+  well fix); and the corrected energy at \(\lambda{=}5.1\) (the production run).
+  For each, the discrete territory of the final \code{solution/} is the winner-take-all
+  lumped-mass area \(a_k=\sum_{i:\,\arg\max_{k'} u_{k'}(x_i)=k} v_i\) (\(v\) the lumped
+  \(P_1\) mass); we report the worst-cell error \(\max_k|a_k-\bar A|/\bar A\) and the
+  full sorted per-cell distribution.
+\item \textbf{N=30 init head-to-head.} Two corrected-energy runs identical but for
+  \code{init\_method} (\code{random} vs \code{seeded}), \(\lambda{=}2.1\), isolating
+  the initialization as the only variable.
+\end{itemize}
+
+For the production run we additionally read the Phase~2 campaign's \code{iteration\_*.h5}:
+the \code{final\_perimeter} attribute (the per-iteration perimeter) and the
+\code{constraint\_violations} array in \code{optimization\_info} (the per-iteration
+equal-area feasibility), prepending the extracted Phase~1 perimeter \(214.3413\) as
+iteration~0.
+
+\emph{Anchors.} The production worst-cell reconstruction gives \(0.0078\), matching
+the run's \code{metadata.yaml} \code{area\_imbalance.worst\_rel\_dev}; the Phase~2
+final perimeter \(185.2546\) matches \code{iteration\_020}. These confirm the mesh
+rebuild and reshape before any conclusion is drawn.
+
+% =====================================================================
+\section{Results}
+% =====================================================================
+
+\subsection{The runt resolves --- but only with the energy fix \emph{and} a moderate \texorpdfstring{\(\lambda\)}{lambda}}
+\label{sec:runt}
+Table~\ref{tab:runt} and Fig.~\ref{fig:runt} give the central result. Correcting the
+well at the original \(\lambda{=}2.1\) barely moves the runt (\(22.5\%\to21.8\%\)):
+the fix alone is \emph{not} sufficient. The reason is that the \(\sim\!25\times\)
+mis-scaling had also swamped the crispness penalty, leaving \(\lambda\) unable to act
+(report~01 swept \(\lambda\in\{1\ldots10\}\) with no effect). On the corrected well
+\(\lambda\) is restored as a lever, and a moderate \(\lambda{=}5.1\) equalizes all
+\(100\) cells --- worst cell \(0.8\%\), zero cells past the \(5\%\) gate.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+N=100, seed 84172851 & buggy well, \(\lambda{=}2.1\) & corrected, \(\lambda{=}2.1\) & corrected, \(\lambda{=}5.1\) \\
+\midrule
+finest mesh \((V)\)          & \(348{\times}328\) (114{,}144) & \(224{\times}212\) (47{,}488) & \(348{\times}328\) (114{,}144) \\
+worst-cell area error        & \(22.5\%\) & \(21.8\%\) & \(\mathbf{0.8\%}\) \\
+cells beyond \(5\%\) gate    & \(1\) & \(1\) & \(\mathbf{0}\) \\
+Phase~2 outcome              & perimeter rises, crash & --- & \(\mathbf{-13.6\%}\), converges \\
+\bottomrule
+\end{tabular}
+\caption{The runt is cured by the energy fix \emph{plus} a moderate \(\lambda\), not by
+either alone. Middle column: correcting the well at the old \(\lambda\) leaves the runt
+essentially unchanged; the cure needs \(\lambda\) raised into its now-effective range.}
+\label{tab:runt}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig_runt_resolution}
+\caption{\emph{Left:} worst-cell area error for the three \(N{=}100\) settings ---
+the energy fix alone (orange) is not enough, but fix~\(+\) moderate \(\lambda\) (green)
+clears the \(5\%\) gate. \emph{Right:} the final sorted per-cell area deviation --- the
+production run (green) is uniformly equal, versus the single \(-22\%\) runt of the buggy
+run (vermilion).}
+\label{fig:runt}
+\end{figure}
+
+\subsection{Phase~2 now decreases perimeter and stays feasible}
+\label{sec:phase2}
+On the production partition, Phase~2 behaves as intended (Fig.~\ref{fig:phase2}): the
+total perimeter falls from the extracted \(214.34\) to \(185.25\) (\(-13.6\%\)) and the
+equal-area constraint holds throughout (max violation \(\leq 3\times10^{-6}\); \(4\times
+10^{-10}\) at iteration~1). This is the exact opposite of the buggy runs, where the
+iteration-0 area violation was \(0.05\)--\(0.16\) and never resolved, so the
+feasibility-first solver lengthened perimeter (\(217\to229\)) chasing an unreachable
+feasible point. The per-iteration sawtooth in perimeter is the migration subsystem
+re-inserting variable points between solves; each solve drives the perimeter back down,
+and the best iterate (iteration~20) is the exported production partition.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig_phase2_convergence}
+\caption{Phase~2 on the corrected \(N{=}100\) partition. \emph{Left:} perimeter
+\emph{decreases} (\(-13.6\%\), green), versus the buggy run's rise to infeasibility
+(vermilion, from report~01). \emph{Right:} the equal-area constraint violation stays
+at \(\sim\!10^{-6}\) or below (green) --- the buggy runs sat in the shaded
+\(0.05\)--\(0.16\) band and never left it.}
+\label{fig:phase2}
+\end{figure}
+
+\subsection{The corrected well makes seeded initialization mandatory}
+\label{sec:trap}
+The \(\sim\!25\times\)-steeper well has a side effect (Fig.~\ref{fig:trap}): the
+\emph{symmetric diffuse state} (every cell at density \(1/N\) everywhere) becomes a
+genuine local minimum, where the projected gradient damps perturbations rather than
+amplifying them. \textbf{Random} initialization sits essentially at that state and
+freezes: at \(N{=}30\), \(\lambda{=}2.1\), it ends with \(23\) cells past the \(5\%\)
+gate and a \(43\%\) worst cell. \textbf{Seeded} (farthest-point Voronoi) init, which
+hands every cell a contiguous region from iteration~0, ends clean (\(0.7\%\), zero
+imbalanced) from the identical config. Under the old flatter well this trap was weak,
+so random ``worked'' at low \(N\); on the corrected energy it does not. Random init can
+still escape if \(\lambda\) is pushed hard (a level-0 sweep found escape at
+\(\lambda\gtrsim10\)), but large \(\lambda\) over-crisps and costs perimeter (\(N{=}30\)
+full run at \(\lambda{=}50\): perimeter \(174.2\) vs \(117.8\) for seeded-\(\lambda{=}2.1\),
+\(+48\%\)). Hence: \code{init\_method: seeded} \(+\) moderate \(\lambda\).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\linewidth]{fig_init_trap}
+\caption{Corrected-energy \(N{=}30\) head-to-head (\(\lambda{=}2.1\), identical but for
+\code{init\_method}). Random init (vermilion) is frozen at the symmetric state ---
+\(23\) cells beyond \(\pm5\%\), worst \(43\%\); seeded init (green) is tight within
+\(\pm1\%\).}
+\label{fig:trap}
+\end{figure}
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+The high-\(N\) runt of report~01 was, in large part, an artifact of a mis-discretized
+energy rather than a fundamental limit at \(N{=}100\). Two consequences of the
+\(\sim\!25\times\)-too-weak well drove it: the diffuse ``halo'' a cell parks its mass in
+was priced far too cheaply, and the crispness weight \(\lambda\) was rendered inert.
+Correcting the well (\codefile{docs/reference/phase1\_energy\_discretization\_bug.md})
+removes both. With the corrected energy, seeded initialization, and a \emph{moderate}
+\(\lambda{=}5.1\), the \(N{=}100\) torus partition is uniformly equal (worst cell
+\(0.8\%\)) and Phase~2 refines it cleanly (perimeter \(-13.6\%\), feasible throughout),
+yielding the exported production partition. Neither the energy fix alone nor \(\lambda\)
+alone suffices --- they are complementary, and seeded init is now required to avoid the
+corrected energy's symmetric trap. No hard discrete-territory or crispness
+\emph{constraint} (the front-runner in report~01's ranking) was needed: the soft
+\(\lambda\) penalty is enough once the well is priced correctly. The standing
+explanation, with the residual near-convergence migration churn noted, is in
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md}~\S8.
+\end{document}

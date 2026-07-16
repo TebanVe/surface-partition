@@ -1,0 +1,72 @@
+# N=30 dormancy test for the Phase 1 energy-discretization fix.
+# Branch: fix/phase1-energy-discretization (see docs/reference/phase1_energy_discretization_bug.md).
+#
+# THIS FILE:  init=seeded, seed=84172851, lambda_penalty=2.1  (CONTROL)
+#   Same config as torus_30part_random_s84172851.yaml but seeded (Voronoi) init.
+#   Purpose: confirm the corrected well keeps the seeded path clean (0 dormant),
+#   and isolate init_method as the only variable vs the random arm. It also
+#   diagnoses the re-tuning confound: if THIS run also degrades (dormant/weak
+#   cells), lam=2.1 is over-binarizing under the stronger well -> re-tune lam down
+#   before trusting the random results.
+
+experiment:
+  name: torus-30-seeded-s84172851
+  surface: torus
+
+relaxation:
+  n_partitions: 30
+  lambda_penalty: 2.1
+  seed: 84172851
+  init_method: seeded                 # <-- explicit: farthest-point Voronoi seed regions
+  max_iter: 30000
+  refinement_levels: 3
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 200
+  h5_save_stride: 200
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 60
+    n_phi: 46
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 16
+  max_opt_iter: 300
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

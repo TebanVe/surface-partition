@@ -9,7 +9,7 @@
 #
 # Read README.md before adding a report.
 
-DOCS = 01-winner-take-all-partition-gap
+DOCS = 01-winner-take-all-partition-gap 02-corrected-energy-highn-validation
 
 all: $(DOCS)
 

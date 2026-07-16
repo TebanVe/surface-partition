@@ -18,16 +18,20 @@ today's N ≈ 100 and the N = 1000 target. GPU hardware attacks only the first.
 
 > **Scope caveat — this plan addresses *performance*, not *partition validity*.**
 > The three walls below are compute/iteration/memory. There is a separate,
-> orthogonal wall that this plan does **not** solve: at high N, Phase 1's
-> winner-take-all *discrete* cell areas drift far from equal even though the
-> *continuous* equal-area constraint holds, producing diffuse "runt" cells that
-> make the Phase 2 equal-area constraint infeasible. The N=100 anchor run
-> (`run_20260629_141012`) exhibits exactly this — it is a valid *timing* anchor
-> but **not a usable N=100 partition** (its worst cell is 22% off target; the
-> finer-mesh retry was worse, 67%). Making Phase 1 fast at N=1000 is pointless
-> if the partition it produces cannot be refined. This must be solved in
-> parallel with the scaling work, and its detection is now a required gate (§6).
-> See `docs/reference/winner_take_all_partition_gap.md`.
+> orthogonal wall: at high N, Phase 1's winner-take-all *discrete* cell areas can
+> drift far from equal even though the *continuous* equal-area constraint holds,
+> producing diffuse "runt" cells that make the Phase 2 equal-area constraint
+> infeasible. The old N=100 timing anchor (`run_20260629_141012`) exhibited exactly
+> this (worst cell 22% off target). **Update (2026-07-09): resolved at N ≤ 100.**
+> The runt was largely an artifact of a mis-discretized double well (~25× too weak;
+> `docs/reference/phase1_energy_discretization_bug.md`); on the *corrected* energy
+> with a moderate `lambda_penalty=5.1`, the N=100 worst cell is 0.8% and Phase 2
+> refines cleanly (`run_20260709_081548`, perimeter −13.6%). So the timing anchors
+> here (measured on the buggy energy) remain valid as *performance* references, but
+> the partition-validity wall they flag is no longer open at N=100. It may recur at
+> N=1000; its detection stays a required gate (§6). See
+> `docs/reference/winner_take_all_partition_gap.md` §8 and
+> `docs/experiments/02-corrected-energy-highn-validation/`.
 
 ### Empirical foundation (all measured, this repo)
 

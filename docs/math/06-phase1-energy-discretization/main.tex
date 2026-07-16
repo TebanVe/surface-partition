@@ -1,0 +1,441 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}      % loads ALL packages and notation — do not add
+                               % packages directly in main.tex
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 1 Energy: Discretization of the Gamma-Convergence Functional},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Phase 1 Energy: Discretization of the \\ $\Gamma$-Convergence Functional}\\[0.5em]
+  \large Dirichlet term, double well, Modica--Mortola limit, and the crispness penalty}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document derives the discretized Phase~1 relaxation energy minimized by
+\code{ProjectedGradientOptimizer} (\codefile{src/optimization/pgd\_optimizer.py}) and
+its gradient, exactly as implemented after the double-well correction of
+2026-07-08. The continuous functional is the Modica--Mortola-type
+$\Gamma$-convergence energy of Bogosel \& Oudet: a Dirichlet interface term plus a
+double well, whose $\varepsilon\to0$ limit is the partition perimeter, augmented by a
+soft \emph{crispness} penalty. Three quantities are derived from the $P_1$ finite-element
+discretization: the Dirichlet term $\varepsilon\,u^\top K u$, the double-well term
+$\varepsilon^{-1} q^\top M q$ with $q=u(1-u)$, and the variance penalty
+$\lambda\,(1-\mathrm{Var}/T)$; all three gradients are \emph{analytical} and match the
+code to machine precision. A remark records the one-token discretization bug this
+document's corrected form replaces (the well was previously coded as
+$q=u^2(1-u)^2$; see \codefile{docs/reference/phase1\_energy\_discretization\_bug.md}).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Overview}
+\label{sec:overview}
+
+Phase~1 of the method (relaxation) replaces the geometric problem ``partition the
+surface $S$ into $N$ equal-area regions of minimal total interface length'' by a
+smooth minimization over \emph{density fields}. Each region $k$ is represented by a
+function $u_k : S \to [0,1]$, where $u_k(x)$ is ``how strongly cell $k$ claims the
+point $x$.'' The optimizer minimizes a relaxed energy $E$ over the stacked field
+$u = (u_1,\dots,u_N)$ subject to a partition-of-unity constraint
+$\sum_k u_k \equiv 1$ and an equal-area constraint $\int_S u_k \,dA = |S|/N$ for
+each $k$ (both enforced by projection; \codefile{src/optimization/projection.py}).
+As the interface width $\varepsilon \to 0$ the relaxed energy $\Gamma$-converges to
+the partition perimeter, so its minimizers approximate minimal-perimeter partitions
+\cite{bogosel2023partitions,modica1987gradient}.
+
+This document derives, from the $P_1$ finite-element discretization, the three
+additive pieces of $E$ and their gradients \emph{as implemented}. It is the formal
+companion to the reference note
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md}, which records that
+the double-well term was for a long time mis-discretized (a typo copied from the
+source paper) and was corrected on 2026-07-08; the form derived here is the
+corrected one. Per the \codefile{docs/math} scope policy, every formula below is a
+faithful transcription of the live code.
+
+\section{Notation and setup}
+\label{sec:notation}
+
+\begin{remark}[The symbol $\lambda$]
+In this document $\lambda$ denotes the \emph{crispness-penalty weight}
+(\code{lambda\_penalty}, Section~\ref{sec:penalty}). It is unrelated to the Phase~2
+variable-point parameter $\lam$ of the same name used elsewhere in
+\codefile{docs/math}; Phase~1 has no variable points.
+\end{remark}
+
+\paragraph{Mesh and $P_1$ finite elements.}
+$S$ is triangulated with vertices $\V = \{x_1,\dots,x_{|V|}\}$ and triangles $\F$.
+Let $\{\varphi_j\}_{j=1}^{|V|}$ be the piecewise-linear ($P_1$) nodal ``hat'' basis,
+$\varphi_j(x_i)=\delta_{ij}$. A nodal vector $w\in\mathbb{R}^{|V|}$ defines the $P_1$
+function $w_h = \sum_j w_j \varphi_j$, i.e.\ the linear interpolant of the values
+$w_j$. The two standard $P_1$ assembly matrices are the \emph{mass} and
+\emph{stiffness} matrices
+\begin{equation}
+  M_{jk} \;=\; \int_S \varphi_j \varphi_k \,dA,
+  \qquad
+  K_{jk} \;=\; \int_S \grad_\tau \varphi_j \cdot \grad_\tau \varphi_k \,dA,
+  \label{eq:MK-def}
+\end{equation}
+where $\grad_\tau$ is the tangential (surface) gradient. Both are built by
+\code{TriMesh.compute\_matrices} (\codefile{src/mesh/tri\_mesh.py}); $M$ and $K$ are
+symmetric and sparse. The \emph{lumped mass} vector is the row sum of $M$,
+\begin{equation}
+  v_j \;=\; \sum_k M_{jk} \;=\; \int_S \varphi_j \, dA \;>\; 0,
+  \qquad
+  W \;=\; \sum_j v_j \;=\; \int_S 1 \, dA \;=\; |S|,
+  \label{eq:lumped-mass}
+\end{equation}
+so $v_j$ is the area weight of vertex $j$ and $W$ is the total surface area
+(\code{self.v}, \code{self.W} in the optimizer). The equal-area target per cell is
+$\bar A = W/N$ and the target density mean is $\mu_t = 1/N$.
+
+\paragraph{Interface width.}
+The width is tied to the mesh, $\varepsilon = \sqrt{\text{mean triangle area}}
+\approx h$ (\codefile{src/pipeline/relaxation.py}, \code{\_setup\_level}), and is
+held fixed within a refinement level.
+
+\paragraph{The two exact $P_1$ identities.}
+For any nodal vector $w$,
+\begin{align}
+  \int_S \abs{\grad_\tau w_h}^2 \, dA &\;=\; w^\top K w, \label{eq:dirichlet-identity}\\
+  \int_S w_h^2 \, dA &\;=\; w^\top M w, \label{eq:mass-identity}
+\end{align}
+both immediate from \eqref{eq:MK-def} and bilinearity, since
+$w_h = \sum_j w_j \varphi_j$. These are the only two discretization identities the
+energy uses; everything else is exact algebra.
+
+\paragraph{The continuous functional.}
+Per cell, the relaxed energy is the Modica--Mortola-type functional
+\begin{equation}
+  F_\varepsilon(u_k)
+  \;=\;
+  \varepsilon \int_S \abs{\grad_\tau u_k}^2 \, dA
+  \;+\;
+  \frac{1}{\varepsilon} \int_S W\!\big(u_k\big)\, dA,
+  \qquad
+  W(s) = s^2 (1-s)^2,
+  \label{eq:continuous-Feps}
+\end{equation}
+with the standard quartic double well $W$ (minima at $s=0$ and $s=1$). The total
+Phase~1 energy sums this over the $N$ cells and adds the penalty of
+Section~\ref{sec:penalty}:
+\begin{equation}
+  E(u) \;=\; \sum_{k=1}^{N} F_\varepsilon(u_k) \;+\; \lambda \sum_{k=1}^{N} P(u_k).
+  \label{eq:total-continuous}
+\end{equation}
+
+\section{The Dirichlet (interface-width) term}
+\label{sec:dirichlet}
+
+Discretizing $u_k$ by its $P_1$ interpolant and applying
+\eqref{eq:dirichlet-identity} gives the interface-width term exactly:
+\begin{equation}
+  \varepsilon \int_S \abs{\grad_\tau u_k}^2 \, dA
+  \;=\;
+  \varepsilon \, u_k^\top K u_k
+  \;=\!:\; E^{\mathrm{dir}}_k .
+  \label{eq:dirichlet-term}
+\end{equation}
+Because $K$ is symmetric, the gradient in the nodal unknowns $u_k$ is
+\begin{equation}
+  \grad_{u_k} E^{\mathrm{dir}}_k \;=\; 2\,\varepsilon \, K u_k .
+  \label{eq:dirichlet-grad}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: Dirichlet term and gradient}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}:
+\code{compute\_energy} / \code{compute\_gradient} (per-cell loop)\\[2pt]
+\code{grad\_term = epsilon * (u.T @ (K @ u))}\\
+\code{grad\_grad = 2 * epsilon * (K @ u)}
+\end{tcolorbox}
+
+\section{The double-well term (the corrected discretization)}
+\label{sec:doublewell}
+
+The interface (binarization) term is
+$\varepsilon^{-1}\int_S W(u_k)\,dA = \varepsilon^{-1}\int_S u_k^2(1-u_k)^2\,dA$.
+Write the integrand as a perfect square,
+\begin{equation}
+  W(u_k) \;=\; u_k^2(1-u_k)^2 \;=\; \big[\,u_k(1-u_k)\,\big]^2 \;=\; q_k^2,
+  \qquad
+  q_k \;:=\; u_k(1-u_k).
+  \label{eq:q-def}
+\end{equation}
+Discretizing the \emph{new} field $q_k$ nodally --- i.e.\ forming the vector with
+entries $q_{k,j}=u_{k,j}(1-u_{k,j})$ and taking its $P_1$ interpolant --- and applying
+the mass-matrix identity \eqref{eq:mass-identity} gives
+\begin{equation}
+  \frac{1}{\varepsilon}\int_S W(u_k)\,dA
+  \;\approx\;
+  \frac{1}{\varepsilon}\int_S (q_k)_h^2 \, dA
+  \;=\;
+  \frac{1}{\varepsilon}\, q_k^\top M q_k
+  \;=\!:\; E^{\mathrm{well}}_k .
+  \label{eq:well-term}
+\end{equation}
+
+\begin{remark}[Nodal interpolation of the well]
+The equality \eqref{eq:mass-identity} is exact, but \eqref{eq:well-term} carries one
+approximation: the integrand $q_k=u_k(1-u_k)$ is evaluated at the nodes and then
+interpolated linearly, so $(q_k)_h$ is the $P_1$ interpolant of the nodal products,
+not the exact quadratic $u_h(1-u_h)$. This is the usual nodal-quadrature treatment of
+a polynomial nonlinearity; it is consistent (error $O(h^2)$) and is what the code
+computes. Equivalently, the \emph{discrete} double-well energy is defined as
+$\varepsilon^{-1}\lVert (q_k)_h \rVert_{L^2}^2$.
+\end{remark}
+
+\paragraph{Gradient.}
+Since $q_k = u_k \odot (1-u_k)$ acts componentwise, its Jacobian with respect to
+$u_k$ is diagonal:
+\begin{equation}
+  \frac{\partial q_{k,j}}{\partial u_{k,j}}
+  \;=\; 1 - 2u_{k,j}
+  \qquad\Longrightarrow\qquad
+  \frac{\partial q_k}{\partial u_k} \;=\; \operatorname{diag}(1 - 2u_k).
+  \label{eq:dq-du}
+\end{equation}
+With $M$ symmetric, the chain rule applied to $q_k^\top M q_k$ gives
+\begin{equation}
+  \grad_{u_k} E^{\mathrm{well}}_k
+  \;=\;
+  \frac{1}{\varepsilon}\,\operatorname{diag}(1-2u_k)\,\big(2 M q_k\big)
+  \;=\;
+  \frac{2}{\varepsilon}\,\big(M q_k\big)\odot(1-2u_k),
+  \label{eq:well-grad}
+\end{equation}
+where $\odot$ is the Hadamard (elementwise) product.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: double-well term and gradient (corrected)}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}:
+\code{compute\_energy} / \code{compute\_gradient} (per-cell loop)\\[2pt]
+\code{interface\_vec = u * (1 - u)}\hfill\textrm{\small ($=q_k$; not \code{u**2*(1-u)**2})}\\
+\code{interface\_term = (1/epsilon) * (interface\_vec.T @ (M @ interface\_vec))}\\
+\code{grad\_interface = (2/epsilon) * (M @ interface\_vec) * (1 - 2*u)}
+\end{tcolorbox}
+
+\begin{remark}[The discretization bug this form corrects]
+\label{rem:bug}
+Earlier code set \code{interface\_vec = u**2 * (1-u)**2}, i.e.\ $q_k \mapsto q_k^2$.
+That transcribes a \emph{typo} in the source paper \cite{bogosel2023partitions}
+(\S3), whose printed definition of the discretized field has an extra squaring, while
+its prose target integral $\int u^2(1-u)^2$ and its printed gradient
+$2Mv\odot(1-2u)$ both require $v=u(1-u)$. The buggy energy computed
+$\varepsilon^{-1}\!\int (u^2(1-u)^2)_h^2 = \varepsilon^{-1}\!\int u^4(1-u)^4$ --- an
+eighth-degree well, $\sim\!25\times$ too small in magnitude --- \emph{and} its
+gradient \eqref{eq:well-grad} was then no longer the gradient of the coded energy
+(finite-difference relative error $\approx 1.2$). With the correct
+$q_k=u_k(1-u_k)$, energy \eqref{eq:well-term} and gradient \eqref{eq:well-grad} are
+mutually consistent to machine precision (FD relative error $\approx 10^{-8}$). See
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md} for the full audit
+and the $\sim\!25\times$ scale shift, which required re-tuning $\lambda$.
+\end{remark}
+
+\section{The Modica--Mortola limit: why this is a perimeter}
+\label{sec:gamma}
+
+The pairing in \eqref{eq:continuous-Feps} is the classical Modica--Mortola
+functional. For a well $W\ge0$ vanishing exactly at $0$ and $1$, the family
+$F_\varepsilon$ $\Gamma$-converges as $\varepsilon\to0$ (in $L^1$) to
+\begin{equation}
+  F_0(u) \;=\; c_W \cdot \operatorname{Per}\big(\{u = 1\}\big),
+  \qquad
+  c_W \;=\; 2\int_0^1 \sqrt{W(s)}\; ds,
+  \label{eq:MM-limit}
+\end{equation}
+finite only on fields $u\in\{0,1\}$ of finite perimeter \cite{modica1987gradient}. For
+the quartic well $W(s)=s^2(1-s)^2$ we have $\sqrt{W(s)} = s(1-s)$ on $[0,1]$, so
+\begin{equation}
+  c_W \;=\; 2\int_0^1 s(1-s)\,ds
+        \;=\; 2\Big[\tfrac12 - \tfrac13\Big]
+        \;=\; \tfrac13 .
+  \label{eq:cW-value}
+\end{equation}
+Summing over the $N$ cells as in \eqref{eq:total-continuous}, each interface between
+two adjacent regions lies in the boundary of \emph{two} phases and is therefore
+counted twice, so the limit of $\sum_k F_\varepsilon(u_k)$ is $2c_W = \tfrac23$ times
+the total length of the partition's interface network. The constant is immaterial to
+the minimizer: minimizing the relaxed energy at small $\varepsilon$ drives the
+partition toward minimal total interface length --- the perimeter problem the method
+targets. This is the sense in which the coefficient balance $\varepsilon\,u^\top K u$
+versus $\varepsilon^{-1} q^\top M q$ matters: the double-well correction of
+Section~\ref{sec:doublewell} restores $W$ to the quartic \eqref{eq:continuous-Feps}
+whose limit constant is \eqref{eq:cW-value}, rather than an eighth-degree well with a
+different (and much flatter) profile.
+
+\section{The crispness penalty}
+\label{sec:penalty}
+
+The double well rewards \emph{pointwise} binarization but does not by itself force a
+cell to concentrate its (area-constrained) mass into a compact, sharp region. The
+optimizer adds a soft penalty $P$ that rewards each cell's density having the
+\emph{variance of a sharp $0/1$ indicator} of the target size. All statistics are
+\emph{area-weighted} by the lumped mass $v$ of \eqref{eq:lumped-mass}.
+
+\paragraph{Weighted mean and variance.}
+For a cell density $u$ (dropping the cell index),
+\begin{equation}
+  \mu(u) \;=\; \frac{v^\top u}{W},
+  \qquad
+  \operatorname{Var}(u) \;=\; \frac{1}{W}\sum_j v_j\,(u_j - \mu)^2
+  \;=\; \frac{\big((u-\mu\mathbf 1)\odot v\big)^\top (u-\mu\mathbf 1)}{W}.
+  \label{eq:weighted-varmean}
+\end{equation}
+On the constraint set $v^\top u = \bar A$ the mean is pinned at $\mu = \bar A/W = 1/N
+= \mu_t$.
+
+\paragraph{Target variance.}
+A sharp indicator equal to $1$ on an area fraction $\mu_t$ and $0$ elsewhere has
+area-weighted variance $\mu_t(1-\mu_t)$. The penalty compares $\operatorname{Var}(u)$
+to a target
+\begin{equation}
+  T \;=\;
+  \begin{dcases}
+    \mu_t(1-\mu_t), & \text{fixed target (\code{penalty\_target\_mode = 'fixed'})},\\
+    \mu(1-\mu),     & \text{adaptive target (\code{'adaptive'})},
+  \end{dcases}
+  \qquad
+  T_{\mathrm{eff}} = T + \varepsilon_P,
+  \label{eq:target-var}
+\end{equation}
+with a small floor $\varepsilon_P = $ \code{penalty\_eps} guarding the division. The
+penalty per cell is
+\begin{equation}
+  P(u) \;=\; \lambda\left(1 - \frac{\operatorname{Var}(u)}{T_{\mathrm{eff}}}\right).
+  \label{eq:penalty}
+\end{equation}
+It is minimized (drops toward $\lambda\cdot 0$) as $\operatorname{Var}(u)\to T$, i.e.\
+as the cell becomes as ``crisp'' as a sharp indicator of the right size; a diffuse,
+low-variance density is penalized. In the code the per-cell penalties are summed and
+added to $E$; the weight is $\lambda=$ \code{lambda\_penalty}.
+
+\paragraph{Gradient.}
+The gradient of the weighted variance \eqref{eq:weighted-varmean} is
+\begin{equation}
+  \grad_u \operatorname{Var}(u) \;=\; \frac{2}{W}\,v\odot(u - \mu\mathbf 1),
+  \label{eq:grad-var}
+\end{equation}
+where the terms from the $\mu$-dependence cancel: $\partial\mu/\partial u_k = v_k/W$
+and $\sum_j v_j (u_j-\mu)=0$ on any $u$. For the \emph{fixed} target $T$ is constant,
+so
+\begin{equation}
+  \grad_u P \;=\; -\,\frac{\lambda}{T_{\mathrm{eff}}}\,\grad_u \operatorname{Var}(u).
+  \label{eq:grad-penalty-fixed}
+\end{equation}
+For the \emph{adaptive} target $T=\mu(1-\mu)$ depends on $u$ through
+$\partial T/\partial u = (1-2\mu)\,v/W$, giving the quotient-rule form
+\begin{equation}
+  \grad_u P \;=\; -\lambda\!\left[
+    \frac{\grad_u \operatorname{Var}(u)}{T_{\mathrm{eff}}}
+    \;-\;
+    \frac{\operatorname{Var}(u)}{T_{\mathrm{eff}}^{\,2}}\,(1-2\mu)\,\frac{v}{W}
+  \right].
+  \label{eq:grad-penalty-adaptive}
+\end{equation}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: crispness penalty and gradient}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}:
+\code{compute\_energy} / \code{compute\_gradient} (penalty loop)\\[2pt]
+\code{mu = (v @ u) / W};\quad
+\code{var\_w = ((center * v) @ center) / W}\hfill\textrm{\small(\code{center = u - mu})}\\
+\code{grad\_var = (2/W) * (v * center)}\\
+fixed:\ \ \code{G += -lambda * (grad\_var / T\_eff)}\\
+adaptive:\ \ \code{G += -lambda * (grad\_var/T\_eff - (var\_w/T\_eff**2)*(1-2*mu)*(v/W))}
+\end{tcolorbox}
+
+\begin{remark}[Operating regime after the energy fix]
+The $\sim\!25\times$ scale shift from the double-well correction
+(Remark~\ref{rem:bug}) rebalances $\lambda$ against the well and Dirichlet terms.
+Empirically, on the corrected energy $\lambda$ becomes an effective lever where it was
+inert before: a moderate \code{lambda\_penalty}$\approx 5$ resolves the high-$N$
+``runt'' cell that the buggy energy manufactured, and seeded initialization becomes
+mandatory (random initialization now stalls at the symmetric state). Both effects are
+measured in \codefile{docs/experiments/02-corrected-energy-highn-validation/}; they are
+consequences of the energy \emph{scale}, not of the formulas derived here.
+\end{remark}
+
+\section{Assembled energy and gradient}
+\label{sec:assembly}
+
+Collecting Sections~\ref{sec:dirichlet}--\ref{sec:penalty}, with
+$q_k = u_k \odot (1-u_k)$, the discretized Phase~1 energy and its gradient (column
+$k$ acting on cell $k$) are
+\begin{align}
+  E(u)
+  &\;=\;
+  \sum_{k=1}^{N}\Big[\,
+    \varepsilon\, u_k^\top K u_k
+    \;+\;
+    \tfrac{1}{\varepsilon}\, q_k^\top M q_k
+  \,\Big]
+  \;+\;
+  \lambda \sum_{k=1}^{N}\Big(1 - \tfrac{\operatorname{Var}(u_k)}{T_{\mathrm{eff}}}\Big),
+  \label{eq:E-assembled}\\[4pt]
+  \grad_{u_k} E
+  &\;=\;
+  \underbrace{2\varepsilon\, K u_k}_{\text{Dirichlet}}
+  \;+\;
+  \underbrace{\tfrac{2}{\varepsilon}\,(M q_k)\odot(1-2u_k)}_{\text{double well}}
+  \;+\;
+  \underbrace{\grad_{u_k} P(u_k)}_{\eqref{eq:grad-penalty-fixed}\text{ or }\eqref{eq:grad-penalty-adaptive}}.
+  \label{eq:grad-assembled}
+\end{align}
+The gradient \eqref{eq:grad-assembled} is the unconstrained (Euclidean) gradient the
+optimizer then projects onto the tangent of the sum-to-one and equal-area constraints
+(\codefile{src/optimization/projection.py}); the constraint handling is outside the
+scope of this energy derivation.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: assembled energy and gradient}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}:
+\code{compute\_energy(x, return\_components)} returns
+\code{\{total, grad, interface, penalty\}};
+\code{compute\_gradient(x)} returns the stacked $\grad E$ reshaped to
+$\mathbb{R}^{|V|\times N}$.
+\end{tcolorbox}
+
+\section*{Summary table}
+\addcontentsline{toc}{section}{Summary table}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}p{4.4cm}p{4.0cm}p{2.0cm}p{3.4cm}@{}}
+\toprule
+Quantity & Discretized form & Method & Implementing function \\
+\midrule
+Dirichlet term \eqref{eq:dirichlet-term} & $\varepsilon\,u_k^\top K u_k$ & analytical & \code{compute\_energy} \\
+\ \ its gradient \eqref{eq:dirichlet-grad} & $2\varepsilon\,K u_k$ & analytical & \code{compute\_gradient} \\
+Double-well term \eqref{eq:well-term} & $\varepsilon^{-1} q_k^\top M q_k$, $q_k=u_k(1-u_k)$ & analytical & \code{compute\_energy} \\
+\ \ its gradient \eqref{eq:well-grad} & $\tfrac{2}{\varepsilon}(M q_k)\odot(1-2u_k)$ & analytical & \code{compute\_gradient} \\
+Weighted variance \eqref{eq:weighted-varmean} & $\tfrac1W \sum_j v_j (u_j-\mu)^2$ & analytical & \code{compute\_energy} \\
+\ \ its gradient \eqref{eq:grad-var} & $\tfrac{2}{W} v\odot(u-\mu\mathbf 1)$ & analytical & \code{compute\_gradient} \\
+Crispness penalty \eqref{eq:penalty} & $\lambda(1-\operatorname{Var}/T_{\mathrm{eff}})$ & analytical & \code{compute\_energy} \\
+\ \ its gradient (fixed / adaptive) & \eqref{eq:grad-penalty-fixed} / \eqref{eq:grad-penalty-adaptive} & analytical & \code{compute\_gradient} \\
+$\Gamma$-limit constant \eqref{eq:cW-value} & $c_W = 2\int_0^1\!\sqrt{W} = \tfrac13$ & analytical & --- (theory) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent All gradients are analytical and consistent with the corresponding energy
+to machine precision (finite-difference relative error $\approx 10^{-8}$). The
+formulas above transcribe the corrected code; the superseded (buggy) double-well
+discretization is recorded in Remark~\ref{rem:bug} and audited in
+\codefile{docs/reference/phase1\_energy\_discretization\_bug.md}.
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}

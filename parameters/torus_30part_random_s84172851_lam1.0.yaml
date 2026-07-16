@@ -1,0 +1,72 @@
+# N=30 dormancy test for the Phase 1 energy-discretization fix.
+# Branch: fix/phase1-energy-discretization (see docs/reference/phase1_energy_discretization_bug.md).
+#
+# THIS FILE:  init=random, seed=84172851, lambda_penalty=1.0  (RE-TUNING HEDGE)
+#   Identical to torus_30part_random_s84172851.yaml EXCEPT lambda_penalty lowered
+#   2.1 -> 1.0. The corrected well is ~25x stronger and itself drives binarization,
+#   so the old lam=2.1 may now over-binarize and *cause* dormancy (killing weak
+#   cells). This lower-lam run disentangles "the fix didn't help" from "lam is now
+#   too high": if random goes dormant at lam=2.1 but is clean here, the lever is
+#   lam, not the init method.
+
+experiment:
+  name: torus-30-random-s84172851-lam1
+  surface: torus
+
+relaxation:
+  n_partitions: 30
+  lambda_penalty: 1.0
+  seed: 84172851
+  init_method: random
+  max_iter: 30000
+  refinement_levels: 3
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 200
+  h5_save_stride: 200
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 60
+    n_phi: 46
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 16
+  max_opt_iter: 300
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

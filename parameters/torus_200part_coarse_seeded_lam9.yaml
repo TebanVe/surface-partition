@@ -1,0 +1,88 @@
+# N=200 relaxation, lambda=9.0 -- RAISE-THE-REGULARIZATION test.
+# Branch: fix/phase1-energy-discretization. Same as torus_200part_coarse_seeded.yaml
+# in every respect EXCEPT lambda_penalty (7.0 -> 9.0). SAME seed (84172851) on
+# purpose, so any change is attributable to lambda alone.
+#
+# WHY: the lambda=7.0 run (run_20260711_192121) kept all 200 cells alive but left
+# TWO diffuse-mass runts -- cell 17 (-38.4%) and cell 58 (-31.2%) discrete-area
+# deviation. Their CONTINUOUS area equals target (Phase 1 enforces it) but their
+# winner-take-all area is ~0.6x target, i.e. ~35% of their fair-share mass sits in
+# vertices where they are NOT the argmax winner: a diffuse sub-argmax skirt. That
+# is exactly what the crispness penalty (lambda) targets. Documented precedent:
+# on the corrected energy, raising lambda took the N=100 runt 22.5% -> 0.8%
+# (docs/reference/winner_take_all_partition_gap.md), and 6.0 gave a clean N=150.
+#
+# NOTE: this is a DIFFERENT failure from N=150's worst cell, which was a
+# small-triangle DISCRETIZATION artifact (above-average wins) that needed
+# resolution, not lambda. N=200's 17/58 are BELOW-average-win diffuse runts ->
+# lambda is the correct lever here.
+#
+# lambda ladder: N=100 -> 5.1, N=150 -> 6.0 (+0.9/50 cells predicts 7.0 for
+# N=200, which UNDERSHOT). 9.0 deliberately overshoots the linear trend for a
+# decisive read. If 17/58 shrink but do not fully clear, resume the winner to 5
+# levels (the residual is then discretization, which resolution closes).
+#
+# READOUT (solution/metadata.yaml): dormant_cells empty (as at lambda=7), and
+# watch cells 17 & 58 in the area_imbalance block -- did their -38/-31% shrink?
+
+experiment:
+  name: torus-200-coarse-seeded-lam9
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 9.0                  # RAISED from 7.0 to attack the two diffuse runts (17, 58)
+  seed: 84172851                       # UNCHANGED -- isolate lambda as the only variable
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000
+  refinement_levels: 3                # Step-1 validity check; resume winner to 5 via --resume-from
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

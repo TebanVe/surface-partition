@@ -50,7 +50,18 @@ def main() -> int:
         help="Raise an error if the checkpoint has pending_migration=True. "
              "Default is permissive (warn and continue, writing finalised=False)."
     )
+    parser.add_argument(
+        "--force-finalised", action="store_true", dest="force_finalised",
+        help="Write finalised=True even when pending_migration=True, with an "
+             "explanatory finalised_note. Use when Phase-2 refinement is stuck "
+             "in the migration-cycling plateau and the best iterate is the "
+             "accepted final result (see CLAUDE.md). Mutually exclusive with --strict."
+    )
     args = parser.parse_args()
+
+    if args.strict and args.force_finalised:
+        print("ERROR: --strict and --force-finalised are mutually exclusive")
+        return 1
 
     checkpoint_path = os.path.abspath(args.solution)
     if not os.path.exists(checkpoint_path):
@@ -102,6 +113,7 @@ def main() -> int:
         n_theta_final=n_theta_final,
         n_phi_final=n_phi_final,
         strict=args.strict,
+        force_finalised=args.force_finalised,
     )
 
     print(f"Exported partition to: {output_path}")

@@ -92,7 +92,7 @@ class ProjectedGradientOptimizer:
 		for i in range(n):
 			u = phi[:, i]
 			grad_term = self.epsilon * float(u.T @ (self.K @ u))
-			interface_vec = u ** 2 * (1 - u) ** 2
+			interface_vec = u * (1 - u)  # q=u(1-u) double-well; not u**2*(1-u)**2
 			interface_term = (1 / self.epsilon) * float(interface_vec.T @ (self.M @ interface_vec))
 			total_grad += grad_term
 			total_interface += interface_term
@@ -135,7 +135,7 @@ class ProjectedGradientOptimizer:
 		for i in range(n):
 			u = phi[:, i]
 			grad_grad = 2 * self.epsilon * (self.K @ u)
-			interface_vec = u ** 2 * (1 - u) ** 2
+			interface_vec = u * (1 - u)  # q=u(1-u) double-well; not u**2*(1-u)**2
 			grad_interface = (2 / self.epsilon) * (self.M @ interface_vec) * (1 - 2 * u)
 			G[:, i] = grad_grad + grad_interface
 		if self.lambda_penalty > 0:
