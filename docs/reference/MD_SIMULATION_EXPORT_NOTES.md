@@ -1,6 +1,11 @@
 # Exporting the Partition for Molecular Simulations — Discussion Notes
 
-**Status:** Discussion / planning. No implementation decisions made yet.
+**Status:** DECIDED and IMPLEMENTED. The options analysis below led to
+**Representation 3** (subdivided boundary-cut mesh with explicit per-face cell
+labels), which is now the shipped export format — see `src/export/rep3_builder.py`
+(`build_representation_3`), `src/export/writer.py`, and `scripts/export_partition.py`
+(link-list-torus HDF5 schema, `--force-finalised`). The comparison of the five
+representations below is retained as the rationale for that choice.
 **Date:** 2026-05-07
 **Context:** End goal is to use the optimised partition (Phase 1 + Phase 2 output)
 as input to molecular dynamics simulations on the surface. Particles are placed

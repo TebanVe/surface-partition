@@ -319,7 +319,67 @@ cap. Neither blocks a valid N=100 partition. The discrete-territory *constraint*
 torus at these N, but remain on the table should a surface/N be found where a moderate
 λ on the corrected energy is insufficient.
 
-## 9. Related documents, code, and data
+## 9. Scaling past N=100 — the λ window, the seed lottery, and mesh resolution (N=150–300)
+
+§8 resolved the runt for N ≤ 100. Pushing to N = 150–300 (seeded init, corrected
+energy) kept the *mechanism* intact but surfaced three operational lessons.
+
+**λ is a *window*, not just a floor.** §8 established the lower edge (too little λ →
+diffuse runt). At high N there is also an **upper ceiling**: raise λ too far and the
+crispness penalty dominates the energy, the multi-level refinement triggers misfire
+(the finer levels fire after *tens* of iterations instead of thousands), and PGD stops
+before it crisps the interfaces — leaving a diffuse `min peak density ≈ 0.7` **mush**
+with most cells area-imbalanced, and a suspiciously fast run. Measured at N=300 (seed
+61803399, coarse 3-level):
+
+| λ | finest-level iters | min peak density | `n_imbalanced` / 300 | outcome |
+|---|---|---|---|---|
+| 12 | ~7,700 | 0.98 | 9 | relaxes properly |
+| 13 | ~400 | 0.73 | 189 | over the ceiling → mush |
+| 15 | ~100 | 0.71 | 234 | mush |
+
+The usable λ at N=300 is essentially pinned at ~12. **Diagnostic when a high-N run
+looks wrong:** check the final min peak density (`dormant_cells.max_density_per_cell`
+in `metadata.yaml`) and the per-level `Refinement triggered at iteration N` counts in
+the log — a fast run with low peak density means λ is over the ceiling; lower it.
+
+**The needed λ grows with N**, staying inside that window: ~5.1 (N=100) → ~6 (N=150)
+→ ~11 (N=200) → ~12 (N=300, at the ceiling). The window narrows as N grows.
+
+**At high N the imbalance splits into two sub-types that need different levers.** Among
+the cells over the gate at a given (N, λ):
+- **Discretization artifacts** — crisp cells with *above*-average win counts sitting in
+  fine-triangle regions of the torus, so their winner-take-all area under-counts. These
+  are λ-independent and **shrink with mesh refinement**. N=150 cell 108 is the canonical
+  case: −10.6% (2 levels) → −5.84% (3 levels) → **−1.24%** (5 levels), converging toward
+  zero. The fix is *finishing the refinement levels*, not λ.
+- **Genuine runts** — crisp-cored cells with *below*-average win counts that still park
+  mass as a diffuse sub-argmax skirt. These are **seed-specific**: the farthest-point
+  seeding placed a seed where it gets squeezed.
+
+**The seed lottery.** For the genuine-runt sub-type, *changing the seed* is the effective
+lever — not more λ. N=200 is the clean demonstration: at seed 84172851 two cells sat at
+−38% / −31% and raising λ 7→9 barely moved them (−34% / −24%); a *different* seed
+(61803399) at λ=11 produced a fully valid partition (0 imbalanced) in a fraction of the
+wall-time. Runt placement is geometric and seed-dependent; λ cannot rescue a cell the
+seeding squeezed.
+
+**Status ladder (as of this writing).** N=100, 150, 200 are valid, finalised, and
+exported (the N=150 artifact cleared only after resuming to 5 levels). **N=300** relaxes
+cleanly at λ=12 but is **not yet valid** — 9 cells over the gate (worst −34.9%), a mix of
+the two sub-types; the open moves are resuming to 5 levels (for the artifacts) and a seed
+sweep (for the runt). It may simply be harder: extrapolating the resolution trend leaves
+the worst cell near −9%, so N=300 may need the seed lottery to land a configuration with
+no cell in such an extreme fine-triangle spot.
+
+**Phase-2 note.** At high N the Phase-2 perimeter refinement does not converge cleanly —
+it enters a *migration-cycling plateau* (per-iteration gains decay to noise while the
+topology oscillates on migrations, so `pending_migration` never clears). This is a
+plateau, not a failure; the workflow is to export the minimum-perimeter iterate with
+`scripts/export_partition.py --force-finalised`. See CLAUDE.md "Phase 2 migration-cycling
+plateau" and "Phase 1 `lambda_penalty` has a working window".
+
+## 10. Related documents, code, and data
 
 - Reference: `docs/reference/phase1_energy_discretization_bug.md` — the
   mis-discretized double well that was the runt's root cause; its fix (with a moderate
@@ -335,9 +395,9 @@ torus at these N, but remain on the table should a surface/N be found where a mo
   energy discretization derived from the implemented code.
 - Plan: `docs/plans/PHASE1_N1000_SCALING_PLAN.md` (the §6 validation gates now
   require `detect_area_imbalance`; the runt is the "partition validity" wall that
-  plan flags as orthogonal to its performance walls),
-  `docs/plans/PHASE1_SEEDED_INITIALIZATION_PLAN.md` (the seeded-init fix for
-  dormant cells).
+  plan flags as orthogonal to its performance walls). Seeded init (the fix for
+  dormant cells) is now implemented — see CLAUDE.md "Phase 1 Initial Condition
+  (`init_method`)" and `src/optimization/initialization.py`.
 - Code: `src/optimization/pgd_optimizer.py` (energy + `λ` variance penalty),
   `src/pipeline/relaxation.py` (`ε = √mean_triangle_area`; both detection gates),
   `src/optimization/projection.py` (equal-mass + sum-to-one projection),

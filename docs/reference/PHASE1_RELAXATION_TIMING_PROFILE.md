@@ -1,14 +1,15 @@
 # Phase 1 (Relaxation) Timing Profile
 
-**Status:** Implemented on branch `feat/phase1-timing-profile`
-(instrumentation + `RelaxationProfilingState`, `--profile` CLI wiring,
-sweep `--mode collect` extraction, and the `timing_analyzer.py` Phase 1
-breakdown plot). The §7 interpretation notes and the §8 follow-up
-optimizations remain forward-looking and out of scope for that change.
-**Branch:** `feat/phase1-timing-profile`. The plan was committed on this
-branch as its entry point; implementation work happened here, not
-on `main`. If checking out a different branch to read this document,
-switch back before editing code.
+**Status:** IMPLEMENTED and merged to `main` (instrumentation +
+`RelaxationProfilingState`, `--profile` CLI wiring, sweep `--mode collect`
+extraction, and the `timing_analyzer.py` Phase 1 breakdown plot; documented in
+CLAUDE.md). This document was a design plan; it has been **moved from
+`docs/plans/` to `docs/reference/`** now that the work is shipped. It is retained
+for the two things in it that remain lasting: the §7 guide to *reading* the
+profile, and the §8 follow-up optimizations that are still **open** — chiefly
+replacing the brute-force `nearest_neighbor_interpolate`
+(`src/mesh/interpolation.py`, still an O(N·V) `np.argmin` loop) with a KD-tree,
+which the profile identifies as the dominant fine-level initialization cost.
 **Audience:** Fresh agent / developer adding timing instrumentation to the
 Γ-convergence relaxation pipeline.
 **Goal of the work:** Reproduce, for Phase 1, the same kind of breakdown

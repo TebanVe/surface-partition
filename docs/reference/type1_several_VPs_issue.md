@@ -7,6 +7,21 @@ Type 1 migration triggers are detected with 4 or 5 approaching variable points
 instead of the expected 3. This document records the investigation findings and
 outlines the safety guard that should be implemented.
 
+## Resolution (2026-07 — implemented)
+
+**This issue is now RESOLVED.** The triple-point exclusion guard has been ported
+to the new detector path: `detect_type1_triggers()` in
+`src/migration/migration_detector.py` takes a `steiner_handler` argument and
+rejects any Type 1 candidate whose vertex participates in an existing
+triple-point triangle, or whose approaching VPs belong to one. It is wired in
+`MigrationOrchestrator` (`migration_orchestrator.py`, passing
+`steiner_handler=self.steiner_handler`) and documented in CLAUDE.md's "Migration
+Types" section. The investigation below is retained as the record of *why* the
+guard exists; note that the legacy `Type1ComponentAnalyzer` it references has
+since been **removed** from the codebase. The "What's missing", "Recommended
+Implementation", and "Status" sections below describe the pre-fix state and are
+superseded by this note.
+
 ## Context
 
 A Type 1 migration is a 2-cell operation: a mesh vertex transitions from its
@@ -116,19 +131,20 @@ adapted for the trigger-based detection model.
 
 | File | Role |
 |------|------|
-| `src/migration/migration_detector.py` | Type 1 detection (missing guard) |
-| `src/migration/type1_component_analyzer.py` | Legacy detection (has guard, lines 172-211) |
-| `src/migration/migration_orchestrator.py` | Orchestrator (calls detector without exclusion) |
+| `src/migration/migration_detector.py` | Type 1 detection — **now has the triple-point guard** (`detect_type1_triggers(steiner_handler=…)`) |
+| `src/migration/migration_orchestrator.py` | Orchestrator — passes `steiner_handler` into the detector |
 | `testing/test_type1_triple_point_overlap.py` | Diagnostic script created for this investigation |
+
+(The legacy `src/migration/type1_component_analyzer.py`, which originally carried
+the guard, has been removed.)
 
 ## Status
 
-- **Diagnostic complete**: confirmed >3 VP triggers are NOT at triple points
-  for this particular run.
-- **Safety guard not yet ported**: the new orchestrator path lacks the
-  triple-point exclusion from the legacy analyzer.
-- **No immediate crash risk**: the 4-5 VP triggers are valid 2-cell
-  migrations on high-valence marching cubes vertices.
-- **Latent risk remains**: without the guard, a future partition state where
-  a vertex IS part of a triple-point triangle could be incorrectly handled
-  as a Type 1 migration.
+- **RESOLVED** (see the Resolution note at the top): the triple-point exclusion
+  guard is implemented in `detect_type1_triggers(steiner_handler=…)` and wired in
+  the orchestrator.
+- **Diagnostic complete**: confirmed the >3 VP triggers were NOT at triple points
+  for this run — they are valid 2-cell migrations on high-valence marching-cubes
+  vertices.
+- The latent risk the guard protects against — a vertex that IS part of a
+  triple-point triangle being handled as a Type 1 migration — is now guarded.

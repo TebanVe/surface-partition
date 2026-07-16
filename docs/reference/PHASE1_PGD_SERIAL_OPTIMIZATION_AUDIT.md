@@ -9,7 +9,7 @@ were subsequently implemented (Changes A/B/C; see "Implementation outcome" below
 the driving plan was retired on completion and this document is now the record.
 Findings are grounded in the empirical timing breakdown
 (`docs/math/04-phase1-timing-profile/`,
-`docs/plans/PHASE1_RELAXATION_TIMING_PROFILE.md`) and corroborated against a live
+`docs/reference/PHASE1_RELAXATION_TIMING_PROFILE.md`) and corroborated against a live
 N=50 run. Line numbers are as of the audit; locate by surrounding context if they
 have drifted.
 
@@ -328,7 +328,7 @@ and Change C end-to-end (`< 1e-12`). This is the gate encoded in Test 14.
   (the driving plan `PHASE1_PGD_SERIAL_OPTIMIZATIONS_PLAN.md` was retired on
   completion). Validation harness: `testing/validate_pgd_optimizations.py`.
 - Empirical timing basis:
-  `docs/plans/PHASE1_RELAXATION_TIMING_PROFILE.md`,
+  `docs/reference/PHASE1_RELAXATION_TIMING_PROFILE.md`,
   `docs/math/04-phase1-timing-profile/`
 - Code: `src/optimization/projection.py`, `src/optimization/pgd_optimizer.py`,
   `src/mesh/tri_mesh.py`, `src/pipeline/relaxation.py`

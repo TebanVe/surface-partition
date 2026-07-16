@@ -514,8 +514,12 @@ install is unaffected.
   warm-start), `docs/reference/winner_take_all_partition_gap.md` (dormant &
   runt cells — the discrete-area validity wall the §6 gates now enforce),
   `docs/reference/SCALABILITY_ANALYSIS.md`
-- Plans: `docs/plans/PHASE1_SEEDED_INITIALIZATION_PLAN.md` (seeded init the
-  sparse representation depends on)
+- Seeded init (the level-0 initializer the sparse representation depends on) is
+  now IMPLEMENTED — `src/optimization/initialization.py`
+  (`create_seeded_initial_condition`), `init_method` in `src/pipeline/relaxation.py`;
+  see CLAUDE.md "Phase 1 Initial Condition (`init_method`)" and
+  `docs/reference/winner_take_all_partition_gap.md`. (The former
+  `PHASE1_SEEDED_INITIALIZATION_PLAN.md` was deleted once implemented.)
 - Code: `src/optimization/pgd_optimizer.py`, `src/optimization/projection.py`,
   `src/pipeline/relaxation.py`, `src/profiling.py`,
   `testing/validate_pgd_optimizations.py` (gate harness), `cluster/pelle_config.sh`

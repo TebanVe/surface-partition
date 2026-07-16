@@ -197,8 +197,9 @@ lives there.
 ## Related documents, code, and references
 
 - Reference: `docs/reference/winner_take_all_partition_gap.md` (the high-N "runt"
-  failure — now **resolved** on the corrected energy with moderate λ; its earlier
-  measurements were taken under these distorted dynamics).
+  failure — resolved for N ≤ 200 on the corrected energy with moderate λ; its §9
+  covers the N=150–300 scaling behavior, including the λ working-window/ceiling and
+  the seed lottery. Its earlier measurements were taken under these distorted dynamics).
 - Experiment: `docs/experiments/02-corrected-energy-highn-validation/` (the N=30/N=100
   head-to-head validating the fix: runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap).
 - Math: `docs/math/06-phase1-energy-discretization/` (the formal derivation of the
