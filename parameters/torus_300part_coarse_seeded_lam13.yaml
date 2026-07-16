@@ -1,0 +1,88 @@
+# N=300 relaxation, lambda=13.0 -- "slightly larger lambda" 3-level test.
+# Branch: fix/phase1-energy-discretization. Identical to
+# torus_300part_coarse_seeded.yaml except lambda_penalty (12 -> 13). Same seed,
+# same 3 levels, so any change is attributable to lambda alone. Cheap dev-machine
+# probe BEFORE committing to the expensive levels 4-5.
+#
+# CONTEXT: lambda has a working WINDOW at N=300.
+#   lambda=12: relaxation ran properly (min peak 0.979, L2 ran 7677 iters) but
+#              left 9 cells over the 5% area gate (worst cell 299 at -34.9%).
+#   lambda=15: OVER the ceiling -- triggers misfired, PGD never crisped (min peak
+#              0.71, 234/300 imbalanced, mush).
+# So the ceiling is in (12,15). 13 = +1 over the working value, ~2 below the
+# broken 15: a modest bump with margin.
+#
+# EXPECTATION (be realistic): the 9 imbalanced cells are a MIX --
+#   - discretization ARTIFACTS (cells 299/195/275/281: many wins, crisp): these
+#     need RESOLUTION (levels 4-5), lambda will NOT move them.
+#   - a genuine RUNT (cell 290: few wins): lambda may help this one modestly.
+# At N=200, raising lambda helped runts only a little (the SEED was the real fix),
+# so expect a small effect here, not a rescue.
+#
+# WATCH ON THIS RUN (confirm still inside the window, not over the ceiling):
+#   - min peak density should stay ~0.98+ (0.71 = mush = too high).
+#   - the finer levels should run THOUSANDS of iterations, not tens (L2 fired at
+#     iter 100 at lambda=15; ~7677 at lambda=12). If L2 fires in the low hundreds
+#     and peak drops, 13 is already too high -- back off to 12.
+
+experiment:
+  name: torus-300-coarse-seeded-lam13
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 13.0                 # +1 over the working 12; ~2 below the broken 15 (see header)
+  seed: 61803399                       # UNCHANGED -- isolate lambda
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000
+  refinement_levels: 3                # 3-level probe; resume winner to 5 only if this clearly improves
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

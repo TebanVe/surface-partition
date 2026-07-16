@@ -39,7 +39,7 @@ experiment:
 
 relaxation:
   n_partitions: 300
-  lambda_penalty: 15.0                 # estimated for N=300 (see header); raise only after ruling out seed
+  lambda_penalty: 12.0                 # lambda has a CEILING: at 15 the penalty dominated and the refinement triggers misfired (L1/L2 fired at iter 57/100 vs ~12k/3k at N=200 lam=11), so PGD never crisped (min peak 0.71, 234/300 imbalanced). 12 = just above the proven N=200 value (11), below the broken 15. If still mushy (peak<0.9), drop to 11 or loosen refine_gnorm_delta/patience.
   seed: 61803399                       # track record at N=200; seed is a lottery at each new N
   init_method: seeded                 # mandatory at high N
   max_iter: 30000                      # if L0 caps without settling, raise
