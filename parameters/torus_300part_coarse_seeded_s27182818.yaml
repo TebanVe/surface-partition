@@ -1,0 +1,90 @@
+# N=300 relaxation, DIFFERENT SEED (27182818) -- seed-sensitivity test.
+# Branch merged to main. Identical to torus_300part_coarse_seeded.yaml except the
+# seed (61803399 -> 27182818). lambda is held at 12 ON PURPOSE.
+#
+# WHY THE SEED, NOT LAMBDA: lambda is maxed out at N=300 -- 12 relaxes properly,
+# 13+ overshoots the ceiling and collapses to mush (premature refinement triggers,
+# min peak ~0.73). And lowering lambda is the wrong direction (the imbalance is not
+# a crispness deficit -- the cells are crisp). So the remaining lever for the runt
+# is the SEED, exactly as at N=200 (where a seed change, not lambda, gave the first
+# clean run).
+#
+# WHAT WE'RE TRYING TO MOVE: at seed 61803399, lambda=12 left 9 cells over the 5%
+# area gate -- a MIX of (a) discretization artifacts in fine-triangle regions
+# (cells 299/195/275/281, worst 299 at -34.9%; these also need levels 4-5) and
+# (b) one genuine runt (cell 290, few wins). A different seed may place cells so
+# that none land in such extreme fine-triangle spots AND avoid the runt.
+# HONEST EXPECTATION: seed is a lottery; this may or may not be better, and even a
+# good seed likely still needs resolution (levels 4-5) to clear the artifact cells.
+#
+# lambda = 12, base 100x96 mesh UNCHANGED, 3-level Step-1 probe.
+#
+# WATCH (in this order):
+#   1. min peak density ~0.98+ and finer levels running THOUSANDS of iters
+#      (confirms lambda=12 still relaxes cleanly with this seed; a fast <2h run
+#      with peak ~0.7 would mean mush -- unlikely at 12, but check).
+#   2. n_imbalanced and the worst-cell deviation vs the 61803399 baseline (9 cells,
+#      worst -34.9%). Fewer / shallower = the seed helped.
+# If clearly better, resume THIS run to 5 levels via --resume-from.
+
+experiment:
+  name: torus-300-coarse-seeded-s27182818
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 12.0                 # working value (at the ceiling); do NOT change -- the seed is the variable
+  seed: 27182818                       # NEW independent draw (was 61803399)
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000
+  refinement_levels: 3                # Step-1 probe; resume winner to 5 via --resume-from
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
