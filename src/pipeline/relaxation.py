@@ -87,6 +87,8 @@ class RelaxationConfig:
     wta_trim_period: int = 200
     wta_trim_damping: float = 0.5
     wta_trim_clamp: float = 0.20
+    pgd_reduced_gradient: bool = False
+    pgd_dual_sweeps: int = 8
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -520,6 +522,8 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         wta_trim_period=int(config.wta_trim_period),
         wta_trim_damping=float(config.wta_trim_damping),
         wta_trim_clamp=float(config.wta_trim_clamp),
+        pgd_reduced_gradient=bool(config.pgd_reduced_gradient),
+        pgd_dual_sweeps=int(config.pgd_dual_sweeps),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):

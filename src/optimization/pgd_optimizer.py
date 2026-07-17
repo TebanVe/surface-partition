@@ -40,6 +40,8 @@ class ProjectedGradientOptimizer:
 		wta_trim_period: int = 200,
 		wta_trim_damping: float = 0.5,
 		wta_trim_clamp: float = 0.20,
+		pgd_reduced_gradient: bool = False,
+		pgd_dual_sweeps: int = 8,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -76,6 +78,15 @@ class ProjectedGradientOptimizer:
 		self.wta_trim_period = int(wta_trim_period)
 		self.wta_trim_damping = float(wta_trim_damping)
 		self.wta_trim_clamp = float(wta_trim_clamp)
+
+		# P2 reduced-gradient step + acceptance + trigger fix
+		# (docs/plans/PHASE1_N1000_VALIDITY_PLAN.md sec. 2.3). The plain PGD
+		# step P(clip(x - s g)) freezes on a non-stationary iterate because g
+		# is mostly bound-infeasible; stepping along the reduced (projected)
+		# gradient g_t restores feasible descent. Default off; when off the
+		# line search and triggers are byte-for-byte the legacy path.
+		self.pgd_reduced_gradient = bool(pgd_reduced_gradient)
+		self.pgd_dual_sweeps = int(pgd_dual_sweeps)
 		
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
@@ -148,6 +159,48 @@ class ProjectedGradientOptimizer:
 			f"d range [{d_new.min() / Abar:.3f}, {d_new.max() / Abar:.3f}] x Abar"
 		)
 		return d_new
+
+	def _reduced_gradient(self, x: np.ndarray, g: np.ndarray, sweeps: int,
+	                      alpha0: Optional[np.ndarray] = None,
+	                      beta0: Optional[np.ndarray] = None):
+		"""Project g onto the tangent of the active constraints (free set).
+
+		The reduced gradient is g_t = g - alpha (x) 1^T - v (x) beta^T on the
+		free set (entries NOT pinned at a box bound with outward gradient),
+		zero on the pinned set. The duals alpha in R^V (sum-to-one, one per
+		vertex/row) and beta in R^N (equal-area, one per cell/column) solve
+		the two coupled normal equations
+		  sum_{k free} (g_ik - alpha_i - v_i beta_k)       = 0  (row i)
+		  sum_{i free} v_i (g_ik - alpha_i - v_i beta_k)    = 0  (col k)
+		by `sweeps` Gauss-Seidel block passes (each = two O(V*N) reductions),
+		warm-started from (alpha0, beta0). Returns (g_t, alpha, beta).
+
+		Rationale + measured KKT residual in
+		docs/plans/PHASE1_N1000_VALIDITY_PLAN.md sec. 2.3.
+		"""
+		N = len(self.v)
+		n = self.n_partitions
+		U = x.reshape(N, n)
+		G = g.reshape(N, n)
+		v = self.v
+		# Active-set threshold slightly above the projection's 1e-8 floor:
+		# entries this close to a bound with outward gradient stay pinned.
+		lb, ub = 1e-6, 1.0 - 1e-6
+		pinned = ((U <= lb) & (G > 0.0)) | ((U >= ub) & (G < 0.0))
+		Fm = (~pinned).astype(np.float64)
+		alpha = np.zeros(N) if alpha0 is None else alpha0.copy()
+		beta = np.zeros(n) if beta0 is None else beta0.copy()
+		row_cnt = Fm.sum(axis=1)                       # |F_i|
+		col_vv = (v[:, None] ** 2 * Fm).sum(axis=0)    # sum_i v_i^2 over free
+		row_safe = np.maximum(row_cnt, 1.0)
+		col_safe = np.maximum(col_vv, np.finfo(np.float64).tiny)
+		for _ in range(max(1, sweeps)):
+			num_a = (Fm * (G - v[:, None] * beta[None, :])).sum(axis=1)
+			alpha = np.where(row_cnt > 0, num_a / row_safe, 0.0)
+			num_b = (Fm * v[:, None] * (G - alpha[:, None])).sum(axis=0)
+			beta = np.where(col_vv > 0, num_b / col_safe, 0.0)
+		Gt = (G - alpha[:, None] - v[:, None] * beta[None, :]) * Fm
+		return Gt.reshape(-1), alpha, beta
 
 	def compute_energy(self, x: np.ndarray, return_components: bool = False):
 		"""
@@ -405,6 +458,16 @@ class ProjectedGradientOptimizer:
 			# Accepted-step counter for the discrete-area trim cadence.
 			n_accepted = 0
 
+			# P2 reduced-gradient state: warm-started duals + level-init energy
+			# + one-shot stall warning. Only used when pgd_reduced_gradient.
+			dual_alpha = None
+			dual_beta = None
+			E_level_init = E
+			stall_warned = False
+			if self.pgd_reduced_gradient:
+				self.log.setdefault('accepted', [])
+				self.log.setdefault('gtnorm', [])
+
 			for k in range(maxiter):
 				# `g` holds the gradient at the current x on loop entry
 				# (the initial gradient above, or g_post carried forward below).
@@ -417,14 +480,27 @@ class ProjectedGradientOptimizer:
 				step = min(float(step0), prev_step / backtrack_rho)
 				accepted = False
 				n_backtracks = 0
-				# ||g||^2 is invariant across the line search (audit #8): hoist it.
-				gg = float(np.dot(g, g))
+				# Step direction and its squared norm (the Armijo surrogate).
+				# P2: step along the reduced gradient g_t = P_tangent(g); the
+				# plain gradient is mostly bound-infeasible so P(clip(x - s g))
+				# freezes. Off: g_search is g and dir_sq == ||g||^2, so the
+				# backtracking below is byte-for-byte the legacy path.
+				if self.pgd_reduced_gradient:
+					g_search, dual_alpha, dual_beta = self._reduced_gradient(
+						x, g, self.pgd_dual_sweeps, dual_alpha, dual_beta
+					)
+					dir_sq = float(np.dot(g_search, g_search))
+					gt_norm = float(np.sqrt(dir_sq))
+				else:
+					g_search = g
+					dir_sq = float(np.dot(g, g))
+					gt_norm = None
 				if profile is not None:
 					_t_bt = time.perf_counter()
 				while True:
 					if profile is not None:
 						n_backtracks += 1
-					A_trial = x.reshape(N, n) - step * g.reshape(N, n)
+					A_trial = x.reshape(N, n) - step * g_search.reshape(N, n)
 					A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
 					A_trial = orthogonal_projection_iterative(
 						A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile
@@ -435,8 +511,10 @@ class ProjectedGradientOptimizer:
 					E_trial = self.compute_energy(x_trial)
 					if profile is not None:
 						profile.record('energy', time.perf_counter() - _t_e)
-					# Armijo condition with ||g||^2 surrogate
-					if E_trial <= E - armijo_c * step * gg:
+					# Armijo sufficient decrease against the step direction's
+					# squared norm (prox form E <= E - (c/s)||x+ - x||^2 in the
+					# P2 reduced-gradient regime; ||g||^2 surrogate off).
+					if E_trial <= E - armijo_c * step * dir_sq:
 						accepted = True
 						x = x_trial
 						E = E_trial
@@ -513,6 +591,14 @@ class ProjectedGradientOptimizer:
 				self.log['energy_changes'].append(0.0 if k == 0 else (E - best_E))
 				self.log['gnorm'].append(gnorm_post)
 				self.log['feas'].append(feas_post)
+				if self.pgd_reduced_gradient:
+					# gt_norm is the projected stationarity at the pre-step x
+					# (from g, which equals last iter's g_post); a valid, cheap
+					# stationarity proxy for the trigger below.
+					self.log['accepted'].append(bool(accepted))
+					self.log['gtnorm'].append(
+						gt_norm if gt_norm is not None else gnorm_post
+					)
 				self.prev_x = self.curr_x
 				self.curr_x = x.copy()
 				# Change C: x is not mutated between g_post (above) and the next
@@ -538,27 +624,74 @@ class ProjectedGradientOptimizer:
 				if profile is not None:
 					_t_tc = time.perf_counter()
 				if enable_refinement_triggers and (k + 1 >= self.refine_patience):
-					recent = self.log['energy_changes'][-self.refine_patience:]
-					stable = all(abs(de) < self.refine_delta_energy for de in recent)
-					if stable:
-						if refine_trigger_mode == 'energy':
-							self.logger.info(f"Refinement triggered at iteration {k} (energy criterion)")
-							raise RefinementTriggered()
+					if self.pgd_reduced_gradient:
+						# P2 trigger fix (validity plan sec. 2.3): (i) stationarity
+						# on the PROJECTED gradient ||g_t||, not the mostly
+						# bound-infeasible raw ||g||; (ii) energy-plateau tolerance
+						# relative to the level's cumulative decrease; (iii) "no
+						# accepted step within the patience window" = STALLED, not
+						# converged -- warn and do NOT fire the trigger.
+						recent_acc = self.log['accepted'][-self.refine_patience:]
+						stalled = (len(recent_acc) >= self.refine_patience
+						           and not any(recent_acc))
+						if stalled:
+							if not stall_warned:
+								self.logger.warning(
+									f"PGD STALLED at iteration {k}: no accepted "
+									f"step in the last {self.refine_patience} "
+									f"iterations (||g_t||={gt_norm:.3e}, "
+									f"FEAS={feas_post:.3e}). NOT firing the "
+									f"refinement trigger (this is a stall, not "
+									f"convergence)."
+								)
+								stall_warned = True
 						else:
-							# plateau checks for gnorm and feas
-							gn_ok = (gnorm_post < self.refine_grad_tol)
-							fe_ok = (feas_post < self.refine_constraint_tol)
-							if not gn_ok and len(self.log['gnorm']) >= refine_gnorm_patience:
-								recent_g = self.log['gnorm'][-refine_gnorm_patience:]
-								gn_plateau = all(abs(recent_g[i] - recent_g[i-1]) < refine_gnorm_delta for i in range(1, len(recent_g)))
-								gn_ok = gn_ok or gn_plateau
-							if not fe_ok and len(self.log['feas']) >= refine_feas_patience:
-								recent_f = self.log['feas'][-refine_feas_patience:]
-								fe_plateau = all(abs(recent_f[i] - recent_f[i-1]) < refine_feas_delta for i in range(1, len(recent_f)))
-								fe_ok = fe_ok or fe_plateau
-							if gn_ok and fe_ok:
-								self.logger.info(f"Refinement triggered at iteration {k}")
+							stall_warned = False
+							cum_dec = max(E_level_init - E, self.penalty_eps)
+							recent = self.log['energy_changes'][-self.refine_patience:]
+							stable = all(
+								abs(de) < self.refine_delta_energy * cum_dec
+								for de in recent
+							)
+							if stable:
+								if refine_trigger_mode == 'energy':
+									self.logger.info(f"Refinement triggered at iteration {k} (energy criterion)")
+									raise RefinementTriggered()
+								gt_ok = (gt_norm < self.refine_grad_tol)
+								fe_ok = (feas_post < self.refine_constraint_tol)
+								if not gt_ok and len(self.log['gtnorm']) >= refine_gnorm_patience:
+									recent_gt = self.log['gtnorm'][-refine_gnorm_patience:]
+									gt_plateau = all(abs(recent_gt[i] - recent_gt[i-1]) < refine_gnorm_delta for i in range(1, len(recent_gt)))
+									gt_ok = gt_ok or gt_plateau
+								if not fe_ok and len(self.log['feas']) >= refine_feas_patience:
+									recent_f = self.log['feas'][-refine_feas_patience:]
+									fe_plateau = all(abs(recent_f[i] - recent_f[i-1]) < refine_feas_delta for i in range(1, len(recent_f)))
+									fe_ok = fe_ok or fe_plateau
+								if gt_ok and fe_ok:
+									self.logger.info(f"Refinement triggered at iteration {k} (projected stationarity)")
+									raise RefinementTriggered()
+					else:
+						recent = self.log['energy_changes'][-self.refine_patience:]
+						stable = all(abs(de) < self.refine_delta_energy for de in recent)
+						if stable:
+							if refine_trigger_mode == 'energy':
+								self.logger.info(f"Refinement triggered at iteration {k} (energy criterion)")
 								raise RefinementTriggered()
+							else:
+								# plateau checks for gnorm and feas
+								gn_ok = (gnorm_post < self.refine_grad_tol)
+								fe_ok = (feas_post < self.refine_constraint_tol)
+								if not gn_ok and len(self.log['gnorm']) >= refine_gnorm_patience:
+									recent_g = self.log['gnorm'][-refine_gnorm_patience:]
+									gn_plateau = all(abs(recent_g[i] - recent_g[i-1]) < refine_gnorm_delta for i in range(1, len(recent_g)))
+									gn_ok = gn_ok or gn_plateau
+								if not fe_ok and len(self.log['feas']) >= refine_feas_patience:
+									recent_f = self.log['feas'][-refine_feas_patience:]
+									fe_plateau = all(abs(recent_f[i] - recent_f[i-1]) < refine_feas_delta for i in range(1, len(recent_f)))
+									fe_ok = fe_ok or fe_plateau
+								if gn_ok and fe_ok:
+									self.logger.info(f"Refinement triggered at iteration {k}")
+									raise RefinementTriggered()
 				if profile is not None:
 					profile.record('trigger_check', time.perf_counter() - _t_tc)
 
