@@ -265,6 +265,9 @@ Current entries:
 | `bogosel2023partitions` | Bogosel & Oudet — the foundational paper for Phase 1 and Phase 2 |
 | `wachter2006ipopt` | Wächter & Biegler — IPOPT algorithm |
 | `nocedal2006numerical` | Nocedal & Wright — Numerical Optimization textbook |
+| `modica1977esempio` | Modica & Mortola — the original Γ-convergence example |
+| `braides2002gamma` | Braides — Γ-convergence for Beginners (perturbation stability) |
+| `bertsekas1999nonlinear` | Bertsekas — Nonlinear Programming (gradient projection) |
 | `kuhn1974steiner` | Kuhn — Steiner's problem / Fermat-Torricelli construction |
 
 Add new entries to `shared/references.bib`, not inline in `main.tex`.
@@ -294,5 +297,6 @@ a forward-looking design document.
 | `04-phase1-timing-profile/` | Empirical Phase 1 PGD timing profile; projection bottleneck; line-search thrashing | Complete |
 | `05-phase1-nregion-scaling/` | Empirical wall-time scaling with number of regions; projections to N=50/100/1000 | Complete |
 | `06-phase1-energy-discretization/` | Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty, and all gradients | Complete |
+| `07-phase1-wta-balance/` | Winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration | Complete |
 
 When you create a new document, add a row to this table.
