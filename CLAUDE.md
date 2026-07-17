@@ -169,12 +169,14 @@ testing/
 ├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
 ├── test_white_triangle_fix.py           # Zero-length-boundary rendering-fix smoke test
 ├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
+├── test_wta_balance_gradient_analytical.py  # Phase 1 WTA balance-term gradient vs central FD (Stage 3 gate)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/
 ├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
 ├── torus_30part.yaml             # Torus, 30 partitions (parametric mesh; seeded init)
 ├── torus_50part.yaml             # Torus, 50 partitions (parametric mesh; seeded init, 6 levels)
+├── torus_200part_coarse_seeded_lam9_territory_test.yaml  # Stage 6 confirming experiment: N=200 λ=9 bad-seed control + territory-aware flags on (WTA balance + trim + reduced gradient)
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
 ├── double_torus_10part.yaml      # Double torus, 10 partitions (implicit / marching cubes)
 └── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions (implicit / marching cubes)
@@ -220,7 +222,8 @@ docs/math/
 ├── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
 ├── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ├── 05-phase1-nregion-scaling/  ← empirical wall-time scaling with number of regions
-└── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
+├── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
+└── 07-phase1-wta-balance/  ← Phase 1 winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
@@ -400,7 +403,7 @@ the Phase 1 breakdown).
 | `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
 | `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
 | `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
-| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. |
+| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. **Territory-aware additions (all flag-gated, default OFF; zero overhead when off):** (1) a **WTA balance term** `P_bal = (γ/2)·Σ_k r_k²`, `r_k = (T_k−Ā)/Ā`, soft territory `T_k = Σ_i v_i·u_ik^p/S_i` (`wta_balance_enabled`/`wta_balance_gamma`/`wta_balance_power`, default p=2, calibrated γ=7.0); (2) a **discrete-area trim** `_apply_wta_trim` retargeting the projection's per-cell targets `d` toward exact discrete (argmax) equality every `wta_trim_period` accepted iters (`wta_trim_enabled`/`_period`/`_damping`/`_clamp`); (3) a **P2 reduced-gradient step + acceptance + trigger fix** `_reduced_gradient` (`pgd_reduced_gradient`/`pgd_dual_sweeps`) that steps along the projected gradient `g_t` and classifies a stalled line search as STALLED (not converged). Derivation: `docs/math/07-phase1-wta-balance/`; rationale/diagnosis: `docs/plans/PHASE1_N1000_VALIDITY_PLAN.md`; FD gate: `testing/test_wta_balance_gradient_analytical.py`. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |
@@ -413,7 +416,7 @@ the Phase 1 breakdown).
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
-| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. |
+| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. Territory-aware flags (all default OFF, byte-for-byte backward compatible): `wta_balance_enabled`/`wta_balance_gamma`/`wta_balance_power`, `wta_trim_enabled`/`wta_trim_period`/`wta_trim_damping`/`wta_trim_clamp`, `pgd_reduced_gradient`/`pgd_dual_sweeps` — see the `ProjectedGradientOptimizer` row. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
@@ -500,6 +503,45 @@ Then: add the provider to `src/surfaces/__init__.py`, add a branch in `scripts/f
 ### Modifying the PGD Energy
 
 Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.compute_gradient()`. The penalty term is modular — controlled by `penalty_target_mode` and `lambda_penalty`.
+
+### Territory-Aware Relaxation (WTA balance + trim + reduced gradient)
+
+Three independently flag-gated additions target the high-N winner-take-all
+validity gap (diffuse "runt" cells whose argmax territory is far from equal
+even though the continuous mass is pinned). All default OFF and add zero
+overhead when off (guarded by `if self.wta_balance_enabled:` etc.); existing
+configs are byte-for-byte unchanged (verified against `main`).
+
+- **WTA balance term** (`wta_balance_enabled`, `wta_balance_gamma`,
+  `wta_balance_power`). Adds `P_bal = (γ/2)·Σ_k r_k²` to the energy with a soft
+  argmax-surrogate territory `T_k = Σ_i v_i·u_ik^p/S_i`, `S_i = Σ_l u_il^p`,
+  `r_k = (T_k−Ā)/Ā`, default `p=2`. Its gradient
+  `(γp/Ā)·v_i·(u_ik^(p-1)/S_i)·(r_k−m_i)`, `m_i = Σ_l r_l w_il`, is analytical,
+  O(V·N), and vanishes at balance and at crisp interiors (moves fences, not
+  interiors). `γ` is calibrated **once** (=7.0; not per-N) —
+  `scripts/debug_archive/calibrate_wta_gamma.py`. Derivation + proofs in
+  `docs/math/07-phase1-wta-balance/`.
+- **Discrete-area trim** (`wta_trim_enabled`, `wta_trim_period`,
+  `wta_trim_damping`, `wta_trim_clamp`). `_apply_wta_trim` retargets the
+  projection's per-cell area targets `d` toward exact discrete (argmax)
+  equality every `period` accepted iterations via a damped, clamped controller
+  (reuses `detect_area_imbalance`; `d` reset to Ā·1 per level — structural,
+  since each level builds a fresh `optimize()`). Fixed point = exact discrete
+  equality `T_wta = Ā`.
+- **P2 reduced-gradient/trigger fix** (`pgd_reduced_gradient`,
+  `pgd_dual_sweeps`). `_reduced_gradient` projects `g` onto the tangent of the
+  active constraints on the free set (`g_t = g − α⊗1 − v⊗βᵀ`, duals by
+  warm-started Gauss–Seidel); the line search steps along `g_t` (Armijo vs
+  `‖g_t‖²`) instead of the mostly bound-infeasible `g`, the triggers use `‖g_t‖`
+  stationarity relative to the level's cumulative decrease, and a stalled line
+  search is logged as **STALLED** rather than mis-fired as convergence. This is
+  the enabling prerequisite for the balance term; P2 alone does **not** fix
+  validity (`docs/plans/PHASE1_N1000_VALIDITY_PLAN.md` §2.4).
+
+FD correctness gate (mandatory before any run):
+`python testing/test_wta_balance_gradient_analytical.py` (< 1e-6). Stage 6
+confirming experiment config:
+`parameters/torus_200part_coarse_seeded_lam9_territory_test.yaml`.
 
 ### Phase 1 Initial Condition (`init_method`)
 

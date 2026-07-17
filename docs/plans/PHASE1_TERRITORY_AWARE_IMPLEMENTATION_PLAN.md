@@ -3,7 +3,10 @@
 **A winner-take-all (WTA) balance energy term + a discrete-area trim + a projected-gradient
 optimizer fix, to close the high-N validity gap and scale toward N≈1000.**
 
-**Status:** SPECIFICATION — ready to implement. Not started.
+**Status:** IN PROGRESS — Stages 0–5 implemented and verified on
+`feat/phase1-territory-aware-relaxation`; Stage 6 (the expensive confirming
+experiment) is prepared but **not run** (awaiting human dispatch). See the
+progress log below the definition-of-done in §10.
 **Target branch:** `feat/phase1-territory-aware-relaxation` (this document lives on it).
 **Audience:** an implementing agent with NO prior conversation context. This document is
 self-contained for implementation; where it says "read", read before writing code.
@@ -328,15 +331,47 @@ N=250/500/1000 ladder under the §5 mesh budget; write `docs/experiments/03-…`
 
 ## 10. Definition of done
 
-- [ ] Stage 0 numbers reported (frozen-optimizer + identity verified).
-- [ ] `docs/math/07-…/main.pdf` built; (2.1)–(2.8) derived; six properties proven; `p=2` and `γ`
+- [x] Stage 0 numbers reported (frozen-optimizer + identity verified).
+- [x] `docs/math/07-…/main.pdf` built; (2.1)–(2.8) derived; six properties proven; `p=2` and `γ`
       justified; Γ-consistency stated.
-- [ ] WTA term + gradient implemented, vectorized, flag-gated; **FD test passes < 1e-6**.
-- [ ] Trim implemented, flag-gated, reusing `detect_area_imbalance`, `d` reset per level.
-- [ ] P2 implemented, flag-gated; N=50 regression passes; P2-alone confirmed non-sufficient.
-- [ ] Backward-compat: flags-off run identical to `main`.
+- [x] WTA term + gradient implemented, vectorized, flag-gated; **FD test passes < 1e-6**.
+- [x] Trim implemented, flag-gated, reusing `detect_area_imbalance`, `d` reset per level.
+- [x] P2 implemented, flag-gated; N=50 regression passes; P2-alone confirmed non-sufficient.
+- [x] Backward-compat: flags-off run identical to `main`.
 - [ ] Stage 6 experiment run; result (confirm/refute) recorded in `docs/experiments/03-…`.
-- [ ] `CLAUDE.md` + affected `docs/` updated per the sync rule.
+      **(prepared, not run — awaits human dispatch)**
+- [x] `CLAUDE.md` + affected `docs/` updated per the sync rule.
+
+### Progress log (as implemented on `feat/phase1-territory-aware-relaxation`)
+
+- **Stage 0** (`scripts/debug_archive/stage0_territory_verification.py`), on
+  `run_20260714_224821` (N=300, λ=12, seed 61803399, V=47,488, ε=0.0158):
+  accounting identity `T_k−Ā = gain_k−lost_k` max error 1.0e-10 (= the
+  mass-pinning residual); corr(rel dev, lost fraction) = −0.936; lost-paint
+  12.4%±3.2% (8.6–45.5%); worst cell −34.95%, `n_imbalanced` 9. Frozen
+  optimizer: ‖g‖ 32.49, reduced-gradient KKT residual ‖g_t‖ 19.88 (61.2%
+  feasible descent), 97.6% entries bound-pinned; projection non-idempotency on
+  the clipped feasible iterate ‖P−x‖₂ 3.6e-4 costing +9.24e-3 energy. 40-step
+  tangential descent recovered −70.4 energy but moved only 74/47,488 winners
+  and left `n_imbalanced` 9 ⇒ P2 alone insufficient. All numbers reproduce the
+  validity plan §2.1/2.3/2.4.
+- **Stage 1**: `docs/math/07-phase1-wta-balance/main.pdf` (builds clean).
+- **Stages 2–3**: term + gradient in `pgd_optimizer.py`, flag-gated;
+  `testing/test_wta_balance_gradient_analytical.py` PASS — worst rel err 3.2e-8
+  (isolated p=2), 1.6e-7 (p=3); exactly zero at `U≡1/N`; flag-off bit-identity.
+- **Stage 4**: `_apply_wta_trim`; smoke (torus 24×16, N=4, 120 iters, same x0)
+  flags-off worst discrete dev 12.33% (2 imbalanced) → balance+trim 1.25% (0).
+- **Stage 5**: `_reduced_gradient` + acceptance + trigger fix, flag-gated.
+  `validate_pgd_optimizations --equivalence` PASS; backward-compat vs `main`
+  (git worktree, 960-vertex torus, N=6, 400 iters, legacy path) x_opt
+  bit-identical (max|dx| 0.0, identical energy); ‖g_t‖ ≤ ‖g‖; reduced gradient
+  is a descent direction.
+- **γ calibration** (`scripts/debug_archive/calibrate_wta_gamma.py`): band
+  (u_win<0.9) = 18,974 vertices (40%); per-unit-γ 5%-deficit force ratio median
+  1.453e-2 ⇒ **γ = 7.0** (10.2% median band ratio). Not retuned per N.
+- **Stage 6 config**: `parameters/torus_200part_coarse_seeded_lam9_territory_test.yaml`
+  (N=200, λ=9, seed 84172851, 3 levels; WTA balance + trim + reduced gradient
+  on, γ=7.0). Ready; NOT run.
 
 ---
 

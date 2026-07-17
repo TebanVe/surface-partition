@@ -1,0 +1,110 @@
+# ============================================================================
+# STAGE 6 CONFIRMING EXPERIMENT -- territory-aware Phase 1 relaxation.
+# docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md sec. 9.
+#
+# DO NOT auto-dispatch: this is an expensive production relaxation (~6-15 h CPU
+# against a known-failed control). A human reviews before running.
+#
+# WHAT THIS TESTS. Re-run the KNOWN-FAILING N=200 configuration and change ONLY
+# the new territory-aware flags. Base = parameters/torus_200part_coarse_seeded_lam9.yaml
+# (lambda=9.0, seed 84172851, 3 levels) -- reproduces run_20260712_224424:
+# TWO entrenched runts at -34% / -38% discrete-area deviation, immune to raising
+# lambda 7 -> 9 (that run's whole point). SAME seed, SAME lambda, SAME mesh, SAME
+# levels here on purpose, so any change is attributable to the mechanism alone.
+#
+# ENABLED (the only differences from the lam9 control):
+#   wta_balance_enabled: true, gamma = 7.0  (calibrated ONCE at N=300, band probe
+#       median force ratio 10.2%; docs/math/07-phase1-wta-balance sec. 7. At N=200
+#       on this finest mesh the band ratio is ~6.8%, still inside the 5-15% window
+#       -- NOT retuned per N by design).
+#   wta_trim_enabled: true    (fixed point = exact discrete equality T_wta = Abar)
+#   pgd_reduced_gradient: true (unfreezes the line search so retargeted fronts can
+#       actually relax; P2 is the enabling prerequisite for P1).
+#
+# SUCCESS = detect_area_imbalance reports n_imbalanced: 0 (worst < 5%) WITHOUT
+#   touching seed or lambda -- the anti-lottery property N=1000 needs (the
+#   mechanism rescues the entrenched-runt failure on a BAD seed).
+# REFUTE = runts persist above the gate => fall back to P2+P3 and the
+#   hard-constraint (augmented-Lagrangian territory-equality) variant.
+#
+# READOUT (solution/metadata.yaml + banners):
+#   - area_imbalance: n_imbalanced -> 0, worst_rel_dev < 0.05 (was -34/-38%).
+#   - dormant_cells: dead/weak empty (as in the lam9 control).
+#   - watch the WTA-trim log lines (worst discrete dev per 200 accepted iters)
+#     and any "PGD STALLED" warnings (P2 stall guard; should not appear).
+# ON SUCCESS: N=300 A/B vs run_20260714_224821 (predict 9 -> <=1 over gate),
+#   then the N=250/500/1000 ladder; write docs/experiments/03-...
+# ============================================================================
+
+experiment:
+  name: torus-200-coarse-seeded-lam9-territory-test
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 9.0                 # UNCHANGED from the failed control
+  seed: 84172851                      # UNCHANGED -- the BAD seed with 2 entrenched runts
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000
+  refinement_levels: 3                # UNCHANGED (Step-1 validity check)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  # --- Territory-aware additions (the ONLY changes vs the lam9 control) ---
+  wta_balance_enabled: true           # WTA soft-territory balance penalty (P1)
+  wta_balance_gamma: 7.0              # calibrated once; NOT retuned per N
+  wta_balance_power: 2.0             # p=2 (docs/math/07-phase1-wta-balance)
+  wta_trim_enabled: true             # discrete-area trim: exact discrete equality
+  wta_trim_period: 200               # every 200 accepted iters
+  wta_trim_damping: 0.5
+  wta_trim_clamp: 0.20               # targets clamped to Abar +/- 20%
+  pgd_reduced_gradient: true         # P2: unfreeze the line search (prerequisite)
+  pgd_dual_sweeps: 8                 # Gauss-Seidel dual sweeps per step
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # UNCHANGED; levels: 100x96, 162x154, 224x212
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
