@@ -65,7 +65,7 @@ relaxation:
   pgd_armijo_c: 0.0001
   pgd_backtrack_rho: 0.5
   pgd_projection_max_iter: 300
-  pgd_projection_tol: 1.0e-9
+  pgd_projection_tol: 1.0e-8       # 1e-9 sits at the iterative-projection floor here (sum-to-one residual bottoms at ~1e-9 -> harmless 'stalled' warnings, same as N=300); 1e-8 converges cleanly, still ~6 orders tighter than the 5% area gate
 
   enable_refinement_triggers: true
   refine_trigger_mode: full
