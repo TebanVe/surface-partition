@@ -33,6 +33,9 @@ class ProjectedGradientOptimizer:
 		refine_delta_energy: float = 1e-4,
 		refine_grad_tol: float = 1e-2,
 		refine_constraint_tol: float = 1e-2,
+		wta_balance_enabled: bool = False,
+		wta_balance_gamma: float = 0.0,
+		wta_balance_power: float = 2.0,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -50,6 +53,13 @@ class ProjectedGradientOptimizer:
 		self.mu_target = 1.0 / self.n_partitions
 		self.penalty_target_mode = 'fixed'  # or 'adaptive'
 		self.penalty_eps = 1e-8
+
+		# WTA balance term (docs/math/07-phase1-wta-balance): soft-territory
+		# penalty P_bal = (gamma/2) sum_k r_k^2, r_k = (T_k - Abar)/Abar with
+		# T_k = sum_i v_i u_ik^p / S_i. Default off; zero overhead when off.
+		self.wta_balance_enabled = bool(wta_balance_enabled)
+		self.wta_balance_gamma = float(wta_balance_gamma)
+		self.wta_balance_power = float(wta_balance_power)
 		
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
@@ -67,6 +77,30 @@ class ProjectedGradientOptimizer:
 		}
 		self.prev_x = None
 		self.curr_x = None
+
+	def _wta_soft_territory(self, phi: np.ndarray):
+		"""Soft-territory quantities for the WTA balance term.
+
+		Args:
+			phi: (V, n) density matrix (vertices x cells).
+
+		Returns:
+			(S, W_soft, r): the per-vertex normalizer S_i = sum_l u_il^p
+			(guarded away from 0), the (V, n) soft weights W_soft = u^p / S,
+			and the (n,) relative territory deviations
+			r_k = (T_k - target_area)/target_area with T_k = v @ W_soft[:, k].
+
+		On the feasible set S_i in [n^(1-p), 1] (rows on the simplex), so the
+		guard is defensive only: the gradient may be evaluated on
+		pre-projection iterates. Fully vectorized, O(V*n).
+		"""
+		p = self.wta_balance_power
+		Up = phi ** p
+		S = np.maximum(Up.sum(axis=1), np.finfo(np.float64).tiny)
+		W_soft = Up / S[:, None]
+		T = W_soft.T @ self.v
+		r = (T - self.target_area) / self.target_area
+		return S, W_soft, r
 
 	def compute_energy(self, x: np.ndarray, return_components: bool = False):
 		"""
@@ -114,15 +148,23 @@ class ProjectedGradientOptimizer:
 				penalty_term = self.lambda_penalty * (1.0 - var_w / T_eff)
 				total_penalty += penalty_term
 		
-		total_energy = total_grad + total_interface + total_penalty
-		
+		total_wta_balance = 0.0
+		if self.wta_balance_enabled:
+			_, _, r = self._wta_soft_territory(phi)
+			total_wta_balance = 0.5 * self.wta_balance_gamma * float(r @ r)
+
+		total_energy = total_grad + total_interface + total_penalty + total_wta_balance
+
 		if return_components:
-			return {
+			components = {
 				'total': total_energy,
 				'grad': total_grad,
 				'interface': total_interface,
 				'penalty': total_penalty
 			}
+			if self.wta_balance_enabled:
+				components['wta_balance'] = total_wta_balance
+			return components
 		else:
 			return total_energy
 
@@ -162,6 +204,18 @@ class ProjectedGradientOptimizer:
 				else:
 					# Fixed target gradient: -lambda * (1/T) * grad_var
 					G[:, i] += -self.lambda_penalty * (grad_var / T_eff)
+		if self.wta_balance_enabled:
+			# dP_bal/du_ik = (gamma*p/Abar) v_i (u_ik^(p-1)/S_i) (r_k - m_i),
+			# m_i = sum_l r_l w_il (docs/math/07-phase1-wta-balance eq. 2.7).
+			p = self.wta_balance_power
+			S, W_soft, r = self._wta_soft_territory(phi)
+			m = W_soft @ r
+			G += (
+				(self.wta_balance_gamma * p / self.target_area)
+				* self.v[:, None]
+				* (phi ** (p - 1) / S[:, None])
+				* (r[None, :] - m[:, None])
+			)
 		return g
 
 	def constraint_fun(self, x: np.ndarray) -> np.ndarray:
@@ -190,6 +244,8 @@ class ProjectedGradientOptimizer:
 			grp.create_dataset('energy_grad', data=energy_components['grad'])
 			grp.create_dataset('energy_interface', data=energy_components['interface'])
 			grp.create_dataset('energy_penalty', data=energy_components['penalty'])
+			if 'wta_balance' in energy_components:
+				grp.create_dataset('energy_wta_balance', data=energy_components['wta_balance'])
 
 	def _append_summary_line(self, fh, k: int, f: float, gnorm: float, cnorm: float, feas: float, step: float):
 		# Columns (9 tokens): MAJOR-idx, NFEV, NGEV, OBJFUN, GNORM, CNORM, FEAS, OPT, STEP (OPT dummy 0)

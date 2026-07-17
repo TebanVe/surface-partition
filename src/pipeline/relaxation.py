@@ -78,6 +78,12 @@ class RelaxationConfig:
     profile: bool = False
     init_method: str = 'random'
 
+    # Territory-aware relaxation (docs/math/07-phase1-wta-balance).
+    # All defaulted OFF so existing configs are byte-for-byte unchanged.
+    wta_balance_enabled: bool = False
+    wta_balance_gamma: float = 0.0
+    wta_balance_power: float = 2.0
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -503,6 +509,9 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
+        wta_balance_enabled=bool(config.wta_balance_enabled),
+        wta_balance_gamma=float(config.wta_balance_gamma),
+        wta_balance_power=float(config.wta_balance_power),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):
