@@ -36,6 +36,10 @@ class ProjectedGradientOptimizer:
 		wta_balance_enabled: bool = False,
 		wta_balance_gamma: float = 0.0,
 		wta_balance_power: float = 2.0,
+		wta_trim_enabled: bool = False,
+		wta_trim_period: int = 200,
+		wta_trim_damping: float = 0.5,
+		wta_trim_clamp: float = 0.20,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -60,6 +64,18 @@ class ProjectedGradientOptimizer:
 		self.wta_balance_enabled = bool(wta_balance_enabled)
 		self.wta_balance_gamma = float(wta_balance_gamma)
 		self.wta_balance_power = float(wta_balance_power)
+
+		# Discrete-area trim (docs/math/07-phase1-wta-balance sec. 8): every
+		# `period` ACCEPTED iterations, retarget the projection's per-cell
+		# area targets d toward exact discrete (argmax) equality:
+		#   d <- clip(d + damping*(Abar - T_wta), Abar*(1-clamp), Abar*(1+clamp))
+		# then renormalize sum(d) = total_area. d is per-optimize() state, so
+		# the per-level reset (d = Abar*1) is structural: each refinement
+		# level constructs a fresh optimize() call. Default off.
+		self.wta_trim_enabled = bool(wta_trim_enabled)
+		self.wta_trim_period = int(wta_trim_period)
+		self.wta_trim_damping = float(wta_trim_damping)
+		self.wta_trim_clamp = float(wta_trim_clamp)
 		
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
@@ -101,6 +117,37 @@ class ProjectedGradientOptimizer:
 		T = W_soft.T @ self.v
 		r = (T - self.target_area) / self.target_area
 		return S, W_soft, r
+
+	def _apply_wta_trim(self, A: np.ndarray, d: np.ndarray) -> np.ndarray:
+		"""One damped trim update of the projection area targets d.
+
+		Measures the hard winner-take-all territories via the existing argmax
+		machinery (detect_area_imbalance) and moves each target toward the
+		deficit: the update's fixed point (clamp inactive) is exact discrete
+		equality T_wta = Abar, independent of the soft-territory surrogate.
+		Returns the new d; does not mutate A. O(V) + O(n) per call.
+		"""
+		from ..partition.find_contours import detect_area_imbalance
+
+		result = detect_area_imbalance(A, self.v, self.n_partitions)
+		T_wta = np.asarray(result['discrete_areas'], dtype=np.float64)
+		Abar = self.target_area
+		d_new = np.clip(
+			d + self.wta_trim_damping * (Abar - T_wta),
+			Abar * (1.0 - self.wta_trim_clamp),
+			Abar * (1.0 + self.wta_trim_clamp),
+		)
+		# The projection requires a feasible target sum; sum(T_wta) == total
+		# area identically, so this is the identity unless the clamp bites.
+		d_new *= self.total_area / float(np.sum(d_new))
+		self.logger.info(
+			f"WTA trim: worst discrete dev "
+			f"{result['worst_rel_dev'] * 100:.2f}% "
+			f"(cell {result['worst_cell']}, "
+			f"{result['n_imbalanced']} over {result['rel_threshold'] * 100:.0f}%); "
+			f"d range [{d_new.min() / Abar:.3f}, {d_new.max() / Abar:.3f}] x Abar"
+		)
+		return d_new
 
 	def compute_energy(self, x: np.ndarray, return_components: bool = False):
 		"""
@@ -218,13 +265,18 @@ class ProjectedGradientOptimizer:
 			)
 		return g
 
-	def constraint_fun(self, x: np.ndarray) -> np.ndarray:
+	def constraint_fun(self, x: np.ndarray, area_targets: Optional[np.ndarray] = None) -> np.ndarray:
 		N = len(self.v)
 		n = self.n_partitions
 		phi = x.reshape(N, n)
 		row_sums = np.sum(phi, axis=1)[:-1] - 1.0
 		area_sums = self.v @ phi
-		area_constraints = area_sums[:-1] - self.target_area
+		if area_targets is None:
+			area_constraints = area_sums[:-1] - self.target_area
+		else:
+			# Trim-retargeted runs measure feasibility against the active
+			# per-cell targets d, not the nominal Abar.
+			area_constraints = area_sums[:-1] - area_targets[:-1]
 		return np.concatenate([row_sums, area_constraints])
 
 	def _save_iteration_h5(self, h5, k: int, x: np.ndarray, g: np.ndarray, f: float, cvec: np.ndarray, save_vars: List[str], energy_components: Optional[Dict[str, float]] = None):
@@ -350,6 +402,9 @@ class ProjectedGradientOptimizer:
 			# Seeded at step0 so iteration 0 is identical to the hard-reset version.
 			prev_step = float(step0)
 
+			# Accepted-step counter for the discrete-area trim cadence.
+			n_accepted = 0
+
 			for k in range(maxiter):
 				# `g` holds the gradient at the current x on loop entry
 				# (the initial gradient above, or g_post carried forward below).
@@ -397,6 +452,25 @@ class ProjectedGradientOptimizer:
 					profile.add_counter('backtracks_per_iter_total', n_backtracks)
 					profile.add_counter('major_iterations', 1)
 
+				if accepted:
+					n_accepted += 1
+					if (self.wta_trim_enabled
+							and n_accepted % self.wta_trim_period == 0):
+						# Retarget the projection toward exact discrete
+						# equality, re-project the iterate onto the new
+						# targets and re-baseline E so the next Armijo test
+						# compares like with like. g_post below is computed
+						# at the re-projected x, so the gradient-reuse
+						# invariant (Change C) is preserved.
+						d = self._apply_wta_trim(x.reshape(N, n), d)
+						A_ret = orthogonal_projection_iterative(
+							x.reshape(N, n), c, d, self.v,
+							max_iter=projection_max_iter, tol=projection_tol,
+							logger=proj_logger, _prof=profile
+						)
+						x = A_ret.flatten()
+						E = self.compute_energy(x)
+
 				# Recompute gradient and constraints at the accepted iterate (or current if not accepted)
 				if profile is not None:
 					_t_g = time.perf_counter()
@@ -405,7 +479,9 @@ class ProjectedGradientOptimizer:
 					profile.record('gradient', time.perf_counter() - _t_g)
 				if profile is not None:
 					_t_c = time.perf_counter()
-				cvec_post = self.constraint_fun(x)
+				cvec_post = self.constraint_fun(
+					x, area_targets=d if self.wta_trim_enabled else None
+				)
 				if profile is not None:
 					profile.record('constraints', time.perf_counter() - _t_c)
 				gnorm_post = float(np.linalg.norm(g_post))
@@ -493,5 +569,9 @@ class ProjectedGradientOptimizer:
 		self.logger.info(f"  Internal data saved to: {internal_data_filename}")
 		self.logger.info(f"  optimization completed: {elapsed:.3f}s")
 
-		# Return best found
+		# Return best found. With the trim active, energies before and after a
+		# retarget are not comparable (the constraint set changed) and only
+		# the final iterate satisfies the final targets — return it instead.
+		if self.wta_trim_enabled:
+			return x.copy(), True
 		return best_x.copy(), True 

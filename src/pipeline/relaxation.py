@@ -83,6 +83,10 @@ class RelaxationConfig:
     wta_balance_enabled: bool = False
     wta_balance_gamma: float = 0.0
     wta_balance_power: float = 2.0
+    wta_trim_enabled: bool = False
+    wta_trim_period: int = 200
+    wta_trim_damping: float = 0.5
+    wta_trim_clamp: float = 0.20
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -512,6 +516,10 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         wta_balance_enabled=bool(config.wta_balance_enabled),
         wta_balance_gamma=float(config.wta_balance_gamma),
         wta_balance_power=float(config.wta_balance_power),
+        wta_trim_enabled=bool(config.wta_trim_enabled),
+        wta_trim_period=int(config.wta_trim_period),
+        wta_trim_damping=float(config.wta_trim_damping),
+        wta_trim_clamp=float(config.wta_trim_clamp),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):
