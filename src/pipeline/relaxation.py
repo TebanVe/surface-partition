@@ -77,6 +77,7 @@ class RelaxationConfig:
     penalty_eps: float = 1e-8
     profile: bool = False
     init_method: str = 'random'
+    projection_method: str = 'iterative'
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -503,6 +504,7 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
+        projection_method=str(config.projection_method),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):

@@ -10,7 +10,7 @@ import numpy as np
 from ..logging_config import get_logger
 from ..profiling import RelaxationProfilingState
 from .exceptions import RefinementTriggered
-from .projection import orthogonal_projection_iterative
+from .projection import orthogonal_projection_iterative, orthogonal_projection_newton
 
 
 class ProjectedGradientOptimizer:
@@ -33,6 +33,7 @@ class ProjectedGradientOptimizer:
 		refine_delta_energy: float = 1e-4,
 		refine_grad_tol: float = 1e-2,
 		refine_constraint_tol: float = 1e-2,
+		projection_method: str = 'iterative',
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -67,6 +68,33 @@ class ProjectedGradientOptimizer:
 		}
 		self.prev_x = None
 		self.curr_x = None
+		# Constraint-projection backend: 'iterative' (default, byte-identical) or
+		# 'newton' (exact dual projection). _warm_beta threads the area duals
+		# across PGD steps for the newton path.
+		self.projection_method = str(projection_method)
+		self._warm_beta = None
+
+	def _project(self, A, c, d, projection_max_iter, projection_tol,
+		logger, profile, warm_beta, pre_clip):
+		"""Dispatch the per-step constraint projection; returns (A_proj, beta).
+
+		'newton' uses the exact dual projection (docs/math/08-dual-newton-...),
+		warm-started on beta and WITHOUT the pre-clip (it returns feasible
+		entries directly). 'iterative' is byte-identical to the legacy path:
+		optional pre-clip, then the iterative projection (returns beta=None).
+		"""
+		if self.projection_method == 'newton':
+			return orthogonal_projection_newton(
+				A, c, d, self.v, max_iter=projection_max_iter,
+				tol=min(projection_tol, 1e-10), logger=logger, _prof=profile,
+				beta0=warm_beta, return_beta=True,
+			)
+		A_in = np.clip(A, 1e-8, 1 - 1e-8) if pre_clip else A
+		A_proj = orthogonal_projection_iterative(
+			A_in, c, d, self.v, max_iter=projection_max_iter,
+			tol=projection_tol, logger=logger, _prof=profile,
+		)
+		return A_proj, None
 
 	def compute_energy(self, x: np.ndarray, return_components: bool = False):
 		"""
@@ -225,13 +253,19 @@ class ProjectedGradientOptimizer:
 		"""
 		N = len(self.v)
 		n = self.n_partitions
+		self._warm_beta = None  # warm-start duals for the newton projection path
 		if x0 is None:
 			# Random simplex init then project
 			x0 = np.random.rand(N * n)
 			A0 = x0.reshape(N, n)
 			c = np.ones(n)
 			d = (np.sum(self.v) / n) * np.ones(n)
-			A0 = orthogonal_projection_iterative(A0, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=self.logger, _prof=profile)
+			A0, _b = self._project(
+				A0, c, d, projection_max_iter, projection_tol,
+				self.logger, profile, self._warm_beta, pre_clip=False
+			)
+			if _b is not None:
+				self._warm_beta = _b
 			x0 = A0.flatten()
 
 		if results_dir is None:
@@ -251,10 +285,14 @@ class ProjectedGradientOptimizer:
 		proj_logger.setLevel(logging.WARNING)
 
 		A = x0.reshape(N, n).copy()
-		A = np.clip(A, 1e-8, 1 - 1e-8)
 		c = np.ones(n)
 		d = (np.sum(self.v) / n) * np.ones(n)
-		A = orthogonal_projection_iterative(A, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile)
+		A, _b = self._project(
+			A, c, d, projection_max_iter, projection_tol,
+			proj_logger, profile, self._warm_beta, pre_clip=True
+		)
+		if _b is not None:
+			self._warm_beta = _b
 		x = A.flatten()
 
 		E = self.compute_energy(x)
@@ -314,9 +352,9 @@ class ProjectedGradientOptimizer:
 					if profile is not None:
 						n_backtracks += 1
 					A_trial = x.reshape(N, n) - step * g.reshape(N, n)
-					A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
-					A_trial = orthogonal_projection_iterative(
-						A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile
+					A_trial, _b_trial = self._project(
+						A_trial, c, d, projection_max_iter, projection_tol,
+						proj_logger, profile, self._warm_beta, pre_clip=True
 					)
 					x_trial = A_trial.flatten()
 					if profile is not None:
@@ -330,6 +368,8 @@ class ProjectedGradientOptimizer:
 						x = x_trial
 						E = E_trial
 						prev_step = step  # carry the accepted step forward
+						if _b_trial is not None:
+							self._warm_beta = _b_trial
 						break
 					step *= backtrack_rho
 					if step < 1e-12:
