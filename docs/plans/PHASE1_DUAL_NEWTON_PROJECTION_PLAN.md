@@ -95,6 +95,11 @@ against `scipy` trust-constr. Result:
    drop-in. Validate it end-to-end for partition *validity*, keeping `iterative` byte-identical
    as the default.
 
+**Reproducible evidence.** This whole section is documented as a measured study in
+`docs/experiments/03-dual-projection-verification/` (`main.pdf` + `make_figures.py`, seeded
+synthetic inputs — no `results/` run) with the anchors above (gap up to 0.86 / +64% objective;
+KKT residual 1e-15 vs 0.01–1.16; interior-gap mechanism 6e-12).
+
 ---
 
 ## 0. Orientation — read before writing code

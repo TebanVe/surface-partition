@@ -261,7 +261,12 @@ suppresses build artifacts but tracks `main.pdf` + `fig_*.pdf`. Build with
 `01-winner-take-all-partition-gap/` (the high-N runt failure, measured under the
 buggy energy) and `02-corrected-energy-highn-validation/` (its post-fix resolution:
 runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap) — both pair with
-`docs/reference/winner_take_all_partition_gap.md`. See `docs/experiments/README.md`.
+`docs/reference/winner_take_all_partition_gap.md`; and
+`03-dual-projection-verification/` (measured proof that the Phase 1
+`orthogonal_projection_iterative` is **not** the Euclidean projection — gap up to
+0.86 / +64% objective in the crisp regime, KKT residual 1e-15 vs 0.01–1.16;
+evidence base for `docs/plans/PHASE1_DUAL_NEWTON_PROJECTION_PLAN.md`; inputs are
+synthetic/seeded, not a `results/` run). See `docs/experiments/README.md`.
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
 mesh-cleanup tool).
