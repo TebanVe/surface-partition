@@ -2,7 +2,7 @@
 
 **Purpose**: This document tracks all tests implemented for the surface partition project, providing a centralized registry for test status, objectives, results, and maintenance.
 
-**Last Updated**: 2026-06-26 (June 26, 2026) — added Test 14 (Phase 1 PGD serial-optimization validation harness)
+**Last Updated**: 2026-07-19 (July 19, 2026) — added Test 15 (Newton exact-dual projection validation)
 
 ---
 
@@ -796,6 +796,48 @@ mean backtracks/iter 5.15 → 2.74, total wall 2.40x.
 
 ---
 
+### Test 15: Newton (exact dual) projection validation
+
+**Files**: `test_newton_projection_equivalence.py`, `test_newton_projection_pathological.py`
+
+**Status**: ✅ APPROVED   **Created**: 2026-07-19
+
+Validates `orthogonal_projection_newton` (the exact Euclidean projection via the
+concave dual — `docs/math/08-dual-newton-projection`, implementing
+`docs/plans/PHASE1_DUAL_NEWTON_PROJECTION_PLAN.md`). Both are **self-contained**
+(synthetic inputs, torus lumped mass built directly — no `--solution`), using an
+independent **Dykstra** reference as ground truth (the newton method is *not*
+validated against the iterative method, which is not the projection — see
+`docs/experiments/03-dual-projection-verification/`).
+
+`test_newton_projection_equivalence.py` checks: (1) equivalence to the true
+projection across interior/binding/crisp regimes and several V/N (gate
+`max|newton − true| ≤ 1e-8`); (2) feasibility `≤ 1e-10` and idempotency; (3) KKT
+stationarity via the solver's **own** duals (`≤ 1e-9`); (4) finite-difference of
+`∇q = −R` and the Jacobian `J` (symmetric PSD, `J·1 = 0`); (5) that newton is at
+least as close to `Y` as the iterative method (lower `½‖U−Y‖²`). Baseline: worst
+gap `~2e-14`, KKT `~1e-16`, FD `~6e-10`.
+
+`test_newton_projection_pathological.py` exercises the degenerate inputs that break
+a naive dual solver — an empty cell, fully one-hot rows (`J=0`), an **isolated
+crisp cell** (non-empty active column but a zero `J`-row, which the "empty column"
+guard misses — the `J_kk≈0` safeguard case), deficient rows (row-sum `< 1`), and
+breakpoint ties — asserting finite, feasible output equal to Dykstra (no
+`d_k/ε` explosion). Baseline: all cases `gap ≤ 1e-14`, `|β|` finite.
+
+```bash
+python testing/test_newton_projection_equivalence.py
+python testing/test_newton_projection_pathological.py
+```
+
+Each prints per-check `PASS|FAIL`, a `RESULT: PASS|FAIL` line, and exits 0/1.
+
+**Dependencies**:
+- `src/optimization/projection.py` (`orthogonal_projection_newton`,
+  `_project_simplex_rows`), `src/surfaces/torus.py`, `numpy`
+
+---
+
 ## Planned Tests
 
 _This section tracks future tests that need to be implemented. Add new test proposals here._
@@ -817,6 +859,7 @@ For questions about tests or to report issues:
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-07-19 | Added Test 15 (Newton exact-dual projection: equivalence + pathological) | System |
 | 2026-06-26 | Added Test 14 (Phase 1 PGD serial-optimization validation harness) | System |
 | 2026-05-27 | Added Test 13 (triple-point sub-face subdivision smoke test) | System |
 | 2026-05-27 | Added Test 12 (export grid_shape invariant smoke test) | System |
