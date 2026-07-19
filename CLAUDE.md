@@ -220,7 +220,8 @@ docs/math/
 ├── 03-analytical-steiner-derivatives/  ← analytical Steiner first/second derivatives
 ├── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ├── 05-phase1-nregion-scaling/  ← empirical wall-time scaling with number of regions
-└── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
+├── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
+└── 08-dual-newton-projection/  ← Phase 1 exact projection via the concave dual (spec, pre-implementation): QP dual, per-vertex cap-free simplex solve, outer Jacobian J=−∇²q (PSD, J·1=0), L-BFGS/Newton-polish, exactness/idempotency proofs. Source of truth for the planned orthogonal_projection_newton (skips slot 07 per the plan)
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
