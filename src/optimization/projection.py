@@ -3,6 +3,8 @@ import numpy as np
 from typing import Tuple, Optional, Dict, Any
 import logging
 
+from scipy.optimize import minimize
+
 from ..logging_config import get_logger
 
 def orthogonal_projection_iterative(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray,
@@ -303,7 +305,157 @@ def orthogonal_projection_direct(A: np.ndarray, c: np.ndarray, d: np.ndarray, v:
 
     return A
 
-def validate_projection_result(A: np.ndarray, v: np.ndarray, d: np.ndarray, 
+
+def _project_simplex_rows(Z: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Vectorized Euclidean projection of each row of ``Z`` (V x N) onto the
+    probability simplex ``{p : sum(p)=1, p>=0}`` (cap-free; the cap at 1 never
+    binds when the row sums to 1, see docs/math/08-...).
+
+    Returns ``(U, tau)`` where ``U = maximum(Z - tau[:, None], 0)`` has unit row
+    sums and ``tau`` is the per-row threshold, so the row dual is ``alpha = -tau``.
+    Sort/threshold form (Held/Duchi/Condat); O(V*N log N), no Python row loop.
+    """
+    V, N = Z.shape
+    Zs = np.sort(Z, axis=1)[:, ::-1]            # descending
+    css = np.cumsum(Zs, axis=1) - 1.0
+    idx = np.arange(1, N + 1)
+    rho = np.count_nonzero(Zs - css / idx > 0, axis=1)   # >= 1 (target sum 1 > 0)
+    tau = css[np.arange(V), rho - 1] / rho
+    U = np.maximum(Z - tau[:, None], 0.0)
+    return U, tau
+
+
+def orthogonal_projection_newton(A: np.ndarray, c: np.ndarray, d: np.ndarray, v: np.ndarray,
+                                 max_iter: int = 500, tol: float = 1e-10,
+                                 logger: Optional[logging.Logger] = None,
+                                 _prof=None, beta0: Optional[np.ndarray] = None,
+                                 return_beta: bool = False,
+                                 newton_polish: bool = True) -> np.ndarray:
+    """Exact Euclidean projection onto the partition, equal-area, and box
+    constraints, computed via the concave dual (docs/math/08-dual-newton-projection).
+
+    Solves, for candidate ``A = Y`` (V x N):
+        min_U 1/2||U - Y||^2  s.t.  sum_k U[i,k]=1,  sum_i v_i U[i,k]=d_k,  0<=U<=1.
+    The upper box bound is implied by the row constraint with ``U>=0``, so the
+    per-vertex inner solve is a probability-simplex projection. The area duals
+    ``beta`` are found by maximizing the concave partial dual ``q(beta)`` (gradient
+    ``-R``, R the area residual) with L-BFGS-B, optionally polished by a few
+    gauge-fixed semismooth-Newton steps with a zero-J-row safeguard.
+
+    Drop-in with :func:`orthogonal_projection_iterative` (same args/return shape).
+    ``beta0`` warm-starts the dual (thread it across PGD steps); ``return_beta``
+    additionally returns the final ``beta`` for the next warm start.
+
+    Args:
+        A: V x N candidate density matrix ``Y``.
+        c: length-N row-sum targets (assumed ones, as in the iterative method).
+        d: length-N per-cell area targets. Must satisfy ``sum(d) == sum(v)``.
+        v: length-V lumped mass (strictly positive).
+        max_iter: max L-BFGS-B iterations.
+        tol: target max area residual ``|v^T U - d|_inf`` (rows/box are exact).
+        beta0: optional warm-start dual (length N); defaults to zeros.
+        return_beta: if True, return ``(U, beta)`` instead of ``U``.
+        newton_polish: run the Newton polish if L-BFGS leaves area residual > tol.
+
+    Returns:
+        The projected V x N matrix ``U`` (or ``(U, beta)`` if ``return_beta``).
+    """
+    if logger is None:
+        logger = get_logger(__name__)
+    if _prof is not None:
+        t0 = time.perf_counter()
+        _prof.add_counter('projection_invocations', 1)
+
+    Y = np.asarray(A, dtype=float)
+    v = np.asarray(v, dtype=float)
+    d = np.asarray(d, dtype=float)
+    V, N = Y.shape
+    if len(c) != N or len(d) != N or len(v) != V:
+        raise ValueError(f"Dimension mismatch: A({V}x{N}), c({len(c)}), d({len(d)}), v({len(v)})")
+
+    # Consistency of the equality targets (else the QP is infeasible; math doc Remark 2.2).
+    sv = float(v.sum())
+    if abs(float(d.sum()) - sv) > 1e-9 * max(sv, 1.0):
+        raise ValueError(
+            f"Infeasible area targets: sum(d)={d.sum():.6e} != sum(v)={sv:.6e}"
+        )
+
+    def _inner(beta: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        # z_ik = y_ik + v_i beta_k, then project each row onto the simplex.
+        U, tau = _project_simplex_rows(Y + np.outer(v, beta))
+        return U, tau
+
+    def _neg_q_and_grad(beta: np.ndarray) -> Tuple[float, np.ndarray]:
+        # Minimize -q(beta). At the inner solution rows sum to 1, so
+        # q(beta) = 1/2||U-Y||^2 - beta . R, and grad_beta(-q) = R (Danskin).
+        U, _ = _inner(beta)
+        R = v @ U - d
+        neg_q = -0.5 * float(np.sum((U - Y) ** 2)) + float(beta @ R)
+        return neg_q, R
+
+    beta = np.zeros(N) if beta0 is None else np.asarray(beta0, dtype=float).copy()
+
+    # L-BFGS only needs to get close enough that the polish's active set is stable;
+    # chasing gtol below ~1e-8 just burns iterations (it floors there). The quadratic
+    # Newton polish drives the last digits to `tol`.
+    lbfgs_gtol = max(tol, 1e-8) if newton_polish else min(tol, 1e-11)
+    res = minimize(_neg_q_and_grad, beta, jac=True, method='L-BFGS-B',
+                   options={'maxiter': int(max_iter), 'gtol': lbfgs_gtol,
+                            'ftol': 1e-16, 'maxcor': 20})
+    beta = res.x
+    n_inner = int(res.nit)
+
+    U = _inner(beta)[0]
+    R = v @ U - d
+    area_err = float(np.max(np.abs(R))) if R.size else 0.0
+
+    # Optional semismooth-Newton polish on the concave dual (docs/math/08 sec 8):
+    # gauge-fixed via the min-norm lstsq (kernel span{1}), q-ascent line search,
+    # zero-J-row safeguard (a zero row leaves that coordinate untouched -- lstsq
+    # never explodes, unlike an eps-ridge). Only the last digits of feasibility.
+    if newton_polish and area_err > tol:
+        v2 = v ** 2
+        for _ in range(30):
+            if area_err <= tol:
+                break
+            mask = (U > 1e-12).astype(float)                 # active-set indicator a_i
+            m = mask.sum(axis=1)                             # |A_i| >= 1
+            J = np.diag(v2 @ mask) - mask.T @ ((v2 / m)[:, None] * mask)   # eq:jacobian
+            # min-norm lstsq gauge-fixes (kernel span{1}); on a zero J-row it leaves
+            # that coordinate at 0 -- no eps-ridge explosion (docs/math/08 Remark 8.1).
+            delta, *_ = np.linalg.lstsq(J, -R, rcond=None)
+            # Newton-for-roots on R(beta)=0: backtrack on the area residual itself
+            # (near the flat concave max a q-merit cannot resolve the last digits).
+            step, accepted = 1.0, False
+            for _ in range(40):
+                U_try, _ = _inner(beta + step * delta)
+                R_try = v @ U_try - d
+                if np.max(np.abs(R_try)) < area_err:
+                    beta, U, R = beta + step * delta, U_try, R_try
+                    area_err = float(np.max(np.abs(R)))
+                    n_inner += 1
+                    accepted = True
+                    break
+                step *= 0.5
+            if not accepted:
+                break
+
+    row_err = float(np.max(np.abs(U.sum(axis=1) - 1.0)))
+    nonneg_err = max(0.0, -float(U.min()))
+    if area_err > 10 * tol or row_err > 1e-9 or nonneg_err > 1e-12:
+        logger.warning(
+            f"Newton projection residuals above target: row={row_err:.2e}, "
+            f"area={area_err:.2e}, nonneg={nonneg_err:.2e} (tol={tol:.1e})"
+        )
+
+    if _prof is not None:
+        _prof.add_counter('projection_inner_iters_total', n_inner)
+        _prof.record('projection', time.perf_counter() - t0)
+
+    return (U, beta) if return_beta else U
+
+
+def validate_projection_result(A: np.ndarray, v: np.ndarray, d: np.ndarray,
                              tol: float = 1e-8, logger: Optional[logging.Logger] = None) -> bool:
     """
     Validate that a projected matrix satisfies the constraints.
