@@ -4,9 +4,11 @@
 optimizer fix, to close the high-N validity gap and scale toward N≈1000.**
 
 **Status:** IN PROGRESS — Stages 0–5 implemented and verified on
-`feat/phase1-territory-aware-relaxation`; Stage 6 (the expensive confirming
-experiment) is prepared but **not run** (awaiting human dispatch). See the
-progress log below the definition-of-done in §10.
+`feat/phase1-territory-aware-relaxation`; **Stage 6 run and CONFIRMED (partial)** —
+on the bad seed the balance term drives the runt from −34.2% to 0 imbalanced cells
+by level 1 (`run_20260717_102306`, interrupted mid-level-2; finest-level completion
+gate awaits a cluster re-run). Writeup: `docs/experiments/04-territory-aware-highn-validation/`.
+See the progress log below the definition-of-done in §10.
 **Target branch:** `feat/phase1-territory-aware-relaxation` (this document lives on it).
 **Audience:** an implementing agent with NO prior conversation context. This document is
 self-contained for implementation; where it says "read", read before writing code.
@@ -282,9 +284,10 @@ pgd_dual_sweeps:      int  = 8
 
 - `docs/math/07-phase1-wta-balance/{main.tex, Makefile, main.pdf}` — the derivation (Stage 1);
   update `docs/math/Makefile` `DOCS` list and `docs/math/shared/references.bib`.
-- `docs/experiments/03-territory-aware-highn-validation/` — AFTER Stage 6/7, the measured
-  before/after (mirror `02-corrected-energy-highn-validation/`: provenance block, `make_figures.py`,
-  `main.tex`, status label). Records whether the fix worked.
+- `docs/experiments/04-territory-aware-highn-validation/` — **created** (measured, partial).
+  Records the Stage-6 result: confirmed on the bad seed, plus the no-trigger (trim sawtooth)
+  and coarse-level floor diagnoses. (Numbered 04, not 03: slot 03 is `03-dual-projection-verification`
+  on `feat/newton-projection`, referenced by `main`'s reference doc.)
 - Update `docs/plans/PHASE1_N1000_VALIDITY_PLAN.md` status as stages complete; per the repo
   convention, when fully implemented move its lasting explanation to reference / delete the plan.
 - Update `CLAUDE.md` on landing: the new energy term + config flags + the new test (doc-sync rule).
@@ -325,7 +328,19 @@ Re-run the KNOWN-FAILING N=200 configuration and change ONLY the new flags:
 - Cost ≈ 6–15 h CPU against an existing failed control.
 
 **On success:** N=300 A/B vs `run_20260714_224821` (predict 9 → ≤1 over gate); then the
-N=250/500/1000 ladder under the §5 mesh budget; write `docs/experiments/03-…`.
+N=250/500/1000 ladder under the §5 mesh budget; writeup in `docs/experiments/04-…`.
+
+**Result (2026-07-20, `run_20260717_102306`):** CONFIRMED on the bad seed — worst-cell
+deviation −34.2% (control) → **0 imbalanced cells, worst ±2.1%** by the end of level 1,
+held into level 2. The run was interrupted mid-level-2 (host), so the formal finest-level
+completion gate is pending a cluster re-run. Two diagnoses recorded in the writeup: (i) the
+trim's 200-iter retarget removes the energy plateau ⇒ **no level triggers refinement** (runs
+to the 30k cap); (ii) the coarsest level is **resolution-floor-limited** at ~10% (above the
+5% gate), so refinement is *necessary*, not merely faster — the machinery must run until a
+level's floor drops below the gate (level 1 here, 124 verts/cell), which reshapes the
+coarse-only schedule toward a **gate-conditioned switch after level 1**. See
+`docs/experiments/04-territory-aware-highn-validation/` and the updated
+`docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md`.
 
 ---
 
@@ -338,8 +353,9 @@ N=250/500/1000 ladder under the §5 mesh budget; write `docs/experiments/03-…`
 - [x] Trim implemented, flag-gated, reusing `detect_area_imbalance`, `d` reset per level.
 - [x] P2 implemented, flag-gated; N=50 regression passes; P2-alone confirmed non-sufficient.
 - [x] Backward-compat: flags-off run identical to `main`.
-- [ ] Stage 6 experiment run; result (confirm/refute) recorded in `docs/experiments/03-…`.
-      **(prepared, not run — awaits human dispatch)**
+- [x] Stage 6 experiment run; result recorded in `docs/experiments/04-territory-aware-highn-validation/`.
+      **CONFIRMED (partial):** bad seed −34.2% → 0 imbalanced (worst ±2.1%) by level 1; run
+      interrupted mid-level-2, so the finest-level completion gate awaits a cluster re-run.
 - [x] `CLAUDE.md` + affected `docs/` updated per the sync rule.
 
 ### Progress log (as implemented on `feat/phase1-territory-aware-relaxation`)
@@ -371,7 +387,14 @@ N=250/500/1000 ladder under the §5 mesh budget; write `docs/experiments/03-…`
   1.453e-2 ⇒ **γ = 7.0** (10.2% median band ratio). Not retuned per N.
 - **Stage 6 config**: `parameters/torus_200part_coarse_seeded_lam9_territory_test.yaml`
   (N=200, λ=9, seed 84172851, 3 levels; WTA balance + trim + reduced gradient
-  on, γ=7.0). Ready; NOT run.
+  on, γ=7.0).
+- **Stage 6 run** (`run_20260717_102306`, 2026-07-17…19, interrupted mid-level-2):
+  recomputed WTA imbalance per level — L0 149→4 imbalanced (worst 54%→10.1%, 30k cap,
+  9.5 h); L1 51→**0** (worst 17.9%→2.1%, 30k cap, ~31 h); L2 started 0, held 0 (worst
+  4.6%→2.4% at iter 7500 where it died). Control `run_20260712_224424`: worst −34.2%,
+  2 imbalanced. **Mechanism confirmed on the bad seed.** No level triggered refinement
+  (trim sawtooth removes the energy plateau); level 0 is floor-limited at ~10% (refinement
+  necessary). Full writeup + figures: `docs/experiments/04-territory-aware-highn-validation/`.
 
 ---
 

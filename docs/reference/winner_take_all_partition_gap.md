@@ -364,6 +364,20 @@ lever — not more λ. N=200 is the clean demonstration: at seed 84172851 two ce
 wall-time. Runt placement is geometric and seed-dependent; λ cannot rescue a cell the
 seeding squeezed.
 
+**Territory-aware resolution — an alternative to the seed lottery (2026-07-20).** The WTA
+balance term (`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md`,
+`docs/math/07-phase1-wta-balance/`) rescues this *exact* bad-seed case **without** changing the
+seed: re-running the N=200 seed-84172851 λ=9 control with the balance term + discrete trim +
+reduced gradient enabled drove the two runts from −34% to **0 imbalanced cells (worst ±2.1%)**
+by level 1 (`run_20260717_102306`; recomputed in
+`docs/experiments/04-territory-aware-highn-validation/`). This is the anti-lottery property
+N=1000 needs — a corrective *force* instead of a lucky seed. Caveats: the run was interrupted
+mid-level-2 (finest-level completion gate pending a cluster re-run), and it is expensive on the
+coarse levels — no mesh-refinement trigger fires (the trim removes the energy plateau) and the
+coarsest level is resolution-floor-limited at ~10% (so refinement is *necessary*, not merely
+faster). Next A/B: N=300 vs `run_20260714_224821`. Scaling schedule:
+`docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md`.
+
 **Status ladder (as of this writing).** N=100, 150, 200 are valid, finalised, and
 exported (the N=150 artifact cleared only after resuming to 5 levels). **N=300** relaxes
 cleanly at λ=12 but is **not yet valid** — 9 cells over the gate (worst −34.9%), a mix of

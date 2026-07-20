@@ -1,0 +1,203 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../../math/shared/macros}   % shared notation (reused from docs/math/)
+\usepackage{graphicx}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Territory-aware Phase 1: high-N validity validation},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Territory-Aware Phase~1: Validating the Winner-Take-All Balance
+  Term at High \(N\)}\\[0.5em]
+  \large On the bad seed that was immune to raising \(\lambda\), the balance term
+  drives the entrenched runt from \(-34\%\) to \emph{zero} imbalanced cells --- but
+  the discrete-area trim removes the energy plateau, so no level triggers mesh
+  refinement, and the coarse level is shown to be resolution-floor-limited}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------
+% STATUS BANNER
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=green!5!white, colframe=green!55!black,
+                  title={Status --- measured (partial: the finest level was
+                  interrupted; confirmation is solid through level~1)},
+                  fontupper=\small]
+This report \textbf{confirms} the Stage-6 hypothesis of
+\codefile{docs/plans/PHASE1\_TERRITORY\_AWARE\_IMPLEMENTATION\_PLAN.md}: on the
+\emph{bad} seed and \(\lambda\) that produced two entrenched \(-34\%\) runts under
+the original energy, enabling the winner-take-all balance term drives the partition
+to \(0\) imbalanced cells (worst \(\approx 2\%\)), holding through a mesh transition.
+It also records two diagnoses of \emph{why the run was slow}: (i) the discrete-area
+trim's periodic retargeting removes the energy plateau, so no level fires the mesh
+refinement trigger --- every level runs to the iteration cap; and (ii) the coarsest
+level is resolution-floor-limited (worst deviation floors at \(\approx 10\%\), above
+the \(5\%\) gate), so refinement is \emph{necessary}, not merely faster. Numbers are
+independently recomputed from the run's trace snapshots. \textbf{Partial:} the run
+died mid-level-2 (host interruption), so the formal finest-level completion gate was
+not reached; the confirmation rests on level~1's completed cap and a level-2
+mid-snapshot.
+\end{tcolorbox}
+
+% ---------------------------------------------------------------------
+% PROVENANCE --- mandatory (docs/experiments/README.md)
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
+                  title={Provenance}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.66\linewidth}@{}}
+Date            & 2026-07-20 (analysis of the run of 2026-07-17\,\ldots\,07-19) \\[3pt]
+Surface         & torus \(T(R{=}1.0,\ r{=}0.6)\), \(N{=}200\), seed \(84172851\),
+                  \(\lambda{=}9\), 3 levels, \code{init\_method: seeded} \\[3pt]
+Branch          & \code{feat/phase1-territory-aware-relaxation} \\[3pt]
+Source run      & \textbf{territory:} \code{run\_20260717\_102306}, config
+                  \codefile{parameters/torus\_200part\_coarse\_seeded\_lam9\_territory\_test.yaml}
+                  (\code{wta\_balance\_enabled} \(\gamma{=}7.0\), \(p{=}2\);
+                  \code{wta\_trim\_enabled} period 200, damping 0.5, clamp 0.20;
+                  \code{pgd\_reduced\_gradient} 8 dual sweeps). \textbf{Control:}
+                  \code{run\_20260712\_224424} (same seed/\(\lambda\), original
+                  energy, no flags). \\[3pt]
+Producing script& \codefile{make\_figures.py} (beside this report; trajectory arrays
+                  are the extracted measurement --- see its header) \\[3pt]
+Method inputs   & per-level trace snapshots \code{traces/*\_level\{0,1,2\}\_internal\_data.hdf5}
+                  (density field \(x\) every 500 iters); the run's \code{relaxation.log} \\[3pt]
+Versions        & Python 3.12.13, numpy 2.4.4, scipy 1.17.1, matplotlib 3.10.8,
+                  h5py 3.16.0 \\[3pt]
+Anchor          & control worst-cell deviation \(=-34.2\%\) (\(2\) imbalanced);
+                  territory level-1 end \(=0\) imbalanced, worst \(\pm2.1\%\)
+                  (recomputed, matching \code{detect\_area\_imbalance}) \\
+\end{tabular}
+\end{tcolorbox}
+
+\section{Question}
+Phase~1 pins equal area on the \emph{continuous} density field, but the deliverable is
+the \emph{argmax} (winner-take-all) partition; at high \(N\) the discrete areas drift,
+producing ``runt'' cells that make the Phase-2 equal-area constraint infeasible
+(\codefile{docs/reference/winner\_take\_all\_partition\_gap.md}). The territory-aware
+term (\codefile{docs/math/07-phase1-wta-balance/}) adds a penalty on the discrete-area
+imbalance plus a periodic trim that retargets the projection toward exact discrete
+equality. \textbf{Does it fix an entrenched runt on a seed and \(\lambda\) known to be
+immune to raising \(\lambda\)} --- the ``anti-lottery'' property N\(=\)1000 needs?
+
+\section{Method}
+For each saved snapshot of the density \(x\in\mathbb{R}^{V\times N}\), we rebuild that level's
+torus mesh (\code{TorusMeshProvider}), take the winner-take-all label
+\(w_i=\argmax_k x_{ik}\), assign each vertex its lumped mass \(v_i\), and form the
+discrete cell area \(A_k=\sum_{i:\,w_i=k} v_i\). The relative deviation is
+\((A_k-\bar A)/\bar A\) with \(\bar A=\sum_i v_i/N\); a cell is \emph{imbalanced} if
+\(|\text{dev}|>5\%\). This is exactly the \code{detect\_area\_imbalance} computation.
+All numbers below are recomputed directly from the trace snapshots.
+
+\section{Result 1 --- the mechanism works on the bad seed}
+The control (original energy, same seed/\(\lambda\)) ends with worst-cell deviation
+\(-34.2\%\) and 2 imbalanced cells. With the territory flags on, the balance improves
+monotonically across levels to \(\mathbf{0}\) \textbf{imbalanced cells} (worst
+\(\pm2.1\%\)) by the end of level~1, and level~2 inherits and holds it
+(Table~\ref{tab:levels}, Fig.~\ref{fig:levels}). No cell dies.
+
+\begin{table}[h]\centering\small
+\caption{Winner-take-all discrete-area imbalance, recomputed per level.}
+\label{tab:levels}
+\begin{tabular}{@{}llrr@{}}
+\hline
+Level (verts/cell) & snapshot & worst dev & \(n_{\text{imb}}\) \(({>}5\%)\) \\
+\hline
+Level 0 (48)  & iter 0        & \(-30.3\%/{+}54.0\%\) & 149 \\
+Level 0 (48)  & iter 29\,999 (cap) & \(-10.1\%/{+}7.0\%\)  & 4 \\
+Level 1 (124) & iter 0 (post-interp) & \(-17.9\%/{+}14.5\%\) & 51 \\
+Level 1 (124) & iter 29\,999 (cap) & \(\mathbf{-2.1\%/{+}2.1\%}\) & \(\mathbf{0}\) \\
+Level 2 (237) & iter 0 (post-interp) & \(-4.3\%/{+}4.6\%\) & 0 \\
+Level 2 (237) & iter 7\,500 (died) & \(-1.5\%/{+}2.4\%\) & 0 \\
+\hline
+\textit{Control} & final & \(\mathbf{-34.2\%}\) & \(\mathbf{2}\) \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]\centering
+\includegraphics[width=0.82\linewidth]{fig_balance_by_level.pdf}
+\caption{Worst-cell deviation at each level's start and end vs the control. The
+mechanism clears the \(5\%\) gate; the control (dotted) stays at \(34\%\).}
+\label{fig:levels}
+\end{figure}
+
+\section{Result 2 --- why no level triggered mesh refinement}
+Both completed levels ran to the \(30{,}000\)-iteration cap; the log contains no
+``Refinement triggered'' line. The cause is the trim, not a stuck optimizer. Every
+\code{wta\_trim\_period}\,\(=200\) accepted iterations the trim retargets the per-cell
+area target \(d\), re-projects, and re-baselines the energy --- each retarget bumps
+\(E\) up before the next descent, so the energy \textbf{sawtooths and never plateaus}
+(level-0 tail: \(E\) oscillates \(\approx409\text{--}437\), amplitude \(\sim8\)). The
+refinement trigger fires on an energy plateau (\(\Delta E<10^{-8}\) held for 30
+checks); the sawtooth's swings are nine orders of magnitude above that, so the
+plateau criterion is structurally impossible to satisfy. This behaviour is
+\emph{new}: no standard/production config sets any of the three territory flags
+(verified), so previous N\(=\)100/150/200 runs plateaued cleanly and triggered
+normally. The extra iterations are not wasted spinning --- the balance keeps
+improving --- but the level cannot stop itself.
+
+\section{Result 3 --- refinement is necessary, not merely faster}
+The trajectory of the worst deviation \emph{within} each level
+(Fig.~\ref{fig:traj}) settles the design question of whether one could simply run the
+coarsest level longer:
+\begin{itemize}
+\item \textbf{Level 0 is floor-limited.} Its worst deviation flatlines at
+  \(\approx10\%\) --- \emph{twice} the \(5\%\) gate --- with a tail rate of
+  \(0.23\%/1000\) iterations (pure sawtooth noise). The count of bad cells keeps
+  falling (\(14\to4\)), but the \emph{worst} cell is stuck, and the gate needs
+  \emph{every} cell under \(5\%\). At 48 verts/cell the discretization cannot
+  represent \(200\) equal areas below \(\approx10\%\); more iterations do not help.
+\item \textbf{Level 1 crosses the gate, steeply.} At 124 verts/cell the achievable
+  floor drops to \(\approx2\%\); the first \(5000\) iterations fall at
+  \(2.2\%/1000\) (\(\sim10\times\) level 0's tail), reaching \(0\) imbalanced by
+  \(\sim\)iter \(9000\).
+\end{itemize}
+The \(5\%\) gate lies \emph{between} the two levels' resolution floors
+(\(f_b\propto1/\sqrt{V/N}\), the validity plan's band-fraction law), so refinement is
+what crosses it. Note the gate was crossable at just \textbf{124 verts/cell} here ---
+the validity plan's mesh-budget floor guessed \(\sim\)600 for margin, so
+\(\sim\)250--300 finest may suffice (a 2--4\(\times\) compute rebate at N\(=\)1000,
+worth confirming).
+
+\begin{figure}[h]\centering
+\includegraphics[width=0.82\linewidth]{fig_trajectory.pdf}
+\caption{Worst-cell deviation vs iteration within levels 0 and 1. Level 0 floors
+above the gate; level 1 (finer) descends \(\sim\!10\times\) faster and crosses it.}
+\label{fig:traj}
+\end{figure}
+
+\section{Conclusions and implications}
+\begin{enumerate}
+\item \textbf{The balance term works} on the hardest case (bad seed, \(\lambda\)
+  immune) --- the anti-lottery property N\(=\)1000 requires. This confirms Stage~6.
+\item \textbf{Its cost is diagnosed, not fundamental.} The slowness (level 0 alone
+  \(9.5\)\,h, level 1 \(\sim31\)\,h, both to the cap) is the trim sawtooth preventing
+  early triggering plus genuinely-continued optimization --- both tunable.
+\item \textbf{The coarse-only schedule needs the switch \emph{after} level 1, gated on
+  the imbalance metric, not fixed at level 0.} Level 0 cannot clear the gate (floor);
+  the machinery must run until a level's floor drops below the gate (level 1 here),
+  then the cheap original energy carries the already-balanced fine levels (level 2
+  started at \(0\) imbalanced). Dropping the trim on the cheap levels also restores
+  clean plateaus and normal triggering. See
+  \codefile{docs/plans/PHASE1\_COARSE\_ONLY\_WTA\_SCHEDULE.md}.
+\item \textbf{Refine on a balance/stationarity plateau, not raw energy.} Level 0's
+  balance flatlined by \(\sim\)iter \(22\)k while the trim-masked energy kept crawling;
+  a gate-aware trigger would have refined there, saving \(\sim\)3\,h at no cost to the
+  result.
+\end{enumerate}
+
+\section{Caveats}
+Single seed / single \(\lambda\) (by design --- the point is the \emph{bad} case).
+The run was interrupted mid-level-2, so the formal finest-level completion gate was
+not reached; a cluster re-run (with checkpoint/resume, and preferably the tuned
+schedule of conclusion~3) is needed to close it. The next A/B is N\(=\)300 vs
+\code{run\_20260714\_224821} (predicted \(9\to\le1\) over gate).
+
+\end{document}

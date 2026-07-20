@@ -3,11 +3,14 @@
 **Run the expensive territory-aware machinery only on the coarsest level, then refine with
 the cheap original energy — to keep the winner-take-all fix while making it scale to N≈1000.**
 
-**Status:** PROPOSED / future work. **Conditional** on the territory-aware term
-(`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md`, implemented on
-`feat/phase1-territory-aware-relaxation`) first being shown to *work* — i.e. that a
-coarse-level territory-aware relaxation actually produces a balanced partition. If it does
-not, this plan is moot; if it does, this is the intended next experiment.
+**Status:** PROPOSED / future work — now **unblocked**: the precondition is met. The
+territory-aware term has been shown to *work* (`docs/experiments/04-territory-aware-highn-validation/`,
+2026-07-20): on the bad seed and λ it drives the runt from −34% to **0 imbalanced cells**
+(worst ±2.1%). This is the intended next experiment. **The measurement refines the design
+(see §4/§5): the switch to the cheap energy must come after the first level that clears the
+gate — level 1 at N=200, not level 0** — because the coarsest level is resolution-floor-limited
+and cannot cross the 5% gate on its own. Best made a *gate-conditioned* switch (keep the
+expensive machinery until `detect_area_imbalance` reports 0, then switch).
 
 **Provenance / origin:** emerged from analysis during the first end-to-end N=200 territory
 test (`run_20260717_102306`, config `parameters/torus_200part_coarse_seeded_lam9_territory_test.yaml`,
@@ -115,18 +118,37 @@ resolution preserves/improves the balance. This is a coarse-to-fine / nested-ite
 (cf. multigrid nested iteration): do the globally-corrective, expensive work on the coarse
 grid where the structure is set, and use the cheap smoother on the fine grids.
 
+**Measured refinement (2026-07-20, `run_20260717_102306`; `docs/experiments/04-…`).** The
+"fix it on level 0" framing above is *too aggressive* — the coarsest level cannot fully fix
+the runt. Recomputed per-level WTA imbalance: **level 0 floors at ~10% worst deviation** (twice
+the 5% gate) and flatlines there (tail rate 0.23%/1000it, 4 cells still over gate at the 30k
+cap) — it is **resolution-floor-limited** (`f_b ∝ 1/√(V/N)`; 48 verts/cell → ~10% floor).
+**Level 1 (124 verts/cell) is the first level that crosses the gate**, and it does so *steeply*
+(2.2%/1000it, 0 imbalanced by ~iter 9000, floor ~2%). Level 2 then started at 0 imbalanced and
+held — corroborating the §4 claim that the cheap energy preserves a balanced structure. So the
+corrected chain is: **run the expensive machinery on the coarse levels until a level clears the
+gate (level 1 here), then the cheap energy carries the balanced fine levels.** Refinement is
+*necessary* (the gate lies between the level-0 and level-1 floors), not merely faster. Bonus:
+~124 verts/cell sufficed to cross the gate — the mesh-budget floor (§5 of the validity plan)
+may be ~250–300, not ~600, a 2–4× compute rebate at N=1000 worth confirming.
+
 ---
 
 ## 5. The proposal — staged (per-level) energy schedule
 
 Run a **per-level schedule** of the objective and optimizer:
 
-- **Level 0 (coarsest):** full territory-aware machinery — WTA balance term (γ) **+** discrete
-  trim **+** P2 reduced-gradient/trigger fix. Goal: produce a *balanced* partition (all
-  territories within the gate, no runt).
-- **Levels ≥ 1 (finer):** switch to the **original energy E₀** (Dirichlet + double well + λ),
-  **keep the cheap discrete trim as a guardrail**, and **drop the expensive WTA gradient
-  term**. Goal: sharpen the balanced structure cheaply; the trim catches any residual drift.
+- **Coarse levels, until the gate is cleared (level 0 *and* level 1 at N=200):** full
+  territory-aware machinery — WTA balance term (γ) **+** discrete trim **+** P2
+  reduced-gradient/trigger fix. Goal: produce a *balanced* partition (all territories within
+  the gate, no runt). **Gate-conditioned:** keep the expensive machinery on a level until
+  `detect_area_imbalance` reports 0 there; measurement (§4) shows level 0 alone cannot reach
+  it (floor-limited), so at least the first two levels carry the machinery at N=200.
+- **Levels above the gate-crossing level (finer):** switch to the **original energy E₀**
+  (Dirichlet + double well + λ), **keep the cheap discrete trim as a guardrail**, and **drop
+  the expensive WTA gradient term**. Goal: sharpen the balanced structure cheaply; the trim
+  catches any residual drift. Dropping the trim here too (once balanced) additionally restores
+  clean energy plateaus and normal mesh-refinement triggering (no sawtooth) — see §4 note.
 
 Optional variants to evaluate (see §8):
 - Whether to keep P2 at finer levels. Dropping P2 reverts to the original line search — which,

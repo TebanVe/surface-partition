@@ -264,7 +264,12 @@ suppresses build artifacts but tracks `main.pdf` + `fig_*.pdf`. Build with
 `01-winner-take-all-partition-gap/` (the high-N runt failure, measured under the
 buggy energy) and `02-corrected-energy-highn-validation/` (its post-fix resolution:
 runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap) — both pair with
-`docs/reference/winner_take_all_partition_gap.md`. See `docs/experiments/README.md`.
+`docs/reference/winner_take_all_partition_gap.md`; and
+`04-territory-aware-highn-validation/` (measured/partial: the WTA balance term drives the
+N=200 bad-seed runt from −34% to 0 imbalanced cells by level 1, `run_20260717_102306`; plus
+the no-refinement-trigger diagnosis — the trim removes the energy plateau — and the coarse-level
+resolution-floor finding). See `docs/experiments/README.md`. (Slot 03 is
+`03-dual-projection-verification`, on `feat/newton-projection`.)
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
 mesh-cleanup tool).
