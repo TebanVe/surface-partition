@@ -2,6 +2,7 @@ import os
 import datetime
 import time
 import logging
+from collections import deque
 from typing import Optional, Tuple, List, Dict
 
 import h5py
@@ -11,6 +12,11 @@ from ..logging_config import get_logger
 from ..profiling import RelaxationProfilingState
 from .exceptions import RefinementTriggered
 from .projection import orthogonal_projection_iterative
+
+# Cap for the bounded trailing-window run logs (energy_changes/gnorm/feas).
+# Must exceed every refine_*_patience so the trigger windows are unaffected;
+# patiences are O(10), so this is ~250x margin while keeping the logs O(1).
+_LOG_WINDOW_CAP = 8192
 
 
 class ProjectedGradientOptimizer:
@@ -57,13 +63,16 @@ class ProjectedGradientOptimizer:
 		self.refine_grad_tol = float(refine_grad_tol)
 		self.refine_constraint_tol = float(refine_constraint_tol)
 		
-		# Logging cache
+		# Logging cache. Bounded in memory: 'iterations' is a running count
+		# (the only external reader wants len == total iters), and the trigger
+		# reads only the last refine_*_patience entries of the scalar traces, so
+		# capped deques are behaviorally identical to unbounded lists. The old
+		# 'area_evolution' trace was write-only (never read) and is dropped.
 		self.log = {
-			'iterations': [],
-			'energy_changes': [],
-			'area_evolution': [],
-			'gnorm': [],
-			'feas': [],
+			'iterations': 0,
+			'energy_changes': deque(maxlen=_LOG_WINDOW_CAP),
+			'gnorm': deque(maxlen=_LOG_WINDOW_CAP),
+			'feas': deque(maxlen=_LOG_WINDOW_CAP),
 		}
 		self.prev_x = None
 		self.curr_x = None
@@ -374,10 +383,8 @@ class ProjectedGradientOptimizer:
 				if profile is not None:
 					profile.record('h5_flush', time.perf_counter() - _t_f)
 
-				# Track logs
-				self.log['iterations'].append(k)
-				areas = self.v @ x.reshape(N, n)
-				self.log['area_evolution'].append(areas.copy())
+				# Track logs (bounded — see self.log init)
+				self.log['iterations'] += 1
 				self.log['energy_changes'].append(0.0 if k == 0 else (E - best_E))
 				self.log['gnorm'].append(gnorm_post)
 				self.log['feas'].append(feas_post)
@@ -406,7 +413,7 @@ class ProjectedGradientOptimizer:
 				if profile is not None:
 					_t_tc = time.perf_counter()
 				if enable_refinement_triggers and (k + 1 >= self.refine_patience):
-					recent = self.log['energy_changes'][-self.refine_patience:]
+					recent = list(self.log['energy_changes'])[-self.refine_patience:]
 					stable = all(abs(de) < self.refine_delta_energy for de in recent)
 					if stable:
 						if refine_trigger_mode == 'energy':
@@ -417,11 +424,11 @@ class ProjectedGradientOptimizer:
 							gn_ok = (gnorm_post < self.refine_grad_tol)
 							fe_ok = (feas_post < self.refine_constraint_tol)
 							if not gn_ok and len(self.log['gnorm']) >= refine_gnorm_patience:
-								recent_g = self.log['gnorm'][-refine_gnorm_patience:]
+								recent_g = list(self.log['gnorm'])[-refine_gnorm_patience:]
 								gn_plateau = all(abs(recent_g[i] - recent_g[i-1]) < refine_gnorm_delta for i in range(1, len(recent_g)))
 								gn_ok = gn_ok or gn_plateau
 							if not fe_ok and len(self.log['feas']) >= refine_feas_patience:
-								recent_f = self.log['feas'][-refine_feas_patience:]
+								recent_f = list(self.log['feas'])[-refine_feas_patience:]
 								fe_plateau = all(abs(recent_f[i] - recent_f[i-1]) < refine_feas_delta for i in range(1, len(recent_f)))
 								fe_ok = fe_ok or fe_plateau
 							if gn_ok and fe_ok:

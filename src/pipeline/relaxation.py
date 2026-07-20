@@ -292,12 +292,16 @@ def run_relaxation(provider, config: RelaxationConfig,
             prev_x_opt = level_result['x_opt'].copy()
 
             if level < config.refinement_levels - 1:
-                try:
-                    mesh.K = None
-                    mesh.M = None
-                except Exception:
-                    pass
+                # Release this level's FEM matrices before building the finer
+                # one. K/M/v are read-only properties; the backing store is
+                # mass_matrix/stiffness_matrix (setting mesh.K/M silently raised
+                # AttributeError and freed nothing). Also drop the level_ctx
+                # references so the mesh + optimizer are collectable now, not one
+                # level late (level_ctx is only rebound at the next iteration).
+                mesh.mass_matrix = None
+                mesh.stiffness_matrix = None
                 del level_ctx['optimizer']
+                level_ctx['mesh'] = None
                 del mesh
                 gc.collect()
 
@@ -611,7 +615,7 @@ def _optimize_level(optimizer, config, x0, level,
     elapsed = time.time() - start
 
     energy = optimizer.compute_energy(x_opt)
-    n_iterations = len(optimizer.log.get('iterations', []))
+    n_iterations = int(optimizer.log.get('iterations', 0))
 
     return {
         'level': level,
