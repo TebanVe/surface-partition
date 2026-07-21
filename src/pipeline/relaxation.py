@@ -90,6 +90,18 @@ class RelaxationConfig:
     pgd_reduced_gradient: bool = False
     pgd_dual_sweeps: int = 8
 
+    # Adaptive coarse-only schedule (docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md).
+    # 'off' (default): use the individual wta_* / pgd_reduced_gradient flags above
+    #   verbatim -- byte-for-byte identical to main.
+    # 'all_levels': force the full machinery on every level (the report-04 run).
+    # 'adaptive': run the machinery only while the winner-take-all structure is not yet
+    #   correct -- a gate-conditioned switch driven by detect_area_imbalance after each
+    #   level, with a hysteresis band (switch off below switch_margin, re-arm above
+    #   rearm_threshold). The switch level rises with N automatically.
+    wta_schedule: str = 'off'
+    wta_switch_margin: float = 0.03    # expensive->cheap once worst|dev| < margin
+    wta_rearm_threshold: float = 0.05  # cheap->expensive if a cheap level ends > threshold
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -241,6 +253,18 @@ def run_relaxation(provider, config: RelaxationConfig,
             f"refinement levels"
         )
 
+        # Adaptive coarse-only schedule state (docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md).
+        # 'off' -> individual flags (None override); 'all_levels' -> always on;
+        # 'adaptive' -> starts on, gate-conditioned switch after each level.
+        wta_schedule = str(getattr(config, 'wta_schedule', 'off'))
+        wta_active = wta_schedule in ('adaptive', 'all_levels')
+        if wta_schedule != 'off':
+            logger.info(
+                f"WTA schedule: '{wta_schedule}' "
+                f"(switch_margin={config.wta_switch_margin}, "
+                f"rearm_threshold={config.wta_rearm_threshold})"
+            )
+
         for level in range(start_level, config.refinement_levels):
             logger.info("=" * 80)
             logger.info(
@@ -251,8 +275,16 @@ def run_relaxation(provider, config: RelaxationConfig,
             if prof is not None:
                 prof.start_level(level)
 
-            level_ctx = _setup_level(provider, config, level, logger, profile=prof)
+            level_ctx = _setup_level(
+                provider, config, level, logger, profile=prof,
+                wta_active=(wta_active if wta_schedule != 'off' else None),
+            )
             mesh = level_ctx['mesh']
+            if wta_schedule != 'off':
+                logger.info(
+                    f"  Level {level+1} machinery: "
+                    f"{'territory-aware (expensive)' if wta_active else 'original E0 (cheap)'}"
+                )
 
             if prof is not None:
                 prof.set_level_mesh_stats(
@@ -302,6 +334,26 @@ def run_relaxation(provider, config: RelaxationConfig,
 
             prev_vertices = mesh.vertices.copy()
             prev_x_opt = level_result['x_opt'].copy()
+
+            # Adaptive switch: measure the winner-take-all imbalance on this level's
+            # result and decide the next level's machinery (hysteresis band).
+            if wta_schedule == 'adaptive' and level < config.refinement_levels - 1:
+                lvl_dens = level_result['x_opt'].reshape(
+                    len(mesh.v), config.n_partitions
+                )
+                w = float(detect_area_imbalance(
+                    lvl_dens, mesh.v, config.n_partitions
+                )['worst_rel_dev'])
+                prev_active = wta_active
+                if wta_active and w < config.wta_switch_margin:
+                    wta_active = False
+                elif (not wta_active) and w > config.wta_rearm_threshold:
+                    wta_active = True
+                logger.info(
+                    f"  WTA adaptive switch: worst|dev|={w:.4f} -> machinery "
+                    f"{'ON' if prev_active else 'OFF'} -> "
+                    f"{'ON' if wta_active else 'OFF'} for level {level+2}"
+                )
 
             if level < config.refinement_levels - 1:
                 try:
@@ -478,8 +530,14 @@ def _load_warm_start(solution_path: str) -> dict:
         }
 
 
-def _setup_level(provider, config, level, logger, profile=None) -> dict:
-    """Build mesh and PGD optimizer for one refinement level."""
+def _setup_level(provider, config, level, logger, profile=None,
+                 wta_active=None) -> dict:
+    """Build mesh and PGD optimizer for one refinement level.
+
+    ``wta_active`` is the adaptive-schedule override: ``None`` (default) uses the
+    individual ``config`` flags verbatim (legacy / ``wta_schedule='off'``); a bool
+    gates the balance term, trim, and reduced gradient together on/off for this level.
+    """
     n1, n2 = provider.get_initial_resolution()
     dn1, dn2 = provider.get_resolution_increment()
     n1 = n1 + level * dn1
@@ -506,6 +564,16 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         val = provider.theoretical_total_area() if callable(theoretical) else None
         total_area = float(val) if val is not None else float(np.sum(mesh.v))
 
+    # Effective territory-aware flags for this level. Under 'off' the individual config
+    # flags are used verbatim (byte-identical); under adaptive/all_levels, wta_active
+    # gates balance + trim + reduced gradient together.
+    if wta_active is None:
+        eff_balance = bool(config.wta_balance_enabled)
+        eff_trim = bool(config.wta_trim_enabled)
+        eff_reduced = bool(config.pgd_reduced_gradient)
+    else:
+        eff_balance = eff_trim = eff_reduced = bool(wta_active)
+
     optimizer = ProjectedGradientOptimizer(
         K=mesh.K, M=mesh.M, v=mesh.v,
         n_partitions=config.n_partitions,
@@ -515,14 +583,14 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
-        wta_balance_enabled=bool(config.wta_balance_enabled),
+        wta_balance_enabled=eff_balance,
         wta_balance_gamma=float(config.wta_balance_gamma),
         wta_balance_power=float(config.wta_balance_power),
-        wta_trim_enabled=bool(config.wta_trim_enabled),
+        wta_trim_enabled=eff_trim,
         wta_trim_period=int(config.wta_trim_period),
         wta_trim_damping=float(config.wta_trim_damping),
         wta_trim_clamp=float(config.wta_trim_clamp),
-        pgd_reduced_gradient=bool(config.pgd_reduced_gradient),
+        pgd_reduced_gradient=eff_reduced,
         pgd_dual_sweeps=int(config.pgd_dual_sweeps),
         logger=logger,
     )

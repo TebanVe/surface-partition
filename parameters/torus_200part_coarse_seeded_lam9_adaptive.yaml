@@ -1,0 +1,99 @@
+# ============================================================================
+# ADAPTIVE COARSE-ONLY WTA SCHEDULE -- N=200 deliverable run.
+# docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md (adaptive, gate-conditioned switch).
+#
+# WHAT THIS IS. The N=200 bad-seed case that report 04 confirmed (worst -34% -> 0
+# imbalanced by level 1), but run with the AFFORDABLE adaptive schedule and to the
+# FINE deliverable mesh (5 levels, finest 348x328 = 114,144 vertices > 100k), so the
+# output is a valid partition usable downstream -- not the 3-level Step-1 check.
+#
+# THE SCHEDULE (wta_schedule: adaptive). The full territory-aware machinery (WTA
+# balance term + discrete trim + P2 reduced gradient) runs only WHILE the winner-take-
+# all structure is not yet correct; once a level ends with worst|dev| < switch_margin
+# it hands off to the cheap original energy E0 for the finer levels, and re-arms if a
+# cheap level drifts back over rearm_threshold. detect_area_imbalance drives the switch
+# after each level (logged). Expected here: expensive on levels 0-1 (level 0 is floor-
+# limited at ~10%; level 1 clears the gate), cheap E0 on levels 2-4. The switch level
+# rises with N automatically -- do NOT hardcode it.
+#
+# TRIGGERS. While the machinery is active the trim's retarget sawtooth removes the
+# energy plateau, so refinement fires on projected stationarity ||g_t|| + feasibility
+# (the balance-plateau trigger); the cheap levels use the normal energy-plateau trigger.
+#
+# SUCCESS = final detect_area_imbalance n_imbalanced: 0 (worst < 5%) on the >100k mesh,
+# at much lower wall time than the all-levels run (report 04). Same seed, same lambda.
+# ============================================================================
+
+experiment:
+  name: torus-200-coarse-seeded-lam9-adaptive
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 9.0                 # UNCHANGED from the failed control
+  seed: 84172851                      # UNCHANGED -- the BAD seed with 2 entrenched runts
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000                     # a cap; the balance-plateau trigger should fire earlier
+  refinement_levels: 5                # FINE deliverable: 100x96 ... 348x328 (V=114,144)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  # --- Adaptive territory-aware schedule (the only change vs the lam9 control) ---
+  wta_schedule: adaptive              # gate-conditioned: expensive only until structure is correct
+  wta_switch_margin: 0.03             # expensive -> cheap once worst|dev| < 3% (headroom under the 5% gate)
+  wta_rearm_threshold: 0.05           # cheap -> expensive if a cheap level ends over the 5% gate
+  # Machinery definition (used only while active):
+  wta_balance_gamma: 7.0              # calibrated once; NOT retuned per N
+  wta_balance_power: 2.0             # p=2 (docs/math/07-phase1-wta-balance)
+  wta_trim_period: 200               # every 200 accepted iters
+  wta_trim_damping: 0.5
+  wta_trim_clamp: 0.20               # targets clamped to Abar +/- 20%
+  pgd_dual_sweeps: 8                 # Gauss-Seidel dual sweeps per step
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                      # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

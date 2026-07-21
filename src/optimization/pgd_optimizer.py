@@ -647,12 +647,21 @@ class ProjectedGradientOptimizer:
 								stall_warned = True
 						else:
 							stall_warned = False
-							cum_dec = max(E_level_init - E, self.penalty_eps)
-							recent = self.log['energy_changes'][-self.refine_patience:]
-							stable = all(
-								abs(de) < self.refine_delta_energy * cum_dec
-								for de in recent
-							)
+							if self.wta_trim_enabled:
+								# The discrete-area trim retargets `d` every trim_period
+								# iters, which re-baselines the energy (a sawtooth), so
+								# raw-energy stability is not a valid convergence signal
+								# (docs/experiments/04-territory-aware-highn-validation).
+								# Trigger on projected stationarity ||g_t|| + feasibility
+								# directly -- the balance-plateau trigger.
+								stable = True
+							else:
+								cum_dec = max(E_level_init - E, self.penalty_eps)
+								recent = self.log['energy_changes'][-self.refine_patience:]
+								stable = all(
+									abs(de) < self.refine_delta_energy * cum_dec
+									for de in recent
+								)
 							if stable:
 								if refine_trigger_mode == 'energy':
 									self.logger.info(f"Refinement triggered at iteration {k} (energy criterion)")
