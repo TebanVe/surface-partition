@@ -1,7 +1,12 @@
 # Future Plan — Coarse-Only WTA Schedule (staged energy across mesh levels)
 
-**Run the expensive territory-aware machinery only on the coarsest level, then refine with
-the cheap original energy — to keep the winner-take-all fix while making it scale to N≈1000.**
+**Run the expensive territory-aware machinery on the coarse levels only *until the discrete
+structure is correct* — a data-driven, gate-conditioned switch, not a fixed level — then refine
+with the cheap original energy. Keeps the winner-take-all fix while making it scale to N≈1000.**
+
+*(Naming note: "coarse-only" is shorthand. The expensive work is confined to however many coarse
+levels it takes to reach a correct structure — one at low N, more as N grows. The switch is
+decided by measurement, never by a hardcoded level number.)*
 
 **Status:** PROPOSED / future work — now **unblocked**: the precondition is met. The
 territory-aware term has been shown to *work* (`docs/experiments/04-territory-aware-highn-validation/`,
@@ -134,28 +139,43 @@ may be ~250–300, not ~600, a 2–4× compute rebate at N=1000 worth confirming
 
 ---
 
-## 5. The proposal — staged (per-level) energy schedule
+## 5. The proposal — an adaptive, gate-conditioned energy schedule
 
-Run a **per-level schedule** of the objective and optimizer:
+**The switch is decided by the measured structure, not by a level number.** The expensive
+machinery stays on as long as the winner-take-all structure is *not yet correct*, and hands off
+to the cheap energy once it is — wherever in the level ladder that happens. "Level 1 at N=200"
+(§4) is the *instance* this rule produced there, not the rule. As `N` grows the band fraction
+grows (`f_b ∝ √N`), so a correct structure is only reachable on a finer mesh — and the rule
+**automatically** keeps the expensive machinery on for more levels, with no config change. The
+cost is spent exactly where it is needed, tied to the resolution-floor law.
 
-- **Coarse levels, until the gate is cleared (level 0 *and* level 1 at N=200):** full
-  territory-aware machinery — WTA balance term (γ) **+** discrete trim **+** P2
-  reduced-gradient/trigger fix. Goal: produce a *balanced* partition (all territories within
-  the gate, no runt). **Gate-conditioned:** keep the expensive machinery on a level until
-  `detect_area_imbalance` reports 0 there; measurement (§4) shows level 0 alone cannot reach
-  it (floor-limited), so at least the first two levels carry the machinery at N=200.
-- **Levels above the gate-crossing level (finer):** switch to the **original energy E₀**
-  (Dirichlet + double well + λ), **keep the cheap discrete trim as a guardrail**, and **drop
-  the expensive WTA gradient term**. Goal: sharpen the balanced structure cheaply; the trim
-  catches any residual drift. Dropping the trim here too (once balanced) additionally restores
-  clean energy plateaus and normal mesh-refinement triggering (no sawtooth) — see §4 note.
+**The rule.** Carry a runtime mode `wta_active`, starting **on**. After each level completes
+(before refining to the next), evaluate `detect_area_imbalance` on the winner-take-all state and
+read its worst-cell deviation `w = max|dev|`; then choose the *next* level's mode with a
+hysteresis band:
 
-Optional variants to evaluate (see §8):
-- Whether to keep P2 at finer levels. Dropping P2 reverts to the original line search — which,
-  on a *warm-started, already-balanced* structure, may legitimately trigger early and fast
-  (like the healthy low-N behavior), or may under-converge; to be measured.
-- A *light* WTA term (small γ) at finer levels instead of fully off, as a stronger guardrail
-  than the trim alone (at some extra cost).
+- **Stay ON (expensive)** while `w ≥ switch_margin`. *"Still far from a correct structure ⇒
+  keep optimizing with the not-cheap method."* This is the default; the machinery simply runs
+  level after level until the structure is ready. It naturally handles a **floor-limited coarse
+  level** (§4): level 0 plateaus at its ~10% floor (never `< switch_margin`), so the rule keeps
+  the machinery on for level 1 — no special case, no level number.
+- **Switch OFF (expensive → cheap)** once `w < switch_margin`, i.e. comfortably *below* the 5%
+  gate with headroom (default `switch_margin ≈ 3%`, ≈0.6× the gate — not merely *at* the gate,
+  so a cheap level has room before it could drift back over). *"We are ready ⇒ hand off."*
+- **Re-ARM (cheap → expensive)** if a cheap level ends with `w > rearm_threshold`
+  (default = the gate, 5%) — a drift-back safety net. The hysteresis band `[switch_margin,
+  rearm_threshold] = [3%, 5%]` prevents mode oscillation.
+
+**When active (expensive):** WTA balance term (γ) + discrete trim + P2 reduced gradient, and
+**refine on the balance/stationarity plateau** (not raw energy — the trim's retarget sawtooth
+removes the energy plateau, so the energy-based trigger cannot fire; §4). **When inactive
+(cheap):** original energy `E₀` (Dirichlet + double well + λ), trim **off** by default so the
+normal energy-plateau refinement trigger works again (the familiar fast low-N behaviour), with
+the **re-arm condition as the drift safety net** in place of an always-on guardrail.
+
+Thresholds get calibrated-once defaults (like γ) and are tunable; the mechanism, not the exact
+numbers, is the design. Variants to ablate (§9): keeping a *light* trim (long period) or P2 on
+the cheap levels as a stronger-but-costlier guardrail than re-arm alone.
 
 ---
 
@@ -167,10 +187,11 @@ Separating the machinery by cost is what makes the guardrail nearly free:
 |---|---|---|---|
 | WTA gradient term | O(V·N) **every iteration** | the front force that moves fences | **drop** (the expensive part) |
 | P2 reduced-gradient (dual solve) | Gauss–Seidel sweeps **every iteration** | unfreezes the descent | optional (test) |
-| Discrete trim | O(N) **every ~200 iters**, reuses the argmax already computed by `detect_area_imbalance` | retargets the projection toward discrete equality | **keep** (near-free guardrail) |
+| Discrete trim | O(N) **every ~200 iters**, reuses the argmax already computed by `detect_area_imbalance` | retargets the projection toward discrete equality | **drop by default** — its retarget sawtooth blocks the energy-plateau refinement trigger (§4); the re-arm condition (§5) is the drift safety net instead. *Keep-light* (long period) is an ablation. |
 
-So a fine level running `E₀ + trim` gets a discrete-equality guard at negligible cost, without
-paying the expensive per-iteration gradient term or dual solve.
+So a fine level running plain `E₀` is genuinely cheap **and** triggers normally; drift is caught
+by the per-level gate check that re-arms the full machinery (§5), not by an always-on trim. The
+expensive per-iteration gradient term and dual solve are dropped once the structure is correct.
 
 ---
 
@@ -183,11 +204,14 @@ level moves boundaries to shave perimeter.
 
 **Why it is bounded / mitigations:**
 - The fine level's band fraction is smaller, so there is less room to drift.
-- The **kept trim** re-targets the projection each cadence to pull discrete areas back toward
-  equal — a cheap corrective that directly opposes the drift.
+- The switch fires only with **headroom** (`w < switch_margin ≈ 3%`, below the 5% gate), so a
+  cell must drift a full margin before it even reaches the gate.
+- The **re-arm condition** (§5) is the primary safety net: if any cheap level ends with a cell
+  back over the gate, the full machinery is re-enabled for the next level automatically.
 - Empirically (N=150), the original energy at finer levels reduced rather than increased
   imbalance.
-- If drift is still observed near the gate, fall back to the *light-γ* fine-level variant.
+- If drift is observed repeatedly (re-arm oscillating), fall back to the *light-γ* or
+  *long-period-trim* fine-level variant (§5, §9) as a stronger standing guardrail.
 
 **Caveat — "balanced at coarse" ≠ "balanced at fine" exactly:** the argmax boundaries shift as
 the mesh refines, so coarse-level balance transfers only approximately; the trend is favorable
@@ -198,51 +222,74 @@ than going fully bare.
 
 ## 8. Implementation specification
 
-**Config (extend `RelaxationConfig` in `src/pipeline/relaxation.py`).** Add a per-level
-schedule. Two possible shapes (pick during implementation):
-- Simplest: a boolean `wta_coarse_only: bool = False` that, when true, applies the WTA term
-  (+ P2, per a sub-flag) only on level 0 and `E₀ + trim` thereafter.
-- More general: explicit per-level lists, e.g. `wta_balance_levels: [0]`,
-  `wta_trim_levels: [0,1,2]`, `pgd_reduced_gradient_levels: [0]`, so any schedule is
-  expressible. Prefer this if the simple flag proves too rigid.
+**Config (extend `RelaxationConfig` in `src/pipeline/relaxation.py`).** A single selector
+plus two thresholds — the existing flags define *what machinery runs when active*; this decides
+*when it is active*:
+- `wta_schedule: str = 'off'` — `'off'` (default, current behaviour, byte-identical) /
+  `'all_levels'` (the machinery on every level, i.e. the run report 04 measured) /
+  `'adaptive'` (this plan: the gate-conditioned switch of §5).
+- `wta_switch_margin: float = 0.03` — switch expensive→cheap once `max|dev| < margin`.
+- `wta_rearm_threshold: float = 0.05` — re-arm cheap→expensive if a cheap level ends with
+  `max|dev| > threshold` (default = the `AREA_IMBALANCE_REL_THRESHOLD` gate).
+
+(A lower-level `*_levels` list form — `wta_balance_levels: [...]`, etc. — can back a *manual*
+fixed schedule for ablations, but `adaptive` is the primary mode and should not need it.)
 
 **Code changes.**
-- The multi-level loop in `run_relaxation` (`src/pipeline/relaxation.py`) already iterates
-  levels and constructs the optimizer per level. Read the schedule and pass the right
-  per-level flags (`wta_balance_enabled`, `wta_balance_gamma`, `wta_trim_enabled`,
-  `pgd_reduced_gradient`) into `ProjectedGradientOptimizer` for each level. This is a small
-  change — the flags already exist (implemented on the feature branch); only their *per-level
-  gating* is new.
-- Ensure the trim's projection-target state `d` is reset to `Ā·1` at each level transition
-  (already specified in the implementation plan §3) and that dropping the WTA term between
-  levels is clean (no stale state).
-- Everything defaults to the current all-levels behavior; `wta_coarse_only` off ⇒ byte-for-byte
-  unchanged.
+- **Runtime mode in the level loop.** `run_relaxation` (`src/pipeline/relaxation.py`) already
+  iterates levels and builds the optimizer per level. Carry a `wta_active` bool (init `True`
+  under `adaptive`). In `_setup_level`, when `adaptive`, pass the *effective* flags
+  (`wta_balance_enabled`, `wta_trim_enabled`, `pgd_reduced_gradient` = `wta_active`; γ from
+  config). The flags already exist and are read per level — only their **runtime gating** is
+  new (small, localized).
+- **The gate check + switch, at each level transition.** After a level's PGD returns, compute
+  `detect_area_imbalance` on the winner-take-all state (this is the *same* argmax/bincount the
+  trim already runs — a few ms, negligible), take `w = worst |dev|`, and update `wta_active`
+  per the §5 hysteresis rule *before* building the next level. Log the decision (`w`, old→new
+  mode) so the schedule is visible in `relaxation.log`.
+- **Balance-plateau refinement trigger (prerequisite for the expensive levels).** While
+  `wta_active`, the trim sawtooth blocks the energy-plateau trigger (§4), so an expensive level
+  runs to the iteration cap. Add a trigger mode that fires on a plateau of the *reduced-gradient
+  stationarity* `‖g_t‖` (already computed by P2) or of `max|dev|` between trim retargets, in
+  `ProjectedGradientOptimizer`'s trigger logic. Cheap levels keep the normal energy-plateau
+  trigger. Without this the adaptive schedule still works but wastes ~cap-minus-plateau
+  iterations per expensive level (§4: ~3 h at N=200 level 0).
+- **State hygiene.** Reset the trim target `d = Ā·1` at each level transition (implementation
+  plan §3); ensure toggling the WTA term/P2 between levels leaves no stale optimizer state.
+- Everything defaults to `wta_schedule: 'off'` ⇒ byte-for-byte unchanged from `main`.
 
-**No new math** — this plan reuses the term/trim/optimizer already derived in
-`docs/math/07-phase1-wta-balance/`; it only changes *where* they run.
+**No new math** — reuses the term/trim/optimizer of `docs/math/07-phase1-wta-balance/`; it only
+changes *when* they run and *how the level decides to stop*.
 
 ---
 
 ## 9. Validation / experiments
 
-Prerequisite: the all-levels N=200 test must first come back **valid** (n_imbalanced → 0),
-establishing that the coarse territory-aware relaxation balances the partition.
+Prerequisite **met**: the all-levels N=200 territory run is valid on the bad seed
+(`docs/experiments/04-territory-aware-highn-validation/`: −34% → 0 imbalanced by level 1),
+establishing that the coarse territory-aware relaxation balances the partition. The open
+question this plan tests is the one the all-levels run did *not*: **does the cheap `E₀` on the
+fine levels preserve that balance?** (Report 04's fine level still ran the expensive energy.)
 
 1. **Head-to-head on the same N=200 case** (`torus_200part_coarse_seeded_lam9`, seed 84172851):
-   coarse-only schedule vs the all-levels run. Compare **both**:
-   - **Validity:** final `area_imbalance.n_imbalanced` (must stay 0; worst cell < 5%).
-   - **Wall time:** total, and the per-level breakdown (expect the fine levels to be much
-     cheaper).
+   `wta_schedule: adaptive` vs `all_levels`. Compare **both**:
+   - **Validity:** final `area_imbalance.n_imbalanced` (must stay 0; worst cell < 5%). Confirm
+     the adaptive switch fires where expected (log `w` and the switch level — predicted after
+     level 1 here) and that no cheap level re-arms.
+   - **Wall time:** total + per-level breakdown (expect the fine levels much cheaper, and each
+     expensive level to trigger *before* the 30k cap once the balance-plateau trigger is in).
    Success = balance preserved through the cheap fine levels **and** a large wall-time drop.
 2. **Ablations:**
-   - (a) coarse WTA → fine `E₀` only (no trim): does the balance drift? (measures whether the
-     trim guardrail is necessary).
-   - (b) coarse WTA → fine `E₀ + trim` (the recommended default).
-   - (c) P2 kept vs dropped at finer levels.
-   - (d) light-γ fine-level variant, if (a)/(b) show drift.
+   - (a) `switch_margin` sensitivity (e.g. 2% / 3% / 4%): does a tighter margin prevent drift;
+     does a looser one save iterations without re-arming?
+   - (b) fine levels bare `E₀` (default) vs `E₀` + *light/long-period trim* guardrail: is the
+     re-arm safety net enough, or is a standing guardrail needed?
+   - (c) P2 kept vs dropped on the cheap levels.
+   - (d) does the balance-plateau trigger cut the expensive-level iteration count materially
+     (vs running to the cap)?
 3. **N=300**, then the N=250/500/1000 ladder under the mesh-budget policy — the real test of
-   whether confining the expensive work to level 0 makes N=1000 affordable.
+   whether the adaptive schedule (expensive machinery confined to the coarse levels *it needs*)
+   makes N=1000 affordable. Watch the switch level rise with N (the design's central claim).
 
 Record the outcome in `docs/experiments/` (a sibling to the all-levels validation report),
 with the per-level timing tables as the headline evidence.
@@ -251,12 +298,20 @@ with the per-level timing tables as the headline evidence.
 
 ## 10. Definition of done
 
-- [ ] Prerequisite met: all-levels territory run is valid (coarse level balances the partition).
-- [ ] Per-level schedule implemented, flag-gated, default-off (all-levels unchanged).
-- [ ] Head-to-head N=200: validity preserved (n_imbalanced 0) AND wall time substantially
-      reduced vs all-levels; per-level timing recorded.
-- [ ] Ablations (trim on/off, P2 on/off, light-γ) run and tabulated.
-- [ ] N=300 confirmed; scaling ladder started.
+- [x] Prerequisite met: all-levels territory run is valid on the bad seed
+      (`docs/experiments/04-territory-aware-highn-validation/`).
+- [ ] Adaptive gate-conditioned schedule implemented (`wta_schedule: adaptive`, switch/re-arm
+      thresholds), flag-gated, default `off` (all-levels unchanged); switch decision logged.
+- [ ] Balance-plateau refinement trigger implemented for the expensive levels (else they run
+      to the iteration cap).
+- [ ] Checkpoint/resume hardened (per-level solution checkpoint) so a multi-day cluster run
+      survives interruption — the report-04 run died mid-level-2 and lost all but traces.
+- [ ] Head-to-head N=200 (`adaptive` vs `all_levels`): validity preserved (n_imbalanced 0),
+      the switch fires after level 1 with no re-arm, AND wall time substantially reduced;
+      per-level timing recorded.
+- [ ] Ablations (switch_margin, bare-E₀ vs light-trim, P2 on/off, balance-plateau trigger) run
+      and tabulated.
+- [ ] N=300 confirmed; scaling ladder started; the switch level observed to rise with N.
 - [ ] Experiment writeup in `docs/experiments/`; CLAUDE.md + affected plan docs updated.
 
 ---
