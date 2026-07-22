@@ -304,8 +304,21 @@ with the per-level timing tables as the headline evidence.
       thresholds), flag-gated, default `off` (all-levels unchanged); switch decision logged.
 - [ ] Balance-plateau refinement trigger implemented for the expensive levels (else they run
       to the iteration cap).
-- [ ] Checkpoint/resume hardened (per-level solution checkpoint) so a multi-day cluster run
+- [x] Checkpoint/resume hardened (per-level solution checkpoint) so a multi-day cluster run
       survives interruption — the report-04 run died mid-level-2 and lost all but traces.
+      `checkpoint_per_level` (default on) writes `solution/checkpoint_level{L}.h5` after each
+      completed level (atomic move, newest kept, cleaned up on success); `--resume-from` a
+      checkpoint restarts at the next level and, under `adaptive`, restores `wta_active`
+      instead of re-arming. Two latent resume bugs fixed alongside: (i) `completed_levels`
+      was written as `len(levels_meta)` — the levels run *this invocation* — so resuming a
+      resumed run restarted at the wrong rung; it is now the absolute ladder position.
+      (ii) YAML 1.1 parses an unquoted `wta_schedule: off` as the boolean `False`, which read
+      as `'False' != 'off'` and took the scheduled path, force-overriding the individual
+      `wta_*` flags to off; `RelaxationConfig.__post_init__` now normalizes and validates the
+      value (an unrecognized schedule raises instead of silently relaxing with plain E₀).
+      Verified: kill mid-level-2 → resume → correct rung (32×22), schedule state restored,
+      final `completed_levels=3`; off-path solution attrs unchanged; both branch harnesses
+      (`validate_pgd_optimizations --equivalence`, `test_wta_balance_gradient_analytical`) PASS.
 - [ ] Head-to-head N=200 (`adaptive` vs `all_levels`): validity preserved (n_imbalanced 0),
       the switch fires after level 1 with no re-arm, AND wall time substantially reduced;
       per-level timing recorded.

@@ -78,6 +78,13 @@ class RelaxationConfig:
     profile: bool = False
     init_method: str = 'random'
 
+    # Per-level resume checkpoint: after each level completes, write that level's
+    # solution to solution/checkpoint_level{L}.h5 so a killed multi-day run can be
+    # restarted with --resume-from instead of losing every completed level.
+    # Only the most recent checkpoint is kept; all are removed once the final
+    # solution is written.
+    checkpoint_per_level: bool = True
+
     # Territory-aware relaxation (docs/math/07-phase1-wta-balance).
     # All defaulted OFF so existing configs are byte-for-byte unchanged.
     wta_balance_enabled: bool = False
@@ -101,6 +108,34 @@ class RelaxationConfig:
     wta_schedule: str = 'off'
     wta_switch_margin: float = 0.03    # expensive->cheap once worst|dev| < margin
     wta_rearm_threshold: float = 0.05  # cheap->expensive if a cheap level ends > threshold
+
+    WTA_SCHEDULES = ('off', 'all_levels', 'adaptive')
+
+    def __post_init__(self):
+        # YAML 1.1 parses an unquoted `off` as the boolean False, so the
+        # documented default `wta_schedule: off` arrives here as False and
+        # would otherwise read as the string 'False' -- i.e. NOT 'off', which
+        # silently takes the scheduled path and overrides the individual wta_*
+        # flags. Normalize, then reject anything unrecognized: a typo must fail
+        # loudly rather than quietly relax with the plain E0 energy.
+        sched = self.wta_schedule
+        if isinstance(sched, bool):
+            if sched:
+                raise ValueError(
+                    "wta_schedule: true is ambiguous. Use one of "
+                    f"{self.WTA_SCHEDULES} (quote 'off' to keep YAML from "
+                    "parsing it as a boolean)."
+                )
+            sched = 'off'
+        sched = str(sched).strip().lower()
+        if sched in ('false', 'none', 'no'):
+            sched = 'off'
+        if sched not in self.WTA_SCHEDULES:
+            raise ValueError(
+                f"Unknown wta_schedule {self.wta_schedule!r}. "
+                f"Valid values: {self.WTA_SCHEDULES}."
+            )
+        self.wta_schedule = sched
 
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
@@ -231,6 +266,7 @@ def run_relaxation(provider, config: RelaxationConfig,
         prev_x_opt = None
         start_level = 0
 
+        ws = None
         if warm_start_path is not None:
             ws = _load_warm_start(warm_start_path)
             prev_vertices = ws['prev_vertices']
@@ -258,6 +294,15 @@ def run_relaxation(provider, config: RelaxationConfig,
         # 'adaptive' -> starts on, gate-conditioned switch after each level.
         wta_schedule = str(getattr(config, 'wta_schedule', 'off'))
         wta_active = wta_schedule in ('adaptive', 'all_levels')
+        if (wta_schedule == 'adaptive' and ws is not None
+                and ws.get('wta_active') is not None):
+            # Resume with the mode the checkpoint had already switched to,
+            # rather than re-arming the expensive machinery from scratch.
+            wta_active = bool(ws['wta_active'])
+            logger.info(
+                f"Warm start: restoring WTA machinery "
+                f"{'ON' if wta_active else 'OFF'} from checkpoint"
+            )
         if wta_schedule != 'off':
             logger.info(
                 f"WTA schedule: '{wta_schedule}' "
@@ -356,6 +401,20 @@ def run_relaxation(provider, config: RelaxationConfig,
                 )
 
             if level < config.refinement_levels - 1:
+                # Persist this level before the mesh is freed, so an
+                # interrupted run resumes here instead of from level 0. The
+                # final level needs none: _save_solution() follows the loop.
+                if config.checkpoint_per_level:
+                    ckpt_attrs = {'checkpoint': True}
+                    if wta_schedule != 'off':
+                        ckpt_attrs['wta_schedule'] = wta_schedule
+                        ckpt_attrs['wta_active'] = bool(wta_active)
+                    _save_level_checkpoint(
+                        mesh, level_result['x_opt'], x0, config, provider,
+                        levels_meta, level + 1, solution_dir, logger,
+                        extra_attrs=ckpt_attrs,
+                    )
+
                 try:
                     mesh.K = None
                     mesh.M = None
@@ -380,10 +439,19 @@ def run_relaxation(provider, config: RelaxationConfig,
             final_densities, mesh.v, config.n_partitions
         )
 
+        # The schedule attrs are written only on the scheduled path, so an
+        # off-path solution file stays byte-identical to main's.
+        sched_attrs = (
+            {'wta_schedule': wta_schedule, 'wta_active': bool(wta_active)}
+            if wta_schedule != 'off' else None
+        )
         solution_path = _save_solution(
             mesh, final['x_opt'], x0, config, provider,
-            levels_meta, timestamp, solution_dir
+            levels_meta, timestamp, solution_dir,
+            completed_levels=start_level + len(levels_meta),
+            extra_attrs=sched_attrs,
         )
+        _cleanup_level_checkpoints(solution_dir, logger)
 
         initial_perimeter = compute_initial_perimeter(
             solution_path, config.n_partitions, logger
@@ -510,6 +578,8 @@ def _load_warm_start(solution_path: str) -> dict:
         'prev_x_opt'        np.ndarray — optimized solution from last completed level
         'prev_vertices'     np.ndarray — mesh vertices from last completed level
         'completed_levels'  int        — number of levels already completed
+        'wta_active'        Optional[bool] — adaptive-schedule mode the checkpoint
+            was going to use for the next level (None if the file predates it)
     Raises ValueError if the file is missing required datasets or attributes.
     """
     with h5py.File(solution_path, 'r') as f:
@@ -523,10 +593,14 @@ def _load_warm_start(solution_path: str) -> dict:
                 f"Warm-start file {solution_path} has no 'completed_levels' "
                 f"attribute. Re-run the original relaxation to regenerate it."
             )
+        wta_active = None
+        if 'wta_active' in f.attrs:
+            wta_active = bool(f.attrs['wta_active'])
         return {
             'prev_x_opt': np.array(f['x_opt']),
             'prev_vertices': np.array(f['vertices']),
             'completed_levels': int(f.attrs['completed_levels']),
+            'wta_active': wta_active,
         }
 
 
@@ -733,20 +807,20 @@ def _write_timing_profile(prof, solution_dir, provider, config, logger):
     logger.info(f"Timing profile written to: {tp_path}")
 
 
-def _save_solution(mesh, x_opt, x0, config, provider,
-                   levels_meta, timestamp, solution_dir) -> str:
-    """Write final solution HDF5 file. Returns path."""
+def _write_solution_h5(path, mesh, x_opt, x0, config, provider,
+                       levels_meta, completed_levels,
+                       extra_attrs=None) -> None:
+    """Write a solution/checkpoint HDF5 at ``path``.
+
+    ``completed_levels`` is the ABSOLUTE number of levels completed across the
+    whole ladder (start_level + levels run in this invocation), which is what
+    ``_load_warm_start`` resumes from — not ``len(levels_meta)``, which counts
+    only the levels this invocation ran.
+    """
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
-    v1_info, v2_info = provider.resolution_summary(config.refinement_levels)
 
-    solution_path = os.path.join(
-        solution_dir,
-        f"surface_part{config.n_partitions}_surf{surface}"
-        f"_v1{label1}{v1_info}_v2{label2}{v2_info}"
-        f"_lam{config.lambda_penalty}_seed{config.seed}_{timestamp}.h5"
-    )
-    with h5py.File(solution_path, 'w') as f:
+    with h5py.File(path, 'w') as f:
         f.create_dataset('x_opt', data=x_opt)
         f.create_dataset('x0', data=x0)
         f.create_dataset('vertices', data=mesh.vertices)
@@ -769,9 +843,79 @@ def _save_solution(mesh, x_opt, x0, config, provider,
         f.attrs['seed'] = int(config.seed)
         f.attrs['optimizer'] = 'PGD'
         f.attrs['use_analytic'] = bool(config.use_analytic)
-        f.attrs['completed_levels'] = len(levels_meta)
+        f.attrs['completed_levels'] = int(completed_levels)
+        for k, v in (extra_attrs or {}).items():
+            f.attrs[k] = v
 
+
+def _save_solution(mesh, x_opt, x0, config, provider,
+                   levels_meta, timestamp, solution_dir,
+                   completed_levels, extra_attrs=None) -> str:
+    """Write final solution HDF5 file. Returns path."""
+    surface = provider.surface_name()
+    label1, label2 = provider.resolution_labels()
+    v1_info, v2_info = provider.resolution_summary(config.refinement_levels)
+
+    solution_path = os.path.join(
+        solution_dir,
+        f"surface_part{config.n_partitions}_surf{surface}"
+        f"_v1{label1}{v1_info}_v2{label2}{v2_info}"
+        f"_lam{config.lambda_penalty}_seed{config.seed}_{timestamp}.h5"
+    )
+    _write_solution_h5(
+        solution_path, mesh, x_opt, x0, config, provider,
+        levels_meta, completed_levels, extra_attrs=extra_attrs
+    )
     return solution_path
+
+
+def _save_level_checkpoint(mesh, x_opt, x0, config, provider, levels_meta,
+                           completed_levels, solution_dir, logger,
+                           extra_attrs=None) -> Optional[str]:
+    """Write the per-level resume checkpoint, replacing any earlier one.
+
+    Written to a temporary file and moved into place, so a run killed mid-write
+    still leaves the previous checkpoint intact. Only the newest checkpoint is
+    kept; a failure here is logged and swallowed — losing a checkpoint must
+    never kill a multi-day run.
+    """
+    path = os.path.join(
+        solution_dir, f"checkpoint_level{completed_levels:02d}.h5"
+    )
+    tmp_path = path + '.tmp'
+    try:
+        _write_solution_h5(
+            tmp_path, mesh, x_opt, x0, config, provider,
+            levels_meta, completed_levels, extra_attrs=extra_attrs
+        )
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.warning(f"Could not write level checkpoint {path}: {e}")
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return None
+
+    _cleanup_level_checkpoints(solution_dir, logger, keep=path)
+    logger.info(
+        f"Level checkpoint written: {path} "
+        f"(resume with --resume-from {path})"
+    )
+    return path
+
+
+def _cleanup_level_checkpoints(solution_dir, logger, keep=None) -> None:
+    """Remove per-level checkpoints in ``solution_dir`` except ``keep``."""
+    import glob
+    for p in glob.glob(os.path.join(solution_dir, 'checkpoint_level*.h5')):
+        if keep is not None and os.path.abspath(p) == os.path.abspath(keep):
+            continue
+        try:
+            os.remove(p)
+        except OSError as e:
+            logger.warning(f"Could not remove stale checkpoint {p}: {e}")
 
 
 def _warn_if_dormant_cells(dormant, levels_meta, config, logger) -> None:
