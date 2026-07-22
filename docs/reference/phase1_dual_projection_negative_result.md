@@ -1,10 +1,13 @@
 # Phase 1 Exact Dual Projection — Negative Result (Not a Speedup)
 
-**Status:** Closed investigation. Measured 2026-07-20. The implementation and all
-supporting artifacts live on the branch **`feat/newton-projection`** (pushed to
-origin as a reference; **not merged** to `main` and not intended to be, on these
-grounds). This document supersedes the former
-`docs/plans/PHASE1_DUAL_NEWTON_PROJECTION_PLAN.md`, which has been removed.
+**Status:** Closed investigation. Measured 2026-07-20. The **documentation** of the
+attempt is on `main` — the derivation `docs/math/08-dual-newton-projection/` and the
+measured study `docs/experiments/03-dual-projection-verification/` — so the reasoning
+survives without checking out a branch. The **implementation**
+(`orthogonal_projection_newton`, its flag-gating, tests and benchmark) lives only on
+the branch **`feat/newton-projection`** (pushed to origin as a reference; **not
+merged** to `main` and not intended to be, on these grounds). This document supersedes
+the former `docs/plans/PHASE1_DUAL_NEWTON_PROJECTION_PLAN.md`, which has been removed.
 
 ---
 
@@ -44,9 +47,9 @@ Phase 1 gets dramatically faster.
 The chosen replacement solves the projection **exactly** via its concave dual: a
 per-vertex probability-simplex projection (inner) wrapped in an L-BFGS-B ascent on the
 `N`-dimensional area dual `β`, with an optional semismooth-Newton polish for the last
-digits of feasibility. The full derivation is `docs/math/08-dual-newton-projection`
-(on the branch); the disproof that the *iterative* method is not the Euclidean
-projection is `docs/experiments/03-dual-projection-verification` (on the branch).
+digits of feasibility. The full derivation is `docs/math/08-dual-newton-projection`;
+the disproof that the *iterative* method is not the Euclidean projection is
+`docs/experiments/03-dual-projection-verification`.
 
 The correctness half of that thesis was **confirmed** — the iterative method really
 is not the projection, and the dual method really is exact (§6). The speed half was

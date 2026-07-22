@@ -53,3 +53,79 @@
   note      = {Background reference for the Fermat--Torricelli construction
                and the barycentric-weight formula for the Steiner point.}
 }
+
+@article{qi1993nonsmooth,
+  author    = {Liqun Qi and Jie Sun},
+  title     = {A Nonsmooth Version of Newton's Method},
+  journal   = {Mathematical Programming},
+  volume    = {58},
+  number    = {1--3},
+  pages     = {353--367},
+  year      = {1993},
+  note      = {Semismooth Newton method and its local quadratic convergence
+               under BD-regularity; basis for the optional Newton polish of the
+               dual projection.}
+}
+
+@incollection{boyle1986dykstra,
+  author    = {James P. Boyle and Richard L. Dykstra},
+  title     = {A Method for Finding Projections onto the Intersection of Convex
+               Sets in Hilbert Spaces},
+  booktitle = {Advances in Order Restricted Statistical Inference},
+  series    = {Lecture Notes in Statistics},
+  volume    = {37},
+  publisher = {Springer},
+  pages     = {28--47},
+  year      = {1986},
+  note      = {Dykstra's algorithm; converges to the exact Euclidean projection
+               onto an intersection of convex sets. Used as the ground-truth
+               reference in the validation of the dual projection.}
+}
+
+@article{condat2016simplex,
+  author    = {Laurent Condat},
+  title     = {Fast Projection onto the Simplex and the $\ell_1$ Ball},
+  journal   = {Mathematical Programming},
+  volume    = {158},
+  number    = {1--2},
+  pages     = {575--585},
+  year      = {2016},
+  note      = {Exact finite (sort/threshold) projection onto the probability
+               simplex; the per-vertex inner solve of the dual projection.}
+}
+
+@article{byrd1995lbfgsb,
+  author    = {Richard H. Byrd and Peihuang Lu and Jorge Nocedal and Ciyou Zhu},
+  title     = {A Limited Memory Algorithm for Bound Constrained Optimization},
+  journal   = {SIAM Journal on Scientific Computing},
+  volume    = {16},
+  number    = {5},
+  pages     = {1190--1208},
+  year      = {1995},
+  note      = {L-BFGS-B; the primary outer solver maximizing the concave partial
+               dual (available as scipy.optimize.minimize method=L-BFGS-B).}
+}
+
+@book{bertsekas1999nonlinear,
+  author    = {Dimitri P. Bertsekas},
+  title     = {Nonlinear Programming},
+  edition   = {2nd},
+  publisher = {Athena Scientific},
+  address   = {Belmont, MA},
+  year      = {1999},
+  note      = {Lagrangian duality for box/equality-constrained QP, Danskin's
+               theorem (gradient of a partial-min value function), and concavity
+               of the dual.}
+}
+
+@article{hintermuller2002semismooth,
+  author    = {Michael Hinterm{\"u}ller and Kazufumi Ito and Karl Kunisch},
+  title     = {The Primal-Dual Active Set Strategy as a Semismooth Newton Method},
+  journal   = {SIAM Journal on Optimization},
+  volume    = {13},
+  number    = {3},
+  pages     = {865--888},
+  year      = {2002},
+  note      = {Box-constrained quadratic programs solved as a semismooth Newton
+               method via the active-set structure used in the Newton polish.}
+}

@@ -294,5 +294,6 @@ a forward-looking design document.
 | `04-phase1-timing-profile/` | Empirical Phase 1 PGD timing profile; projection bottleneck; line-search thrashing | Complete |
 | `05-phase1-nregion-scaling/` | Empirical wall-time scaling with number of regions; projections to N=50/100/1000 | Complete |
 | `06-phase1-energy-discretization/` | Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty, and all gradients | Complete |
+| `08-dual-newton-projection/` | Phase 1 exact constraint projection via the concave dual: QP dual, per-vertex cap-free simplex solve, outer Jacobian J=−∇²q (sym. PSD, structural kernel span{1}), L-BFGS + semismooth-Newton polish, exactness/idempotency | Complete — derivation sound, but the method was **not adopted**: measured slower than the incumbent iterative projection (`docs/reference/phase1_dual_projection_negative_result.md`, `docs/experiments/03-dual-projection-verification/`). Implementation retained on branch `feat/newton-projection`. |
 
 When you create a new document, add a row to this table.

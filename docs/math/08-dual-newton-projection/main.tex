@@ -1,0 +1,459 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}      % loads ALL packages and notation
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {The Phase 1 constraint-projection QP and its concave dual},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{The Phase~1 Constraint-Projection QP and its Concave Dual}\\[0.5em]
+  \large Exact Euclidean projection onto partition, equal-area, and box
+  constraints: dual derivation, the per-vertex simplex solve, the outer
+  Jacobian, and the exactness/idempotency guarantees}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------
+% STATUS BANNER
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=orange!8!white, colframe=orange!65!black,
+                  title={Status --- specification (pre-implementation)}, fontupper=\small]
+This document is the mathematical \emph{source of truth} for the planned function
+\code{orthogonal\_projection\_newton} in \codefile{src/optimization/projection.py}
+(design: \codefile{docs/plans/PHASE1\_DUAL\_NEWTON\_PROJECTION\_PLAN.md}). Unlike the
+other \codefile{docs/math/} documents, it is written \emph{before} the code (the plan's
+workflow: derive first, then implement). The code callout boxes therefore name a
+function that does not yet exist; they define what it must compute. The measured
+motivation --- that the current \code{orthogonal\_projection\_iterative} does \emph{not}
+compute this projection --- is documented in
+\codefile{docs/experiments/03-dual-projection-verification/}. (This document occupies slot
+\code{08} as named by the plan; slot \code{07} is reserved for other in-flight work.)
+\end{tcolorbox}
+
+\begin{abstract}
+Each Phase~1 PGD iteration projects a candidate density onto the intersection of the
+partition constraint ($\sum_k u_{i,k}=1$ per vertex), the equal-area constraint
+($\sum_i v_i u_{i,k}=d_k$ per cell), and the box $0\le u\le1$. This document derives the
+exact Euclidean projection through its Lagrangian dual. The primal is recovered from the
+duals by a clip (\eqref{eq:primal-from-dual}); eliminating the per-vertex row duals is a
+probability-simplex projection, which must be computed \emph{cap-free} for the row dual to
+be well defined (\S\ref{sec:inner}). What remains is the maximization of a concave,
+$C^1$, piecewise-quadratic \emph{partial dual} $q(\beta)$ of dimension $N$ (the cell
+count), with $\grad q=-R$ the negated area residual (\S\ref{sec:qbeta}). We derive its
+generalized Hessian $-J$ (the $N\times N$ area Jacobian, \eqref{eq:jacobian}), prove it is
+symmetric positive semidefinite with the structural null vector $\mathbf 1$ ($J\mathbf 1=0$
+always; kernel $=\operatorname{span}\{\mathbf 1\}$ when the active sets connect all cells)
+(\S\ref{sec:jacobian}), and use this to justify the solver: globally-convergent L-BFGS on
+$q$ (primary), with a gauge-fixed semismooth-Newton polish (\S\ref{sec:solve}). Finally we
+prove exactness and idempotency (\S\ref{sec:exact}). All quantities are analytical.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{Overview}
+\label{sec:overview}
+% =====================================================================
+Phase~1 minimizes a $\Gamma$-convergence energy by projected gradient descent on a nodal
+density $U\in\mathbb{R}^{V\times N}$ ($V$ mesh vertices, $N$ cells). Each step takes a
+post-gradient candidate $Y$ (generally infeasible) and returns the nearest feasible density
+--- the Euclidean projection onto the constraint set. This projection dominates Phase-1 wall
+time and, as measured in \codefile{docs/experiments/03-dual-projection-verification/}, the
+incumbent iterative routine does not actually compute it. Here we derive the exact
+projection and the structure that makes it cheap: a per-vertex closed form plus a small
+$N$-dimensional concave maximization.
+
+% =====================================================================
+\section{Notation and Setup}
+\label{sec:setup}
+% =====================================================================
+$U=(u_{i,k})\in\mathbb{R}^{V\times N}$ is the density: row $i$ is vertex $i$, column $k$ is
+cell $k$. $v\in\mathbb{R}^V$ is the lumped $P_1$ mass (strictly positive), $\mathbf 1$ a
+vector of ones (length inferred), $\Delta=\{p\in\mathbb{R}^N: \sum_k p_k=1,\ p\ge0\}$ the
+probability simplex. Given the candidate $Y$ and per-cell area targets $d\in\mathbb{R}^N$
+($d_k=\tfrac1N\sum_i v_i$ in the equal-area case), the projection is
+
+\begin{equation}
+  \min_{U}\ \tfrac12\norm{U-Y}^2
+  \quad\text{s.t.}\quad
+  \underbrace{\textstyle\sum_k u_{i,k}=1\ \ \forall i}_{\text{row / partition}},\quad
+  \underbrace{\textstyle\sum_i v_i u_{i,k}=d_k\ \ \forall k}_{\text{area}},\quad
+  0\le u_{i,k}\le 1 .
+  \label{eq:qp}
+\end{equation}
+
+The metric is the plain (unweighted) Euclidean norm --- verified against the incumbent's
+correction term in \codefile{docs/experiments/03-…} and \S\ref{sec:mechanism-note}.
+
+\begin{remark}[the upper box bound is redundant]
+\label{rem:cap}
+If $\sum_k u_{i,k}=1$ and $u_{i,k}\ge0$ then each $u_{i,k}\le1$ automatically. Hence the
+box in \eqref{eq:qp} reduces to $U\ge0$, and the per-vertex feasible set is exactly $\Delta$.
+The cap at $1$ never binds; it is nonetheless important \emph{not} to carry it inside the
+inner solve (\S\ref{sec:inner}, Remark~\ref{rem:capfree}).
+\end{remark}
+
+\begin{remark}[feasibility of \eqref{eq:qp} and strong duality]
+\label{rem:feasible}
+Summing the row constraints weighted by $v$ gives $\sum_k\sum_i v_i u_{i,k}=\sum_i v_i$, so
+the area targets must satisfy the consistency condition $\sum_k d_k=\sum_i v_i$. Under it
+(with $0\le d_k\le\sum_i v_i$) the constant-column density $u_{i,k}=d_k/\sum_i v_i\in[0,1]$
+is feasible. All constraints of \eqref{eq:qp} are affine, so for this feasible convex QP
+strong duality holds \emph{without} a constraint qualification (Slater is unnecessary for
+polyhedral constraints), and the dual optimum is attained \cite{bertsekas1999nonlinear}. The
+consistency condition $\sum_k d_k=\sum_i v_i$ is assumed throughout.
+\end{remark}
+
+% =====================================================================
+\section{The dual and the primal-from-dual map}
+\label{sec:dual}
+% =====================================================================
+Introduce a multiplier $\alpha_i$ for each row constraint and $\beta_k$ for each area
+constraint. Keeping the box $0\le U\le1$ explicit, the Lagrangian is
+\begin{equation}
+  \Lagr(U,\alpha,\beta)=\tfrac12\norm{U-Y}^2
+   -\sum_i\alpha_i\Bigl(\sum_k u_{i,k}-1\Bigr)
+   -\sum_k\beta_k\Bigl(\sum_i v_i u_{i,k}-d_k\Bigr).
+  \label{eq:lagrangian}
+\end{equation}
+The dual function is $g(\alpha,\beta)=\min_{0\le U\le1}\Lagr(U,\alpha,\beta)$. Because
+\eqref{eq:lagrangian} separates over entries, the minimizing $U$ is obtained entrywise: the
+unconstrained stationary point is $y_{i,k}+\alpha_i+v_i\beta_k$, clipped to the box, giving
+the \textbf{primal-from-dual map}
+\begin{equation}
+  u_{i,k}(\alpha,\beta)=\operatorname{clip}\!\bigl(y_{i,k}+\alpha_i+v_i\beta_k,\ 0,\ 1\bigr).
+  \label{eq:primal-from-dual}
+\end{equation}
+Note the row dual $\alpha_i$ enters with unit weight and the area dual $\beta_k$ with the
+mass weight $v_i$ --- the signature of the \emph{Euclidean} (not $v$-weighted) metric.
+\label{sec:mechanism-note}
+Substituting \eqref{eq:primal-from-dual} into \eqref{eq:lagrangian},
+\begin{equation}
+  g(\alpha,\beta)=\sum_{i,k}\Bigl[\tfrac12\bigl(u_{i,k}-y_{i,k}\bigr)^2
+   -(\alpha_i+v_i\beta_k)\,u_{i,k}\Bigr]
+   +\sum_i\alpha_i+\sum_k\beta_k d_k ,
+  \label{eq:dualfun}
+\end{equation}
+a concave function of $(\alpha,\beta)$ (a pointwise minimum, over $U$, of maps that are
+affine in $(\alpha,\beta)$). By Danskin's theorem \cite{bertsekas1999nonlinear}, with
+$u=u(\alpha,\beta)$ optimal,
+\begin{equation}
+  \pd{g}{\alpha_i}=1-\sum_k u_{i,k},\qquad
+  \pd{g}{\beta_k}=d_k-\sum_i v_i u_{i,k}=:-R_k(\alpha,\beta),
+  \label{eq:dualgrad}
+\end{equation}
+where $R\in\mathbb{R}^N$ is the \emph{area residual}. The projection is $U(\alpha^\star,\beta^\star)$
+at the dual maximizer, where both gradients vanish (feasibility) and \eqref{eq:primal-from-dual}
+holds (KKT); by Remark~\ref{rem:feasible} strong duality makes this exact.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: primal reconstruction}, fontupper=\small]
+\codefile{src/optimization/projection.py}: \code{orthogonal\_projection\_newton} (planned).\\[2pt]
+The final primal is \code{U = clip(Y + alpha[:,None] + v[:,None]*beta[None,:], 0, 1)}
+(\eqref{eq:primal-from-dual}); \code{alpha}, \code{beta} come from \S\ref{sec:inner}--\S\ref{sec:solve}.
+\end{tcolorbox}
+
+% =====================================================================
+\section{Eliminating the row duals: the per-vertex simplex solve}
+\label{sec:inner}
+% =====================================================================
+For fixed $\beta$, \eqref{eq:dualfun} separates over vertices, so each $\alpha_i$ is found
+independently by maximizing $g$ in $\alpha_i$, i.e.\ by solving $\partial g/\partial\alpha_i=0$
+from \eqref{eq:dualgrad}. Writing $z_{i,k}:=y_{i,k}+v_i\beta_k$,
+\begin{equation}
+  \sum_k \operatorname{clip}\!\bigl(z_{i,k}+\alpha_i,\ 0,\ 1\bigr)=1 .
+  \label{eq:innereq}
+\end{equation}
+By Remark~\ref{rem:cap} every solution of \eqref{eq:innereq} yields the same primal $u_i$,
+namely the projection of $z_i$ onto the probability simplex $\Delta$: the minimizer of
+$\tfrac12\norm{u_i-z_i}^2$ over $u_i\in\Delta$ has the form $u_{i,k}=\max(z_{i,k}-\tau_i,0)$
+with the threshold $\tau_i=-\alpha_i$ fixed by $\sum_k u_{i,k}=1$. This is Condat's exact
+finite (sort/threshold) solve \cite{condat2016simplex}.
+
+\begin{prop}[well-posedness of the row dual]
+\label{prop:innerunique}
+Solve \eqref{eq:innereq} \emph{cap-free}, i.e.\ as projection onto $\Delta=\{\sum=1,\ \cdot\ge0\}$.
+Then $\alpha_i$ is the unique root of $h_i(\alpha):=\sum_k\max(z_{i,k}+\alpha,0)=1$.
+\end{prop}
+\begin{proof}
+$h_i$ is continuous, nondecreasing, convex and piecewise linear, with $h_i\to0$ as
+$\alpha\to-\infty$ and $h_i\to+\infty$ as $\alpha\to+\infty$. On any interval where at least
+one argument is positive its slope equals the number of active entries $\ge1$, so $h_i$ is
+\emph{strictly} increasing there. Since the level $1>0$ is attained only where some entry is
+active, the root is unique.
+\end{proof}
+
+\begin{remark}[cap-free is a well-posedness requirement, not an optimization]
+\label{rem:capfree}
+If instead the cap is retained inside \eqref{eq:innereq}, $\tilde h_i(\alpha)=\sum_k
+\operatorname{clip}(z_{i,k}+\alpha,0,1)$ has \emph{flat} segments wherever entries saturate at
+$1$: whenever a row's largest argument exceeds the runner-up by more than $1$, the level $1$
+falls on such a plateau and \eqref{eq:innereq} has an interval of solutions in $\alpha_i$.
+E.g.\ $z_i=(2.5,-0.3,-0.8)$ gives $\tilde h_i(\alpha)=1$ for every $\alpha\in[-1.5,0.3]$.
+Then $\alpha_i(\beta)$ is set-valued and $d\alpha_i/d\beta$ --- needed for the outer Jacobian
+(\S\ref{sec:jacobian}) --- is undefined. The cap-free solve returns the unique
+$\alpha_i=1-\max_k z_{i,k}$ (here $-1.5$) and the identical primal $u_i=(1,0,0)$
+(Remark~\ref{rem:cap}). The $V$ vertices are independent, so the whole pass is a single
+vectorized sort/threshold; it is \emph{stateless}, recomputed from $\beta$ each outer step.
+\end{remark}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: inner solve}, fontupper=\small]
+\codefile{src/optimization/projection.py}: \code{orthogonal\_projection\_newton} (planned).\\[2pt]
+Vectorized cap-free simplex projection of \code{Z = Y + v[:,None]*beta[None,:]} onto
+$\Delta$ (sort each row, find $\tau_i$, \code{U = maximum(Z - tau[:,None], 0)});
+\code{alpha = -tau}. Never carry \code{clip(.,0,1)} into this solve (Remark~\ref{rem:capfree}).
+\end{tcolorbox}
+
+% =====================================================================
+\section{The concave partial dual \texorpdfstring{$q(\beta)$}{q(beta)}}
+\label{sec:qbeta}
+% =====================================================================
+Let $\alpha(\beta)$ denote the row duals of \S\ref{sec:inner} and define the \textbf{partial
+dual}
+\begin{equation}
+  q(\beta):=\max_{\alpha}\ g(\alpha,\beta)=g\bigl(\alpha(\beta),\beta\bigr).
+  \label{eq:qdef}
+\end{equation}
+
+\begin{prop}[$q$ is concave, $C^1$, with $\grad q=-R$]
+\label{prop:q}
+$q$ is concave and continuously differentiable, and
+\begin{equation}
+  \grad q(\beta)=-R(\beta),\qquad R_k(\beta)=\sum_i v_i\,u_{i,k}\bigl(\alpha(\beta),\beta\bigr)-d_k ,
+  \label{eq:gradq}
+\end{equation}
+where $u(\alpha(\beta),\beta)$ is the primal \eqref{eq:primal-from-dual}. Maximizing $q$ over
+$\beta$ solves \eqref{eq:qp}.
+\end{prop}
+\begin{proof}
+$g$ is jointly concave (\S\ref{sec:dual}); partial maximization over the convex variable
+$\alpha$ preserves concavity, so $q$ is concave. For $N\ge2$ the inner maximum is attained
+(as $\alpha_i\to-\infty$, $\partial g/\partial\alpha_i\to1>0$, and as $\alpha_i\to+\infty$,
+$\to1-N<0$). The inner argmax over $\alpha$ may be an \emph{interval} (Remark~\ref{rem:capfree}),
+but the primal $u$ --- and hence $\partial g/\partial\beta=-R$ --- is \emph{constant} on it
+(on a flat piece every active entry is a saturated linear function whose value the shift in
+$\alpha$ does not move); $\alpha(\beta)$ denotes the unique cap-free selection
+(Prop.~\ref{prop:innerunique}), which is Lipschitz in $\beta$. Since the partial
+$\partial g/\partial\beta$ is single-valued at the maximum, Danskin's theorem
+\cite{bertsekas1999nonlinear} gives $q\in C^1$ with $\grad q(\beta)=\partial g/\partial\beta
+\big|_{\alpha=\alpha(\beta)}=d-\sum_i v_i u_{i,\cdot}=-R$ (using $\partial g/\partial\alpha=0$
+at $\alpha(\beta)$); $R$ is continuous because the simplex projection is $1$-Lipschitz. At
+$\beta^\star=\arg\max q$, $R(\beta^\star)=0$ and the inner solve enforces the row constraints,
+so $u(\alpha(\beta^\star),\beta^\star)$ is primal feasible and satisfies
+\eqref{eq:primal-from-dual} --- the KKT conditions of \eqref{eq:qp}; strong duality
+(Remark~\ref{rem:feasible}) makes it the projection.
+\end{proof}
+
+\emph{Consequence for the solver.} The outer problem is the maximization of a concave $C^1$
+function of only $N$ variables, whose value and gradient cost one vectorized inner pass. This
+is what makes the projection cheap and robust (\S\ref{sec:solve}).
+
+% =====================================================================
+\section{The gauge and the structural singularity}
+\label{sec:gauge}
+% =====================================================================
+\begin{prop}[shift invariance / gauge]
+\label{prop:gauge}
+The shift $(\alpha,\beta)\mapsto(\alpha-t\,v,\ \beta+t\,\mathbf 1)$, $t\in\mathbb{R}$, leaves
+every $u_{i,k}$ in \eqref{eq:primal-from-dual} unchanged. \emph{Under the consistency condition}
+$\sum_k d_k=\sum_i v_i$ (Remark~\ref{rem:feasible}) it also leaves $g$ and $q$ invariant, so
+$q(\beta+t\mathbf 1)=q(\beta)$, $\grad q\cdot\mathbf 1\equiv0$, and $\mathbf 1^\top R\equiv0$.
+\end{prop}
+\begin{proof}
+The argument of the clip is $y_{i,k}+\alpha_i+v_i\beta_k$; under the shift it becomes
+$y_{i,k}+(\alpha_i-tv_i)+v_i(\beta_k+t)=y_{i,k}+\alpha_i+v_i\beta_k$, unchanged, so $u$ is
+invariant. Beyond its $u$-dependent part, $g$ (\eqref{eq:dualfun}) carries the explicit terms
+$\sum_i\alpha_i+\sum_k\beta_k d_k$, which shift by $-t\sum_i v_i+t\sum_k d_k
+=t\bigl(\sum_k d_k-\sum_i v_i\bigr)=0$ under consistency; hence $g$ --- and, taking
+$\alpha(\beta+t\mathbf 1)=\alpha(\beta)-tv$, also $q$ --- is invariant. Differentiating
+$q(\beta+t\mathbf 1)=q(\beta)$ in $t$ gives $\grad q\cdot\mathbf 1=0$, i.e.\ $\mathbf 1^\top R=0$.
+Directly: $\mathbf 1^\top R=\sum_i v_i\bigl(\sum_k u_{i,k}\bigr)-\sum_k d_k=\sum_i v_i-\sum_k d_k=0$
+by Remark~\ref{rem:feasible} and $\sum_k u_{i,k}=1$.
+\end{proof}
+
+Thus the dual maximizer set contains the line $\beta^\star+\operatorname{span}\{\mathbf 1\}$
+(and generically equals it); the \emph{primal} $u$ is unique on all of it. Any Newton-type
+linear solve must fix this gauge (e.g.\ impose $\sum_k\beta_k=0$, or drop one component);
+L-BFGS simply drifts harmlessly along the ridge. When the active sets connect all cells (so
+$\ker J=\operatorname{span}\{\mathbf 1\}$, Prop.~\ref{prop:J}), the residual identity
+$\mathbf 1^\top R=0$ makes the Newton system of \S\ref{sec:jacobian} consistent on
+$\mathbf 1^\perp$; if instead $\ker J\supsetneq\operatorname{span}\{\mathbf 1\}$ (disconnected
+active sets --- an isolated or empty cell) the system can be inconsistent, which is exactly
+the case Remark~\ref{rem:deadcell} handles.
+
+% =====================================================================
+\section{The outer Jacobian \texorpdfstring{$J=-\Hess{q}$}{J = -Hess q}}
+\label{sec:jacobian}
+% =====================================================================
+Away from the measure-zero breakpoint set (a finite union of hyperplanes) where an entry
+crosses a box bound, the active sets
+\begin{equation}
+  A_i=\{k:\ z_{i,k}+\alpha_i>0\},\qquad m_i:=\abs{A_i}\ge1,
+\end{equation}
+are locally constant, and (cap-free, Prop.~\ref{prop:innerunique})
+$u_{i,k}=(z_{i,k}+\alpha_i)\,[k\in A_i]$ with $\alpha_i=(1-\sum_{k\in A_i}z_{i,k})/m_i$. Since
+$\partial z_{i,k}/\partial\beta_l=v_i\delta_{kl}$,
+\begin{equation}
+  \pd{\alpha_i}{\beta_l}=-\frac{v_i}{m_i}\,[l\in A_i],\qquad
+  \pd{u_{i,k}}{\beta_l}=\Bigl(v_i\delta_{kl}-\frac{v_i}{m_i}[l\in A_i]\Bigr)[k\in A_i].
+  \label{eq:dudbeta}
+\end{equation}
+Differentiating $R_k=\sum_i v_i u_{i,k}-d_k$ gives the generalized Jacobian
+\begin{equation}
+  \boxed{\,J_{kl}=\pd{R_k}{\beta_l}
+   =\delta_{kl}\!\!\sum_{i:\,k\in A_i}\!\! v_i^2
+   \;-\!\!\sum_{i:\,k,l\in A_i}\!\!\frac{v_i^2}{m_i}\,},\qquad
+  J=\sum_i v_i^2\Bigl(\operatorname{diag}(a_i)-\tfrac{1}{m_i}a_i a_i^\top\Bigr),
+  \label{eq:jacobian}
+\end{equation}
+with $a_i\in\{0,1\}^N$ the indicator of $A_i$ ($m_i=a_i^\top a_i$). Since $R=-\grad q$,
+$J=-\Hess{q}$.
+
+\begin{prop}[structure of $J$]
+\label{prop:J}
+$J$ is symmetric positive semidefinite, and $J\mathbf 1=0$ \emph{structurally} (for every
+active-set configuration). Its kernel is $\{x:\ x\ \text{constant on each }A_i\}$; if the
+active sets jointly connect all $N$ cells this is exactly $\operatorname{span}\{\mathbf 1\}$
+and $J$ has rank $N-1$.
+\end{prop}
+\begin{proof}
+Each summand $B_i=\operatorname{diag}(a_i)-\tfrac1{m_i}a_ia_i^\top$ is symmetric, and for any
+$x$, $x^\top B_i x=\sum_{k\in A_i}x_k^2-\tfrac1{m_i}\bigl(\sum_{k\in A_i}x_k\bigr)^2\ge0$ by
+Cauchy--Schwarz, with equality iff $x$ is constant on $A_i$. Hence $J=\sum_i v_i^2 B_i\succeq0$.
+Also $B_i\mathbf 1=a_i-a_i(a_i^\top\mathbf 1)/m_i=a_i-a_i=0$, so $J\mathbf 1=0$ regardless of
+the active sets. The kernel is $\bigcap_i\{x\text{ const on }A_i\}$; connectedness collapses it
+to the constants.
+\end{proof}
+
+The only linear system anywhere in the method is the \emph{gauge-fixed} reduced
+$(N-1)\times(N-1)$ solve of \S\ref{sec:solve}; $N$ is the cell count ($\le\!\sim\!10^3$), so
+it is a trivial dense factorization.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: outer gradient / Jacobian}, fontupper=\small]
+\codefile{src/optimization/projection.py}: \code{orthogonal\_projection\_newton} (planned).\\[2pt]
+Gradient \code{-R} from one inner pass (\eqref{eq:gradq}); Jacobian \eqref{eq:jacobian} only
+if the Newton polish is used, assembled from the active-set indicators $a_i$ and solved on
+$\{\sum\beta=0\}$ (never an $\varepsilon$-ridge --- see \S\ref{sec:solve}).
+\end{tcolorbox}
+
+% =====================================================================
+\section{Solving the outer problem}
+\label{sec:solve}
+% =====================================================================
+\paragraph{Primary --- L-BFGS on the concave dual.} Maximize $q$ (equivalently minimize
+$-q$) by L-BFGS-B \cite{byrd1995lbfgsb}; each evaluation is one inner pass
+(\S\ref{sec:inner}) returning $q$ and $\grad q=-R$. Because $q$ is concave and $C^1$ with
+Lipschitz gradient (Prop.~\ref{prop:q}), gradient-based ascent converges in value (a
+Zoutendijk/Wolfe line-search argument); L-BFGS-B is the practical choice. The maximizer set
+contains $\beta^\star+\operatorname{span}\{\mathbf 1\}$ (and generically equals it); the
+\emph{primal} $u$ is unique on all of it, so drift along the gauge ridge is harmless. No
+Jacobian, no linear solve, no active-set bookkeeping.
+
+\paragraph{Optional polish --- semismooth Newton on the gauge-fixed quotient.} $R$ is
+semismooth (piecewise smooth in $\beta$); the Newton step solves $J\,\delta\beta=-R$ for
+$\delta\beta\in\mathbf 1^\perp$ (consistent on $\mathbf 1^\perp$ when
+$\ker J=\operatorname{span}\{\mathbf 1\}$; Remark~\ref{rem:deadcell} handles the degenerate
+case). Since $J\succeq0$, $\delta\beta=-J^{+}R$ is an ascent direction for $q$
+($\grad q\cdot\delta\beta=R^\top J^{+}R\ge0$), so use $q$ itself as the line-search merit. On
+the quotient $\{\sum\beta=0\}$, \emph{provided every limiting active-set configuration at
+$\beta^\star$ connects all cells}, $J$ is positive definite (Prop.~\ref{prop:J}) --- i.e.\
+BD-regularity holds --- and Qi--Sun \cite{qi1993nonsmooth,hintermuller2002semismooth} gives
+local quadratic convergence; because $R$ is piecewise affine, convergence is in fact
+\emph{finite} (exact once the active set stabilizes). This regularity is carried entirely by
+the interface (mixed-membership) vertices and \emph{degrades in the crisp limit}: at a fully
+one-hot configuration every $m_i=1$, so $J=0$ (each $B_i=\operatorname{diag}(a_i)-a_ia_i^\top$
+vanishes) and the polish reduces to the ascent step. Where regularity holds, a handful of
+Newton steps drive feasibility from the L-BFGS tolerance to machine level.
+
+\begin{remark}[why not an $\varepsilon$-ridge; the zero-row degeneracy]
+\label{rem:deadcell}
+The structural kernel $\operatorname{span}\{\mathbf 1\}$ must be removed by the reduced/gauge-fixed
+solve, \emph{not} by a Tikhonov ridge $J+\varepsilon I$. The ridge is not merely inelegant: if
+row $k$ of $J$ is zero while $R_k\ne0$, the system $J\,\delta\beta=-R$ is \emph{inconsistent} in
+coordinate $k$, and the ridge returns $\delta\beta_k=d_k/\varepsilon$ (an explosion ---
+$\sim\!10^{4}$ at $\varepsilon=10^{-4}$, $\sim\!10^{10}$ at $\varepsilon=10^{-10}$), while a
+least-squares solve leaves $\delta\beta_k=0$ and never revives the cell. A zero $J$-row arises
+in two ways: (i) an \emph{empty} cell $k$ with no active entry at any vertex ($R_k=-d_k$); and
+(ii) an \emph{isolated crisp} cell $k$ supported only by one-hot ($m_i=1$) vertices --- its
+active column is \emph{non-empty}, yet $J_{kk}=\sum_{i:k\in A_i}v_i^2(1-1/m_i)=0$ (and its
+off-diagonals vanish too), so the "empty column" test misses it. Case (ii) is exactly the
+crisp late-Phase-1 regime. In both, the concave ascent has no such failure:
+$\partial q/\partial\beta_k=-R_k$ drives $\beta_k$ until cell $k$ re-enters an active set.
+Hence L-BFGS is the robust primary; the Newton polish must detect \emph{zero rows of $J$}
+($J_{kk}\approx0$ --- which subsumes empty columns and catches case (ii)) and fall back to an
+ascent step there.
+\end{remark}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: outer solve}, fontupper=\small]
+\codefile{src/optimization/projection.py}: \code{orthogonal\_projection\_newton} (planned).\\[2pt]
+Primary: \code{scipy.optimize.minimize(-q, beta0, jac=..., method="L-BFGS-B")}, warm-started on
+$\beta$ from the previous PGD step. Optional Newton polish: gauge-fixed reduced solve of
+\eqref{eq:jacobian} with $q$-ascent line search and the zero-$J$-row safeguard
+($J_{kk}\approx0$; Remark~\ref{rem:deadcell}). Thread only $\beta$ ($\alpha$ is recomputed).
+\end{tcolorbox}
+
+% =====================================================================
+\section{Exactness and idempotency}
+\label{sec:exact}
+% =====================================================================
+\begin{prop}[exactness and idempotency]
+\label{prop:exact}
+At the dual maximizer $\beta^\star$, $U^\star=U(\alpha(\beta^\star),\beta^\star)$ from
+\eqref{eq:primal-from-dual} is the exact solution of \eqref{eq:qp}. Moreover the projection is
+idempotent: if $Y$ already satisfies \eqref{eq:qp}, then $U^\star=Y$ exactly at the dual
+maximizer (and to the solver tolerance for a finite-precision solve).
+\end{prop}
+\begin{proof}
+\emph{Exactness.} At $\beta^\star$, $\grad q(\beta^\star)=-R(\beta^\star)=0$ (area feasibility)
+and the inner solve enforces $\sum_k u^\star_{i,k}=1$ (row feasibility) with $u^\star\ge0$;
+\eqref{eq:primal-from-dual} is the box-KKT stationarity with multipliers
+$(\alpha(\beta^\star),\beta^\star)$. These are the KKT conditions of the convex program
+\eqref{eq:qp}, which are sufficient; strong duality (Remark~\ref{rem:feasible}) identifies
+$U^\star$ with the projection. \emph{Idempotency.} If $Y$ is feasible then $\beta=0$,
+$\alpha=0$ give $R=0$ and reproduce $Y$ exactly, so $\beta^\star=0$ is a maximizer and
+$U^\star=\operatorname{clip}(Y,0,1)=Y$. A warm-started solve terminates at once, with movement
+at the level of the solver tolerance.
+\end{proof}
+
+This is precisely what the incumbent lacks: it is not the projection at all (gap up to $0.86$;
+\codefile{docs/experiments/03-dual-projection-verification/}), and its
+$\operatorname{clip}\!\circ\!\text{project}$ step is only weakly idempotent
+($\sim\!6\times10^{-8}$ per iteration). The dual projection removes both.
+
+% =====================================================================
+\section*{Summary table}
+% =====================================================================
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Quantity & Form & Where \\
+\midrule
+Primal from duals & $u_{i,k}=\operatorname{clip}(y_{i,k}+\alpha_i+v_i\beta_k,0,1)$ & \eqref{eq:primal-from-dual}, analytical \\
+Row dual $\alpha_i(\beta)$ & cap-free simplex projection of $z_i$ (unique) & \S\ref{sec:inner}, analytical \\
+Partial dual $q(\beta)$ & concave, $C^1$, $\grad q=-R$ & Prop.~\ref{prop:q}, analytical \\
+Gauge & $(\alpha,\beta)\!\to\!(\alpha-tv,\beta+t\mathbf 1)$; $\grad q\cdot\mathbf 1=0$ & Prop.~\ref{prop:gauge} \\
+Outer Jacobian $J=-\Hess q$ & $\delta_{kl}\sum_{i:k\in A_i}v_i^2-\sum_{i:k,l\in A_i}v_i^2/m_i$ & \eqref{eq:jacobian}, analytical \\
+$J$ structure & sym.\ PSD, $J\mathbf 1=0$ (structural); rank $N-1$ if connected & Prop.~\ref{prop:J} \\
+Primary solver & L-BFGS on $q$ (global in value) & \S\ref{sec:solve} \\
+Polish & semismooth Newton on $\{\sum\beta=0\}$ (finite, where BD-regular) & \S\ref{sec:solve} \\
+Guarantee & exact projection; idempotent & Prop.~\ref{prop:exact} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}
