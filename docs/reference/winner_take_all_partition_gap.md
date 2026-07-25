@@ -1,4 +1,4 @@
-# The Winner-Take-All Partition Gap at High N (Dormant & Runt Cells)
+# The Winner-Take-All Partition Gap at High N (Dormant, Runt & Split Cells)
 
 Phase 1 optimizes **continuous density functions** and enforces equal areas on
 them; the actual partition is then extracted by a **winner-take-all** (argmax)
@@ -83,18 +83,22 @@ failure.
 
 ## 2. Two manifestations of one gap
 
-| | **Dormant cell** | **Runt cell** |
-|---|---|---|
-| Winner-take-all territory | **zero** — wins no vertex | nonzero but **≈ ⅓ of target** |
-| Peak density `max(u_k)` | low (~0.08), never a winner | **1.0** — a confident winner in its small core |
-| Alive on the map? | no — cell vanishes (N→N−k) | yes — present but undersized |
-| What breaks | wrong cell **count** | unequal **areas** → Phase 2 infeasible |
-| Caught by `detect_dormant_cells()` | **yes** (0 wins / peak < 0.5) | **no** (peak = 1.0, wins > 0) |
-| Caught by `detect_area_imbalance()` | yes (territory 0) | **yes** (territory ≪ target) |
-| Status | **resolved** (seeded init) | **resolved** (corrected energy + moderate λ) |
+| | **Dormant cell** | **Runt cell** | **Split cell** |
+|---|---|---|---|
+| Winner-take-all territory | **zero** — wins no vertex | nonzero but **≈ ⅓ of target** | ≈ target total, but in **2+ disconnected islands** |
+| Peak density `max(u_k)` | low (~0.08), never a winner | **1.0** — a confident winner in its small core | **1.0** in every piece |
+| Alive on the map? | no — cell vanishes (N→N−k) | yes — present but undersized | yes — present but fragmented |
+| What breaks | wrong cell **count** | unequal **areas** → Phase 2 infeasible | non-physical topology → Phase 2 multi-loop contours |
+| Caught by `detect_dormant_cells()` | **yes** (0 wins / peak < 0.5) | **no** (peak = 1.0, wins > 0) | **no** (peak = 1.0, wins > 0) |
+| Caught by `detect_area_imbalance()` | yes (territory 0) | **yes** (territory ≪ target) | **no** (total territory ≈ target) |
+| Caught by `detect_disconnected_cells()` | — | — | **yes** (≥2 components) |
+| Status | **resolved** (seeded init) | **resolved** (corrected energy + moderate λ) | **detected**; mitigation = reseed / repair |
 
 Dormant = the extreme where territory collapses to zero. Runt = territory nonzero
-but nowhere near fair. Same root cause; different severity and different symptom.
+but nowhere near fair. Split = territory the right *total* size but broken into
+disconnected pieces. Same winner-take-all root cause; three different symptoms,
+and the split cell is the only one that slips through *both* area-based gates
+(§ Manifestation C).
 
 ## 3. Manifestation A — Dormant cells (RESOLVED)
 
@@ -179,6 +183,45 @@ dormant — peak density 1.0, wins 689 vertices — just tiny on the map.
 
 ![Continuous mass vs winner-take-all territory for the runt cell 92 versus a healthy cell. Both hold the same paint; the runt's territory is a third of target because two-thirds of its mass is diffuse halo.](figures/mass_vs_territory_runt.png)
 
+## 4b. Manifestation C — Split (disconnected) cells
+
+**The failure.** A cell's winner-take-all territory holds ≈ the right *total* area
+but is broken into two or more **disconnected islands** on the surface. Each island
+is crisp (peak density 1.0) and the islands sum to the target area, so the cell
+passes **both** area-based gates — `detect_dormant_cells()` (it wins plenty of
+vertices) *and* `detect_area_imbalance()` (its total territory is fair). Only a
+connectivity test sees it. A minimal-perimeter cell is connected (a split cell
+carries excess boundary), so this is a **non-physical relaxation local minimum**,
+not a valid partition cell.
+
+**Why the optimizer is happy with it.** Nothing in the objective penalizes
+disconnection: the Γ-convergence energy, the WTA balance term
+(`P_bal = (γ/2)Σr_k²` over *total* territory), and the discrete-area trim all
+reward the correct *total* area per cell, none cares how many pieces that area is
+in. So an area-balanced fragmented cell is a stable fixed point.
+
+**Where it comes from.** Observed at torus **N=200** (`run_20260722_121925`,
+seed 84172851, λ=9, adaptive schedule): the final solution reported **0 dead, 0
+imbalanced** (worst-cell area dev 2.68%), yet **3/200 cells** (58, 168, 17) were
+split into 3–4 islands — worst cell 58 in three chunks of 0.050 / 0.039 / 0.028
+(stray = 57% of a cell). Tracing connectivity back through the mesh levels showed
+the fragmentation was *worst at the coarsest level* (8 split cells at level 0,
+where large ε makes the diffuse argmax boundary easy for a neighbour to pinch
+through) and mesh refinement *healed* most of it (8 → 6 → 3 → 3). The 3 survivors
+were stuck from level 0 — i.e. this is a coarse-level pinch the finer levels could
+not reconnect, **not** an artifact of the adaptive E₀ handoff (the cheap fine
+levels reduced the count, they did not create fragments). Likely seed-specific,
+consistent with the seed lottery in §9.
+
+**Status: detected, not yet auto-mitigated.** `detect_disconnected_cells()` (§7)
+flags it. Mitigations (none yet automated): (a) **reseed** — cheapest, good odds
+given the seed sensitivity; (b) a **connectivity-repair** post-process that
+reassigns each stray island to the neighbour cell that most surrounds it, then
+rebalances (perturbs areas, adds local perimeter); (c) add a connectivity-aware
+term to the relaxation (larger change). A fragmented cell should **not** be handed
+to Phase 2 — a disconnected cell produces multi-loop contours the equal-area /
+Steiner machinery is not built for.
+
 ## 5. Results analysis — where the runt comes from (Step 0)
 
 A forensic pass over the three existing solutions (zero new compute) tracked every
@@ -252,9 +295,9 @@ finer mesh did not help.
 | Detection gate | `detect_dormant_cells()` ✅ | `detect_area_imbalance()` ✅ | both catch |
 | Hard discrete-territory / crispness **constraint** | n/a | **not needed** — once the well is correct, the *soft* λ penalty suffices; the hard-floor idea is superseded | superseded |
 
-## 7. Detection (both gates implemented)
+## 7. Detection (three gates implemented)
 
-Both run at the end of Phase 1 in `run_relaxation` (log + CLI banner + a
+All three run at the end of Phase 1 in `run_relaxation` (log + CLI banner + a
 `metadata.yaml` block). From an existing solution:
 
 ```python
@@ -273,6 +316,16 @@ worst_rel = np.abs(areas-target).max()/target     # == Phase 2 iter-0 constraint
 - `detect_area_imbalance()` — flags cells whose territory deviates > `AREA_IMBALANCE_REL_THRESHOLD = 0.05`
   from target. Catches both dormant (territory 0) and runts. Verified: fires on both
   N=100 solutions (0.160 / 0.053), silent on N=50 (0.0036).
+- `detect_disconnected_cells()` — flags *split* cells (Manifestation C, below):
+  builds the induced subgraph of mesh edges whose endpoints share an argmax winner
+  and counts connected components per cell (via `scipy.sparse.csgraph`), so it
+  respects true surface topology (torus periodic wrap in `faces`). A non-largest
+  component is a genuine stray piece only if its area exceeds
+  `DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01` of target (else = argmax speckle).
+  Catches what the other two miss — a split cell's pieces sum to target and each is
+  crisp, so it passes *both*. Verified at torus N=200 (`run_20260722_121925`,
+  seed 84172851): 3/200 cells fragmented (worst 57% stray) while dormant=0 and
+  imbalance=0. Logic gate: `testing/test_disconnected_cells_detection.py`.
 
 ## 8. Resolution — the corrected energy plus a moderate λ
 

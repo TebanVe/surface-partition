@@ -29,6 +29,7 @@ from ..optimization.projection import (
 from ..optimization.initialization import create_seeded_initial_condition
 from ..partition.find_contours import (
     ContourAnalyzer, detect_dormant_cells, detect_area_imbalance,
+    detect_disconnected_cells,
 )
 from ..partition.contour_partition import PartitionContour
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
@@ -179,6 +180,7 @@ class RelaxationResult:
     metadata: dict
     dormant_cells: dict = field(default_factory=dict)
     area_imbalance: dict = field(default_factory=dict)
+    disconnected_cells: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable summary for the AI agent layer."""
@@ -438,6 +440,9 @@ def run_relaxation(provider, config: RelaxationConfig,
         area_imbalance = detect_area_imbalance(
             final_densities, mesh.v, config.n_partitions
         )
+        disconnected = detect_disconnected_cells(
+            final_densities, mesh.faces, mesh.v
+        )
 
         # The schedule attrs are written only on the scheduled path, so an
         # off-path solution file stays byte-identical to main's.
@@ -462,6 +467,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             timestamp, solution_path, logfile_path, initial_perimeter,
             warm_start_path=warm_start_path, dormant_cells=dormant,
             area_imbalance=area_imbalance,
+            disconnected_cells=disconnected,
         )
 
         with open(os.path.join(solution_dir, 'metadata.yaml'), 'w') as f:
@@ -493,6 +499,7 @@ def run_relaxation(provider, config: RelaxationConfig,
 
         _warn_if_dormant_cells(dormant, levels_meta, config, logger)
         _warn_if_area_imbalance(area_imbalance, config, logger)
+        _warn_if_disconnected_cells(disconnected, config, logger)
 
         overall_success = all(r['success'] for r in results)
         total_elapsed = sum(r['elapsed'] for r in results)
@@ -514,6 +521,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             metadata=metadata,
             dormant_cells=dormant,
             area_imbalance=area_imbalance,
+            disconnected_cells=disconnected,
         )
 
     finally:
@@ -1014,12 +1022,61 @@ def _warn_if_area_imbalance(area_imbalance, config, logger) -> None:
     logger.warning("=" * 80)
 
 
+def _warn_if_disconnected_cells(disconnected, config, logger) -> None:
+    """Log a prominent warning when cells split into disconnected pieces.
+
+    A cell whose winner-take-all territory breaks into two or more disconnected
+    islands passes both the dormant-cell and discrete-area-imbalance checks -- its
+    pieces sum to the target area and each is crisp -- yet it is not a physical
+    minimal-perimeter cell, since optimal cells are connected. This is a
+    relaxation local minimum: nothing in the energy, the WTA balance term, or the
+    discrete-area trim penalizes disconnection, so an area-balanced fragmented
+    cell is a stable fixed point. Distinct from the dormant and imbalance
+    warnings, both of which pass for a fragmented cell. See
+    docs/reference/winner_take_all_partition_gap.md.
+    """
+    if not disconnected or not disconnected.get('fragmented'):
+        return
+
+    worst = disconnected.get('worst_cell')
+    logger.warning("=" * 80)
+    logger.warning(
+        f"DISCONNECTED CELLS - {disconnected.get('n_fragmented')} cell(s) of this "
+        f"{config.n_partitions}-region solution split into disconnected pieces."
+    )
+    logger.warning(
+        "Each flagged cell's winner-take-all territory breaks into 2+ islands on "
+        "the surface. The pieces sum to the target area and are crisp, so the "
+        "dormant and area-imbalance checks pass -- but a minimal-perimeter cell "
+        "is connected, so this is a non-physical relaxation local minimum."
+    )
+    logger.warning(
+        f"  Worst cell {worst}: stray (non-largest) pieces total "
+        f"{disconnected.get('worst_stray_rel', 0.0) * 100:.1f}% of a cell's target "
+        f"area (abs {disconnected.get('worst_stray_abs', 0.0):.4g})."
+    )
+    logger.warning(f"  Fragmented cells: {disconnected.get('fragmented')}")
+    for d in disconnected.get('details', [])[:8]:
+        logger.warning(
+            f"    cell {d['cell']}: {d['n_components']} pieces, areas "
+            f"{[round(a, 5) for a in d['component_areas']]}"
+        )
+    logger.warning(
+        "Likely cause: a cell pinched apart on the coarse mesh (large epsilon) "
+        "and refinement could not reconnect it; connectivity is not in the "
+        "objective. Try a different seed, or a connectivity-repair post-process. "
+        "Do NOT hand a fragmented cell to Phase 2 (it yields multi-loop contours)."
+    )
+    logger.warning("=" * 80)
+
+
 def _collect_metadata(config, provider, results, levels_meta, mesh,
                       timestamp, solution_path, logfile_path,
                       initial_perimeter,
                       warm_start_path: Optional[str] = None,
                       dormant_cells: Optional[dict] = None,
-                      area_imbalance: Optional[dict] = None) -> dict:
+                      area_imbalance: Optional[dict] = None,
+                      disconnected_cells: Optional[dict] = None) -> dict:
     """Assemble comprehensive metadata dictionary."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
@@ -1099,5 +1156,6 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
         ),
         'dormant_cells': dormant_cells,
         'area_imbalance': area_imbalance,
+        'disconnected_cells': disconnected_cells,
     }
     return meta
