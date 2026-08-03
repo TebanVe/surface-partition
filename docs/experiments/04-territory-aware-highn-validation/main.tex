@@ -48,6 +48,25 @@ mid-snapshot.
 \end{tcolorbox}
 
 % ---------------------------------------------------------------------
+% ADDENDUM WARNING BANNER (2026-08-03)
+% ---------------------------------------------------------------------
+\begin{tcolorbox}[colback=red!5!white, colframe=red!60!black,
+                  title={Addendum 2026-08-03 --- Result~1 is confirmed only on
+                  \emph{area}; the term causes a \emph{connectivity} regression},
+                  fontupper=\small]
+The July conclusion ``the balance term works'' is measured and stands \textbf{for
+the quantity it measured} --- discrete-area imbalance. It did not test
+\emph{connectivity}. A later run shows the machinery drives area to target by
+handing cells \textbf{disconnected} territory: \(14/200\) fragmented cells, against
+\(0\) for the matched term-OFF control at the same seed, \(\lambda\), and mesh.
+Together with a wall-clock cost that made a 5-level \(N{=}200\) ladder
+unaffordable, this makes the term a \emph{net regression} at \(N{=}200\), where the
+original energy already produced a valid finalised partition. See
+\S\ref{sec:addendum}. Conclusion~1 of \S\ref{sec:conclusions} must be read with
+that qualification.
+\end{tcolorbox}
+
+% ---------------------------------------------------------------------
 % PROVENANCE --- mandatory (docs/experiments/README.md)
 % ---------------------------------------------------------------------
 \begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
@@ -173,7 +192,9 @@ above the gate; level 1 (finer) descends \(\sim\!10\times\) faster and crosses i
 \label{fig:traj}
 \end{figure}
 
-\section{Conclusions and implications}
+\section{Conclusions and implications}\label{sec:conclusions}
+\emph{(Conclusion~1 is qualified by the addendum of \S\ref{sec:addendum}: it holds
+for area, not for connectivity.)}
 \begin{enumerate}
 \item \textbf{The balance term works} on the hardest case (bad seed, \(\lambda\)
   immune) --- the anti-lottery property N\(=\)1000 requires. This confirms Stage~6.
@@ -193,11 +214,168 @@ above the gate; level 1 (finer) descends \(\sim\!10\times\) faster and crosses i
   result.
 \end{enumerate}
 
+% =====================================================================
+\section{Addendum (2026-08-03) --- the connectivity regression and its
+cost}\label{sec:addendum}
+% =====================================================================
+
+\begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
+                  title={Provenance --- addendum}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.66\linewidth}@{}}
+Date            & 2026-08-03 (analysis of the run of 2026-07-30\,\ldots\,08-03) \\[3pt]
+Status          & \textbf{measured} (mid-ladder: level~2 checkpoint; the run never
+                  reached its final level) \\[3pt]
+Surface         & torus \(T(R{=}1.0,\ r{=}0.6)\), \(N{=}200\), seed \(61803399\),
+                  \(\lambda{=}11\), 5 levels, \code{init\_method: seeded} \\[3pt]
+Source run      & \textbf{territory:} \code{run\_20260730\_211516}, config
+                  \codefile{parameters/torus\_200part\_coarse\_seeded\_s61803399\_lam11\_adaptive.yaml}
+                  (\code{wta\_schedule: adaptive}, margin \(0.03\), re-arm \(0.05\)),
+                  SLURM job \code{6371929} on UPPMAX Pelle, 4\,d wall.
+                  \textbf{Control:} \code{run\_20260722\_175451} --- \emph{same}
+                  seed, \emph{same} \(\lambda{=}11\), \emph{same} 5-level mesh,
+                  machinery \textbf{OFF}: \(0\) dead / \(0\) imbalanced /
+                  \(0\) fragmented, worst area deviation \(1.7\%\), run to
+                  completion and finalised as a deliverable. \\[3pt]
+Producing script& \codefile{testing/check\_fragmentation.py} (added for this
+                  analysis) on \code{solution/checkpoint\_level02.h5};
+                  \code{relaxation.log} for the timing and trim trace \\[3pt]
+Anchor          & \code{n\_fragmented} \(=14\) with \code{n\_imbalanced} \(=1\)
+                  and \code{dead} \(=0\) at level~2; worst cell \(198\), stray
+                  \(43.57\%\) of target \\
+\end{tabular}
+\end{tcolorbox}
+
+\subsection{Why this addendum exists}
+The July report measured \emph{discrete-area imbalance} and found the balance term
+fixes it. Connectivity was never tested. \S\,4b of
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} had by then recorded a
+third failure mode --- \textbf{split cells}, whose winner-take-all territory holds
+the right \emph{total} area in two or more disconnected islands --- and attributed
+it to the seed lottery. This addendum tests that attribution, and finds it false.
+
+\subsection{Result 4 --- the term fragments cells}
+The reseed run used the seed \emph{proven clean} at this \(N\), \(\lambda\), and
+mesh. Checked mid-ladder at \code{checkpoint\_level02.h5} (levels 0--1 complete,
+\(V{=}24{,}948\), \code{wta\_active=True}):
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & \textbf{control} & \textbf{seed 84172851} & \textbf{seed 61803399} \\
+ & term OFF, final & term ON, final & term ON, level~2 \\
+\midrule
+dead cells        & 0            & 0            & 0 \\
+imbalanced cells  & 0            & 0            & 1 \\
+\textbf{fragmented cells} & \textbf{0} & \textbf{3} & \textbf{14} \\
+worst stray       & ---          & 57\% (cell 58) & 43.6\% (cell 198) \\
+most pieces       & ---          & 4            & 7 (cell 16) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These are not threshold artifacts. Target area is
+\(4\pi^2 R r/200 = 0.1184\); cell \(198\) holds
+\(0.0663 + 0.0474 + 0.0042 = 0.1179\) --- on target, in three places, its second
+piece \(40\%\) of a whole cell. Cell \(198\) does \emph{not} appear in the
+imbalanced list. Only \(15\) cells have more than one raw component and \(14\)
+clear the \(1\%\) significance threshold, so the filter is barely binding.
+
+\paragraph{The control is matched.} \code{run\_20260722\_175451} differs from the
+territory run \emph{only} in the machinery flags. It finished all five levels with
+\(0\) fragmented cells and was finalised as a deliverable. The single remaining
+mismatch is the comparison level (2 vs.\ final), and it cuts against the term: the
+control was clean \emph{at the end}, while the territory run is already at \(14\)
+\emph{mid-ladder}, with no mechanism that would heal it --- nothing in the energy,
+the balance term, or the trim penalizes disconnection, so an area-balanced
+fragmented cell is a stable fixed point.
+
+\subsection{Result 5 --- the causal trace points at the trim}
+\code{relaxation.log} records the trim's worst-deviation target at each retarget.
+At level~0 it was dominated for hours by cell \(198\) (deviation \(41.8 \to 44.4
+\to 53.1 \to 55.8 \to 57.8 \to 61.2 \to 67.0 \to 63.7\%\)) and cell \(16\)
+(\(48.2, 45.4, 38.3, 37.0, 35.4\%\)), with cell \(37\) still flagged at the level
+end. Those are precisely the \textbf{two worst fragmented cells} at level~2
+(\(198\) at \(43.6\%\); \(16\) in seven pieces), and \(37\) is in the flagged list.
+The trim drove their \emph{total} area to target by giving them disconnected
+territory. It was also \textbf{clamp-saturated} --- \code{d range [0.800, 1.200]}
+\(\times \bar A\), exactly \(\pm\)\code{wta\_trim\_clamp}\(=0.20\) --- for most of
+the run, i.e.\ pushing at maximum authority.
+
+Consistent with this, the \(3\)-fragment run \code{run\_20260722\_121925} saw its
+fragment count \emph{fall} (\(8 \to 6 \to 3 \to 3\)) over exactly the levels that
+had handed off to the cheap original energy. In the present run the adaptive
+handoff \textbf{never fired} (level ends \(12.69\%\) and \(8.31\%\), both above
+\code{wta\_switch\_margin}\(=0.03\)), so the trim ran on \emph{every} level.
+
+\subsection{Result 6 --- the wall-clock cost}
+No level ever triggered mesh refinement; every completed level ran to the
+\(30{,}000\)-iteration cap. The \S\ref{sec:conclusions} conclusion~4 fix (refine on
+a balance/stationarity plateau) was implemented and \emph{still} did not fire:
+\(\norm{g_t}\) flatlined at \(\approx 20.33\), four orders above
+\code{refine\_grad\_tol}\(=10^{-2}\), and the plateau fallback needs \(30\)
+consecutive \(\abs{\Delta \norm{g_t}} < 10^{-4}\), which the trim's every-200-iteration
+retarget breaks. Because the trim continuously moves the target, \(\norm{g_t}\) has
+no reason to approach zero --- the balance-plateau trigger is structurally
+unreachable while the trim runs.
+
+\begin{center}\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Level & mesh & \(V\) & iterations & wall time \\
+\midrule
+1 & \(100\times96\)  & \(9{,}600\)  & 30{,}000 (cap) & \(11.2\)\,h \\
+2 & \(162\times154\) & \(24{,}948\) & 30{,}000 (cap) & \(53.5\)\,h \\
+3 & \(224\times212\) & \(47{,}488\) & \(9{,}500\) (killed) & \(31.4\)\,h \\
+4 & \(286\times270\) & \(77{,}220\) & --- & --- \\
+5 & \(348\times328\) & \(114{,}144\) & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Four days of wall clock bought \(2.4\) of \(5\) levels. At the observed
+\(11.9\)\,s/iteration, level~3 alone needs \(\approx 99\)\,h; extrapolating the
+measured scaling to levels 4--5 puts the full ladder at \(\approx 20\) days. The
+job was killed without ever writing a final solution or \code{metadata.yaml}, so
+none of the three validity gates ever ran --- the \(14\) fragments were found only
+by checking the checkpoint directly.
+
+\subsection{Interpretation}
+At \(N{=}200\) the original energy already produces a valid, finalised partition
+(the control). Against that baseline the territory-aware machinery is a
+\textbf{net regression on two axes}: it makes the run roughly an order of magnitude
+more expensive \emph{and} it converts area-deficient cells into area-correct
+\emph{disconnected} ones, which are strictly worse for Phase~2 (a split cell yields
+multi-loop contours the equal-area/Steiner machinery is not built for).
+
+This does not retract Result~1. The term does what it was designed to do --- it
+enforces \emph{total} discrete area, and on the bad seed it did so where \(\lambda\)
+could not. The defect is that total area is the wrong invariant to enforce alone:
+area and connectivity must be enforced together, or fixing the first breaks the
+second. The motivating case for the term was \(N{=}300\), which the original energy
+does not solve; the honest reading is that the term is \textbf{not yet ready} to be
+the answer there either, because it would carry this fragmentation with it.
+
+\paragraph{No figure.} The addendum's numbers come from a checkpoint that lives on
+the cluster and is not in this repository, so \codefile{make\_figures.py} is
+unchanged and no new \code{fig\_*.pdf} is generated. The measurement is reproducible
+with \codefile{testing/check\_fragmentation.py} against that checkpoint.
+
 \section{Caveats}
 Single seed / single \(\lambda\) (by design --- the point is the \emph{bad} case).
 The run was interrupted mid-level-2, so the formal finest-level completion gate was
 not reached; a cluster re-run (with checkpoint/resume, and preferably the tuned
 schedule of conclusion~3) is needed to close it. The next A/B is N\(=\)300 vs
 \code{run\_20260714\_224821} (predicted \(9\to\le1\) over gate).
+
+\paragraph{Addendum caveats (2026-08-03).} The connectivity comparison of
+\S\ref{sec:addendum} is at level~2 for the territory run and at the final level for
+both controls; there is no term-OFF measurement at level~2 specifically. The
+decisive experiment is cheap and not yet run: relax seed \(61803399\),
+\(\lambda{=}11\) to level~2 with \code{wta\_schedule: off} and count fragments.
+Two seeds only. That the \emph{trim} rather than the \emph{balance term} is the
+fragmenting component is an inference from the log trace and the handoff
+correlation --- the two have never been enabled separately, and
+\code{wta\_balance\_enabled} / \code{wta\_trim\_enabled} are independent flags, so
+that A/B is also available.
 
 \end{document}

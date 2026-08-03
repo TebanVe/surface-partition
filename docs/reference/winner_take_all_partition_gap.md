@@ -252,12 +252,42 @@ the stable fixed point described above, since nothing penalizes disconnection.
 The trim was also **clamp-saturated** (`d range [0.800, 1.200] × Ā` = exactly
 ±`wta_trim_clamp=0.20`) for most of the run, i.e. pushing at maximum authority.
 
-*Confidence.* The counts and the log trace are measured. That the trim *causes*
-the splits is a strong inference, not yet a controlled result: the two runs differ
-in seed, λ, and comparison level (2 vs final), and there is no matched
-term-OFF-at-level-2 control. **The decisive experiment** is cheap — relax seed
-61803399, λ=11 to level 2 with `wta_schedule: off` and count fragments. Until
-that runs, treat "the trim manufactures splits" as the leading hypothesis.
+*Confidence.* The counts and the log trace are measured, and the **term-OFF control
+is matched**: `run_20260722_175451` differs from `run_20260730_211516` only in the
+machinery flags — same seed 61803399, same λ=11, same 5-level mesh — and it finished
+all five levels with **0 fragmented** (worst area dev 1.7%) and was finalised as a
+deliverable. The one remaining mismatch is the comparison level (2 vs final), and it
+cuts *against* the machinery: the control was clean at the **end**, while the
+territory run is at 14 **mid-ladder** with no healing mechanism.
+
+What is *not* yet separated is **balance term vs trim**. `wta_balance_enabled` and
+`wta_trim_enabled` are independent flags but have never been enabled separately; the
+trim is the suspect (the log trace and the handoff correlation both point at it), not
+the proven culprit. Two cheap experiments settle it — relax seed 61803399, λ=11 to
+level 2 with (a) `wta_schedule: off`, and (b) balance term on / trim off.
+
+**At N=200 the machinery is a net regression, on two axes.** The term was added
+because it looked necessary at **N=300**; at N=200 the *original* energy already
+produces a valid, finalised partition (`run_20260722_175451`). Measured against
+that baseline the machinery costs:
+
+1. **Wall clock.** No level ever triggered mesh refinement — every completed level
+   ran the full 30,000-iteration cap. The balance-plateau trigger built to bypass
+   the trim sawtooth is *structurally unreachable while the trim runs*: the trim
+   moves the target every 200 accepted iterations, so ‖g_t‖ never approaches zero
+   (it flatlined at ≈20.33 against `refine_grad_tol=1e-2`, and the plateau fallback
+   needs 30 consecutive |Δ‖g_t‖| < 1e-4). The adaptive handoff never fired either
+   (level ends 12.69% and 8.31%, both above the 3% margin), so the expensive path
+   ran on every level. Four days bought 2.4 of 5 levels — 11.2 h, 53.5 h, then
+   31.4 h for 9,500/30,000 iterations; the full ladder extrapolates to **~20 days**.
+2. **Connectivity.** 14/200 fragmented (above), versus 0 for the control.
+
+So the term trades a problem N=200 does not have for two that it does. It is not
+ready to be the N=300 answer either, since it would carry the fragmentation there.
+This does not retract its measured success on *area* (`docs/experiments/04-...`,
+Result 1: entrenched −34% runt → 0 imbalanced on the seed λ could not fix). The
+defect is that **total area is the wrong invariant to enforce alone** — area and
+connectivity have to be enforced together, or fixing the first breaks the second.
 
 **Status: detected; reseed ruled out as mitigation; no automated fix.**
 `detect_disconnected_cells()` (§7) flags it. Options: (a) ~~reseed~~ —

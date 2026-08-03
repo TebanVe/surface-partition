@@ -40,6 +40,48 @@
 # SUCCESS = final metadata.yaml with n_imbalanced: 0 (worst < 5%) AND
 # n_fragmented: 0 (no disconnected cells) on the >100k mesh.
 # ============================================================================
+#
+# ############################################################################
+# OUTCOME (2026-08-03) -- THIS CONFIG FAILED. DO NOT RE-RUN AS-IS.
+# Everything above is the reasoning as it stood on 2026-07-22 and is kept as the
+# record of that reasoning. The central premise -- "it is a seed pathology, not a
+# flaw in the balance term" -- IS FALSIFIED. What actually happened:
+#
+#   Run: run_20260730_211516 (Pelle job 6371929, 4 days wall, killed mid-level-3).
+#   Checked at solution/checkpoint_level02.h5 via testing/check_fragmentation.py:
+#
+#     0 dead,  1 imbalanced (cell 184, 8.31%),  14 of 200 FRAGMENTED
+#     worst: cell 198, 3 pieces, 43.6% stray; cell 16 in 7 pieces
+#
+#   The PROVEN-CLEAN seed is WORSE than the "bad" seed it was chosen to replace
+#   (14 fragmented vs 3). Reseeding is not a mitigation for split cells.
+#
+#   Matched control: run_20260722_175451 -- same seed, same lambda=11, same
+#   5-level mesh, machinery OFF -- finished clean (0 dead / 0 imbalanced /
+#   0 fragmented, worst area dev 1.7%) and was finalised as a deliverable.
+#   So at N=200 the ORIGINAL energy already works and this machinery is a net
+#   regression on two axes:
+#     (1) COST. No level ever triggered refinement (all ran the 30000-iter cap;
+#         the balance-plateau trigger is unreachable because the trim keeps
+#         moving the target, so ||g_t|| flatlines at ~20 vs refine_grad_tol
+#         1e-2). The adaptive handoff never fired either -- level ends were
+#         12.69% and 8.31%, both above wta_switch_margin 0.03 -- so the
+#         expensive machinery ran on every level. 4 days bought 2.4 of 5
+#         levels; the full ladder extrapolates to ~20 days.
+#     (2) CONNECTIVITY. The trim buys a cell's target area with DISCONNECTED
+#         mass. Log trace: the trim's persistent worst-deviation cells at
+#         level 0 (198, 16, 37) are exactly the worst fragmented cells at
+#         level 2. The trim was clamp-saturated (d range [0.800, 1.200] x Abar
+#         = exactly +/-wta_trim_clamp) for most of the run.
+#
+#   Open question: balance term vs trim. wta_balance_enabled and
+#   wta_trim_enabled are independent flags and have never been enabled
+#   separately; the trim is the suspect, not proven. Decisive cheap experiment:
+#   seed 61803399, lambda=11 to level 2 with wta_schedule: off, count fragments.
+#
+#   Written up: docs/experiments/04-territory-aware-highn-validation/ (addendum
+#   2026-08-03) and docs/reference/winner_take_all_partition_gap.md section 4b.
+# ############################################################################
 
 experiment:
   name: torus-200-coarse-seeded-s61803399-lam11-adaptive
