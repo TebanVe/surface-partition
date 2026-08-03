@@ -78,6 +78,12 @@ There are no pytest unit tests. The `testing/` directory contains CLI diagnostic
 ```bash
 python testing/test_migrations_debug.py --solution <path_to_refined.h5>
 
+# Run all 3 Phase 1 validity gates (dormant / area-imbalance / connectivity) on a
+# solution OR a per-level checkpoint. run_relaxation evaluates these only on the
+# FINAL solution, so this is the way to check a run still on the mesh ladder — or
+# one that died before the last level and never wrote metadata.yaml:
+python testing/check_fragmentation.py <run_dir>/solution/checkpoint_level02.h5
+
 # Validate the Phase 1 PGD serial optimizations (Changes A/B/C):
 # Mode 1 — in-process projection-equivalence + gradient-reuse identity:
 python testing/validate_pgd_optimizations.py --equivalence
@@ -171,6 +177,7 @@ testing/
 ├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
 ├── test_wta_balance_gradient_analytical.py  # Phase 1 WTA balance-term gradient vs central FD (Stage 3 gate)
 ├── test_disconnected_cells_detection.py # Phase 1 connectivity gate: detect_disconnected_cells split/speckle logic
+├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/
