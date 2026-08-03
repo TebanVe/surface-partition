@@ -1,0 +1,83 @@
+# ============================================================================
+# ISOLATION EXPERIMENT 3/4 -- TRIM ONLY (the prime suspect).
+# See docs/plans/PHASE1_TRIM_VS_BALANCE_ISOLATION.md for the full 4-cell design.
+#
+# ROLE: does the discrete-area TRIM, on its own, manufacture split cells? The trim
+# periodically retargets the projection's per-cell area goals toward exact
+# winner-take-all equality; the hypothesis is that it buys a cell's target area
+# with DISCONNECTED mass. Balance term OFF, reduced gradient ON (held as in the
+# failed run and controlled by experiment 2). Compare its n_fragmented vs the
+# reduced-only control (exp 2) and the balance-only run (exp 4).
+#   trim-only fragments AND balance-only clean  => the trim is the cause.
+#
+# COST: this is the SLOW one. The trim's retarget sawtooth removes the energy
+# plateau, so the refinement trigger cannot fire (||g_t|| flatlines >> 1e-2) and
+# each level runs the full 30000-iter cap. Expect ~1.5-2 days for the two coarse
+# levels. Per-level checkpoints are on -- check checkpoint_level01.h5 (100x96)
+# with testing/check_fragmentation.py and KILL EARLY once the answer is clear.
+#
+# Runs 2 levels (100x96 -> 162x154 = 24,948 verts) = the checkpoint_level02 point
+# where the failed both-on reseed showed 14 fragmented.
+# ============================================================================
+
+experiment:
+  name: torus-200-s61803399-lam11-iso-trimonly
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 11.0
+  seed: 61803399
+  init_method: seeded
+  max_iter: 30000
+  refinement_levels: 2                # 100x96 -> 162x154 (the comparison point)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  # --- isolation knobs ---
+  wta_schedule: off                   # CRITICAL: 'off' => the individual flags below are used verbatim
+  wta_balance_enabled: false
+  wta_trim_enabled: true              # <-- the piece under test
+  pgd_reduced_gradient: true          # held on (as in the failed run; controlled by exp 2)
+  wta_balance_gamma: 7.0
+  wta_balance_power: 2.0
+  wta_trim_period: 200                # trim params (active)
+  wta_trim_damping: 0.5
+  wta_trim_clamp: 0.20
+  pgd_dual_sweeps: 8
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  checkpoint_per_level: true
+  profile: true                       # -> solution/timing_profile.yaml (cost comparison)
+
+surface:
+  torus:
+    n_theta: 100                      # levels used: 100x96, 162x154
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
