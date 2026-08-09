@@ -547,6 +547,71 @@ plateau, not a failure; the workflow is to export the minimum-perimeter iterate 
 `scripts/export_partition.py --force-finalised`. See CLAUDE.md "Phase 2 migration-cycling
 plateau" and "Phase 1 `lambda_penalty` has a working window".
 
+## 9b. Resolution at extraction — the balanced readout (N=300, RESOLVED)
+
+Every lever in §6 tries to make the *relaxation* produce a valid partition. That
+framing is wrong, and it is what made the wall look structural: validity is a
+property of the **extraction**, not of the flow. Phase 1 constrains continuous mass;
+the delivered object is the argmax territory; nothing downstream consumes the masses
+(`ContourAnalyzer.compute_indicator_functions` reduces the densities to a hard 0/1
+indicator). So the gap can be closed *after* relaxation, and the relaxation left
+untouched.
+
+Two reasons this is not the discrete-area trim (§4b) in disguise:
+
+1. **It is tail-immune.** The gate binds on the *worst* of N cells, which drifts like
+   σ·√(2 ln N); every soft, variance-reducing mechanism — the λ penalty, the WTA
+   balance term — therefore degrades as N grows. An exact assignment does not: it is
+   balanced *by construction*, to one-vertex granularity, at any N.
+2. **The correction is local.** The trim raised a runt's continuous target and let the
+   *projection* deliver the mass — a nonlocal operator (rank-one + renormalize), which
+   flips the argmax in far-away places and manufactures islands. A per-cell offset in
+   log-density space grows a cell monotonically outward from its existing core. This is
+   the predictive test to apply to any future territory mechanism: **through what
+   operator does the correction reach the field, and is that operator local?**
+
+**Mechanism** (`src/partition/balanced_readout.py`, CLI `scripts/balanced_readout.py`):
+replace `argmax_k u_ik` with `argmax_k [log u_ik + ψ_k]`, the N offsets ψ solving the
+semi-discrete OT dual by subgradient ascent (`ψ_k -= η·(T_k − Ā)/Ā`); then repair
+connectivity — absorb stray components into the neighbour sharing the longest boundary,
+and restore areas by single-vertex boundary transfers (improving iff
+`T_donor − T_receiver > v_i`, ranked by `log u_ir − log u_id`), each gated by an exact
+articulation check so no move disconnects a donor.
+
+**Measured, torus N=300** (`run_20260806_123326`, λ=11.5, seed 61803399, V=47,488 — the
+clean-energy run of §9 that fails both gates), ~17 s, no cluster time:
+
+| Stage | Imbalanced | Worst dev | Fragmented | Boundary length |
+|---|---|---|---|---|
+| Source (plain argmax) | 10 / 300 | 36.15% | 2 | 189.73 |
+| + dual shifts | **0** | 2.12% | 2 | 190.71 (+0.52%) |
+| + connectivity repair | **0** | **1.63%** | **0** | 193.30 (+1.88%) |
+
+1840 vertices relabeled (3.9%); repair strain 1485 moves, 1 blocked by the articulation
+check, 38/50 sweeps. All three gates pass under `testing/check_fragmentation.py`.
+
+Two findings worth keeping:
+
+- **The support-binding refutation is dead.** The obvious way for this to fail is a runt
+  whose density does not *cover* enough vertices to reach Ā. It does not happen: every
+  runt has far more support than it needs (cell 299 exceeds density 1e−3 over **172×**
+  its target area). Runts are not starved, they are *diffuse* — the oversized cells, by
+  contrast, have a tight ~2× support. This is the §5 halo, measured at N=300.
+- **The dual shifts alone create no new splits, but deepen existing ones.** Auditing
+  every cell's raw component count (including sub-threshold speckle): exactly the two
+  already-broken cells gained components, zero others did. But cell 290's stray went
+  4.1% → 26.5% of target — the shift bought its area by growing the far island. Hence
+  the repair stage is not optional at high N. Both broken cells had their main body in
+  one region and their strays in the *same other* region: fragmentation here is **one
+  localized defect**, not a distributed phenomenon.
+
+**Scope.** This closes area at any N and connectivity for the defect density observed so
+far (2/300 on the clean energy; splits show no sign of exploding from N=200→300, and the
+one run where they did — 14/200 — is the rejected territory-aware machinery). It does
+**not** address Phase 1 cost (~22 h at N=300), which is the remaining N=1000 wall. The
+repair reports its own strain so a run beyond what repair can fix says so rather than
+returning a silently degraded partition.
+
 ## 10. Related documents, code, and data
 
 - Reference: `docs/reference/phase1_energy_discretization_bug.md` — the
@@ -571,7 +636,9 @@ plateau" and "Phase 1 `lambda_penalty` has a working window".
   `src/optimization/projection.py` (equal-mass + sum-to-one projection),
   `src/optimization/initialization.py` (seeded init),
   `src/partition/find_contours.py` (`detect_dormant_cells`, `detect_area_imbalance`,
-  winner-take-all classification),
+  `detect_disconnected_cells`, winner-take-all classification),
+  `src/partition/balanced_readout.py` + `scripts/balanced_readout.py` (§9b — the
+  balanced, connected extraction that closes the gap at readout),
   `src/optimization/perimeter_optimizer.py` (Phase 2 equal-area constraint).
 - Data: the pre-fix anchor runs under `results/` (N=50 `run_20260625_113015`,
   N=100 coarse `run_20260629_141012`, N=100 finer `run_20260701_143238`); and the

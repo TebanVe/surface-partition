@@ -25,6 +25,12 @@ python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12
 # Enable timing profiling (writes solution/timing_profile.yaml with per-level breakdown):
 python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --profile
 
+# Balanced readout (optional Phase 1 → Phase 2 bridge; fixes the winner-take-all gap)
+# Writes <run_root>/readout/<campaign>/solution_balanced.h5 in the Phase 1 schema.
+# The source solution is never modified.
+python scripts/balanced_readout.py --solution <path_to_solution.h5>
+python scripts/balanced_readout.py --solution <path_to_solution.h5> --no-repair  # dual shifts only
+
 # Phase 2: Perimeter refinement (requires Phase 1 output)
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
 # Or with CLI overrides:
@@ -118,6 +124,7 @@ src/
 │   └── exceptions.py             # RefinementTriggered exception
 ├── partition/
 │   ├── find_contours.py          # ContourAnalyzer: HDF5 → indicator functions → boundary topology
+│   ├── balanced_readout.py       # Equal-area + connected extraction: OT dual shifts + connectivity repair
 │   ├── contour_partition.py      # PartitionContour, VariablePoint, TriangleSegment
 │   ├── perimeter_calculator.py   # Per-segment perimeter with analytical gradients
 │   ├── area_calculator.py        # Per-cell FEM area with analytical gradients
@@ -153,6 +160,7 @@ src/
 scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
+├── balanced_readout.py           # Bridge CLI: balanced, connected readout of a Phase 1 solution
 ├── optimization_analyzer.py      # Per-run analysis and plotting
 ├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized, neighbour-distinct cell colors)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
@@ -335,6 +343,15 @@ results/run_{timestamp}_surf{surface}_npart{N}_v1..._v2..._lam{λ}_seed{S}/
 ├── traces/
 │   ├── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_summary.out
 │   └── pgd_part{N}_v1{label}{n1}_v2{label}{n2}_level{L}_internal_data.hdf5
+├── readout/                      # Balanced-readout campaigns (optional bridge stage)
+│   └── dualshift_gate0.05_repair/
+│       ├── solution_balanced.h5  # Phase 1 schema + psi, labels_final, labels_source
+│       ├── readout.yaml          # Config snapshot (reproduction recipe)
+│       ├── readout.log
+│       ├── metadata.yaml         # All three gates at each stage (source / shifted / repaired)
+│       └── refinement/           # Phase 2 campaigns refined FROM this readout nest here,
+│           └── {campaign}/       # not in the run-root refinement/ (same campaign name would
+│                                 # otherwise interleave iterates from two different inputs)
 ├── refinement/
 │   ├── slsqp_btol0.001/
 │   │   ├── iteration_001_20260410_120523.h5
@@ -425,6 +442,7 @@ the Phase 1 breakdown).
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |
+| `BalancedReadoutConfig` / `apply_balanced_readout` | `src/partition/balanced_readout.py` | Optional Phase 1 → Phase 2 bridge closing the winner-take-all gap **at extraction time**, in two stages. (1) **Dual shifts:** replaces `argmax_k u_ik` with `argmax_k [log u_ik + ψ_k]`, the N per-cell offsets ψ solving the semi-discrete OT dual by subgradient ascent so every cell's discrete area hits target — balanced to one-vertex granularity **at any N** (tail-immune, unlike any soft/variance-reducing mechanism). Raising ψ_k grows cell k outward from its core, so the correction is *local* — the property the discrete-area trim lacked, which is why the trim manufactured islands and this does not. (2) **Connectivity repair:** stray components are absorbed by the neighbour sharing the longest boundary, then equal areas are restored by single-vertex boundary transfers (improving iff `T_donor − T_receiver > v_i`, ranked by `log u_ir − log u_id`), each gated by an exact articulation check so no move disconnects a donor. Both invariants hold by construction on exit. Reports its own strain (`n_moves`, `n_blocked_by_connectivity`, `sweeps_used`, `hit_sweep_cap`) so a run beyond what repair can fix says so. Measured at torus N=300 (`run_20260806_123326`, λ=11.5): **10 imbalanced / worst 36.15% / 2 fragmented → 0 / 1.63% / 0**, +1.88% label-boundary length, 1840 vertices relabeled, ~17 s. |
 | `PartitionContour` | `src/partition/contour_partition.py` | Central data structure: list of `VariablePoint`s (edge + λ parameter), `TriangleSegment`s, indicator arrays, Steiner bookkeeping. |
 | `VariablePoint` | `src/partition/contour_partition.py` | Point on mesh edge at position x = λ·v_start + (1-λ)·v_end. λ∈[0,1]. λ=1 → at smaller vertex index. Has `active` flag for soft deletion. |
 | `PerimeterCalculator` | `src/partition/perimeter_calculator.py` | Computes per-segment perimeter contributions with analytical gradients. |
@@ -453,6 +471,8 @@ the Phase 1 breakdown).
    **Disconnected-cell (connectivity) gate:** `run_relaxation` also calls `detect_disconnected_cells()` (`src/partition/find_contours.py`) on the final solution. It builds the induced subgraph of mesh edges (triangle sides) whose two endpoints share the same winner-take-all argmax cell and runs `scipy.sparse.csgraph.connected_components`; a cell is *fragmented* when its territory splits into ≥2 components on the surface — so it respects the true topology (e.g. torus periodic wrap encoded in `faces`), not a flat parametrization. A non-largest component counts as a genuine stray piece only if its area exceeds `DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01` of the equal-area target (smaller = argmax speckle, ignored). **This is a third validity dimension the other two gates are blind to:** a fragmented cell's pieces sum to the target area and each is crisp, so it passes *both* `detect_dormant_cells` (peak density ~1) and `detect_area_imbalance` (total area correct) — yet a minimal-perimeter cell is connected, so a split cell is a non-physical relaxation local minimum (nothing in the energy, the WTA balance term, or the discrete-area trim penalizes disconnection). Observed at torus N=200 (`run_20260722_121925`, seed 84172851): 3/200 cells split into 3–4 islands while the run reported 0 dead / 0 imbalanced. Warning is logged + printed by the CLI (same pattern as the other two gates); the full result is the `disconnected_cells` block in `solution/metadata.yaml` (`fragmented`, `n_fragmented`, per-cell `details` with `component_areas`, `worst_cell`/`worst_stray_rel`). A fragmented cell should not be handed to Phase 2 (it yields multi-loop contours). **This is NOT seed-specific — that hypothesis is falsified:** the proven-clean seed 61803399 with the territory-aware machinery ON gives **14/200** fragmented at level 2 (`run_20260730_211516`), worse than the 3/200 that motivated the reseed, and the trim's persistent worst-deviation cells at level 0 are exactly the worst fragmented cells later. The leading suspect is the discrete-area trim buying a cell's target area with disconnected mass (it enforces total area, not connectivity). **Note all three gates run only on the FINAL solution**, so a run still on the mesh ladder reports none of them — use `testing/check_fragmentation.py <solution_or_checkpoint.h5>` to check a per-level checkpoint mid-ladder. FD/logic gate: `testing/test_disconnected_cells_detection.py`. See `docs/reference/winner_take_all_partition_gap.md` §4b.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
+
+   **Balanced readout (optional, high N):** when the Phase 1 solution fails the area-imbalance or connectivity gate, `scripts/balanced_readout.py --solution <solution.h5>` writes a gate-passing replacement to `<run_root>/readout/<campaign>/solution_balanced.h5` and Phase 2 is pointed at *that* file instead. Output uses the **Phase 1 solution schema**, so `refine_perimeter.py`, `visualize_partition_fast.py`, `export_partition.py` and `testing/check_fragmentation.py` consume it unchanged, with no new flags. The source run is never modified (the stage only ever creates a new campaign directory, mirroring `refinement/`). Downstream consumers read densities **only through `argmax`** (`compute_indicator_functions` builds a hard 0/1 indicator), so the stage encodes its relabelings by *swapping* the winner's and target cell's density values at each relabeled vertex: row sums — and hence partition-of-unity — are untouched, and the source densities are **exactly** recoverable by swapping back using the stored `labels_source`/`labels_final` (verified: max abs diff 0.0). `psi` is stored for provenance. See the `BalancedReadoutConfig` row above and `docs/reference/winner_take_all_partition_gap.md`.
 
 3. **Phase 2:** `refine_perimeter.py --solution <base.h5> --config <experiment.yaml>` → reads `refinement` section (CLI flags override) → `PipelineOrchestrator.run_refinement_loop()`:
    - Creates campaign directory under `refinement/{method}_btol{tol}/` with `refinement.yaml` config snapshot.
