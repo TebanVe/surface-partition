@@ -1,0 +1,117 @@
+# ============================================================================
+# N=200 minimal-perimeter partition on a CHUBBY THIN-HOLE TORUS  T(R=1.0, r=0.93)
+# ============================================================================
+# PURPOSE. Deliverable for ../link-list-torus's mesh-CLL-vs-ambient-grid
+# efficiency comparison. The thin hole (2(R-r)=0.14) puts the two inner walls
+# close in 3-D but far along the surface, so an ambient Euclidean grid wastes
+# work on across-hole pairs the surface cell-linked-list never proposes. The
+# comparison is meaningful only if THIS partition differs from the existing
+# npart200 T(1,0.6) deliverable in GEOMETRY ALONE -- so every relaxation knob
+# below is cloned verbatim from that run (run_20260713_211827, lambda=11,
+# seed 61803399); the ONLY intended change is r: 0.6 -> 0.93.
+#
+# WHY IT IS HARDER THAN T(1,0.6) (all measured/derived, drives the risks below):
+#   - Metric factor (R + r cos v): 1.93 at the outer equator (v=0) down to 0.07
+#     at the inner equator (v=pi). Ratio 27.6x ~ the "28x area variation":
+#     mesh triangles vary ~28x in 3-D area across latitude.
+#   - Total area 4*pi^2*R*r = 36.71 (vs 23.68 for r=0.6); area target per cell
+#     = 0.1836. Inner-equator circumference is only 2*pi*(R-r) = 0.44, so barely
+#     one cell fits around the innermost tube circle -- cells there must wrap.
+#   - Inner-equator triangles are ~14:1 SLIVERS at this resolution (tube edge
+#     r*dv=0.061 vs major edge (R-r)*du=0.0044). Uniform refinement keeps the
+#     aspect ratio; only the ratio n_theta:n_phi or graded meshing would change
+#     it, and both would break "geometry alone". Kept 100:96 => slivers stay.
+#   - epsilon = sqrt(mean tri area) = 0.0437 at level 0 (vs 0.0351 for r=0.6):
+#     the (1/eps) interface term is ~20% WEAKER, so a fixed lambda=11 is
+#     effectively a touch HOTTER (crisper) here than on T(1,0.6). See the
+#     lambda argument in the response accompanying this file.
+#
+# TOP RISKS TO WATCH (in the order they are most likely to bite):
+#   1. ACROSS-HOLE SEED LEAK. Seeded init labels vertices by NEAREST SEED IN 3-D
+#      EUCLIDEAN DISTANCE (src/optimization/initialization.py). A vertex on one
+#      inner wall can be closer (3-D) to a seed on the OPPOSITE inner wall (0.14
+#      away) than to a same-side seed further along the surface -> the initial
+#      Voronoi regions can leak across the hole. PGD + interface energy should
+#      heal a disconnected cell, but it can trap or slow convergence. Symptom:
+#      runts / non-contiguous cells hugging the inner equator. First fixes:
+#      try another seed; the geodesic-aware seeding fix is a code change (later).
+#   2. PROJECTION FLOOR. The equal-area projection is stiffer under 28x metric
+#      variation. pgd_projection_tol is kept at 1e-9 for strict comparability; if
+#      the log fills with "projection stalled" warnings, LOOSEN to 1e-8 (still ~6
+#      orders under the 5% area gate) and/or raise pgd_projection_max_iter.
+#   3. SLIVER-CONDITIONED FEM. 14:1 inner triangles raise the stiffness-matrix
+#      condition number. Usually survivable; if PGD is unstable near the hole,
+#      the structural lever is more resolution (breaks "geometry alone" -- report).
+#
+# r FALLBACK. If N=200 will not converge cleanly at r=0.93 (persistent runts /
+# mushy min-peak-density), fall back to r=0.92 (hole 0.16) or r=0.90 (hole 0.20)
+# -- each a valid ring torus, monotonically easier. REPORT which r produced the
+# shipped deliverable.
+#
+# DISPATCH (fresh full run, from the main worktree; NO --resume-from):
+#   nohup python scripts/find_surface_partition.py \
+#     --config parameters/torus_200part_thinhole_r093_lam11.yaml \
+#     --profile > n200_thinhole_r093.out 2>&1 &
+# ============================================================================
+
+experiment:
+  name: torus-200-thinhole-r093-lam11
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 11.0                 # cloned from the T(1,0.6) N=200 deliverable; see lambda argument
+  seed: 61803399                       # cloned -- the proven N=200 seed; a lottery per geometry
+  init_method: seeded                  # mandatory at high N (note across-hole risk #1 above)
+  max_iter: 30000
+  refinement_levels: 5                 # fine deliverable ladder: 100x96 ... 348x328 (V=114,144 > 100k)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9           # watch risk #2; loosen to 1e-8 if projection stalls
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                       # major-angle samples; levels 100,162,224,286,348
+    n_phi: 96                          # tube-angle samples;   levels  96,154,212,270,328
+    R: 1.0
+    r: 0.93                            # <-- THE ONLY GEOMETRY CHANGE vs npart200 (was 0.6); hole 2(R-r)=0.14
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

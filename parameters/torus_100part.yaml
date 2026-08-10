@@ -1,3 +1,30 @@
+# ============================================================================
+# KNOWN-BAD CONFIGURATION -- DO NOT USE THIS FOR AN N=100 RUN.
+#
+# Use parameters/torus_100part_coarse_seeded.yaml instead (lambda=5.1, seed
+# 84172851, 100x96 base, 5 levels). That is the validated N=100 deliverable:
+# run_20260709_081548 -- 0 dead / 0 weak / 0 imbalanced / 0 fragmented, worst
+# cell 0.78% off target, exported perimeter 185.2546.
+#
+# Why this file is bad, on two counts:
+#
+#  1. lambda_penalty = 2.1 is BELOW the working window at N=100. The needed
+#     lambda grows with N (~5.1 at N=100, ~6 at N=150, ~11 at N=200) and 2.1
+#     leaves the crispness penalty too weak to price the diffuse halo, so a
+#     runt cell forms. See docs/reference/winner_take_all_partition_gap.md
+#     sec. 8-9 and CLAUDE.md "Phase 1 lambda_penalty has a working window".
+#
+#  2. Its mesh (142x136 base, increments 88/82) is exactly the "finer" N=100
+#     run that made things WORSE: run_20260701_143238, the run cited as the
+#     evidence that a finer mesh deepens the runt rather than fixing it
+#     (worst cell 22% -> 67%). A finer mesh is the wrong lever here.
+#
+# The rationale below is the ORIGINAL June-2026 reasoning, preserved because
+# it documents how the parameters were chosen. It was written before the
+# energy-discretization fix (6ff71a0) and the lambda-window finding, and its
+# conclusions have since been superseded on both points above.
+# ============================================================================
+#
 # Experiment: 100-partition torus of revolution
 #
 # Parameter rationale (scaled from the N=50 config, Jun 2026):

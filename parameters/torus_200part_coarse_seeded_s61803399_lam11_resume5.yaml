@@ -1,0 +1,87 @@
+# ============================================================================
+# N=200 PRODUCTION DELIVERABLE -- resume the valid 3-level solution to 5 levels.
+#
+# WHAT THIS IS. results/run_20260713_211827_..._lam11.0_seed61803399 is a VALID
+# N=200 partition (area_imbalance n_imbalanced=0, worst 2.75%, no dormant cells),
+# produced by the ORIGINAL energy, completed to 3 mesh levels (0,1,2 -> 224x212).
+# The downstream standard is the FINE 5-level mesh (finest 348x328 = 114,144
+# vertices > 100k). This config resumes that solution via --resume-from and runs
+# the two remaining levels (3,4) with the SAME original energy. (This header
+# originally said "there is no territory-aware term here" to distinguish it from
+# the then-live territory branch; that machinery was measured, rejected, and
+# removed on 2026-08-10 -- see docs/reference/winner_take_all_partition_gap.md
+# sec. 4b -- so the original energy is now simply the only energy.)
+#
+# HOW TO RUN (from this, the main worktree / original surface-partition):
+#   nohup python scripts/find_surface_partition.py \
+#     --config parameters/torus_200part_coarse_seeded_s61803399_lam11_resume5.yaml \
+#     --profile \
+#     --resume-from results/run_20260713_211827_surftorus_npart200_v1nt100-224_incr62_v2np96-212_incr58_lam11.0_seed61803399/solution/surface_part200_surftorus_v1nt100-224_incr62_v2np96-212_incr58_lam11.0_seed61803399_20260713_211827.h5 \
+#     > n200_resume5.out 2>&1 &
+#
+# Levels 0-2 are skipped (warm start from the checkpoint); levels 3 (286x270)
+# and 4 (348x328) run. This file is the run's experiment.yaml verbatim except
+# refinement_levels (3 -> 5).
+# ============================================================================
+
+experiment:
+  name: torus-200-coarse-seeded-s61803399-resume5
+  surface: torus
+
+relaxation:
+  n_partitions: 200
+  lambda_penalty: 11.0                 # UNCHANGED from the 3-level run -- same energy on the new levels
+  seed: 61803399                       # provenance only; level 0 (seeded init) is skipped on resume
+  init_method: seeded                  # unused on resume; kept for provenance
+  max_iter: 30000
+  refinement_levels: 5                 # 3 -> 5: run the two remaining levels (286x270, 348x328)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                       # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

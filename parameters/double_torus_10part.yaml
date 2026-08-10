@@ -2,6 +2,18 @@
 # Implicit surface: (x(x-1)^2(x-2) + y^2)^2 + z^2 - c = 0
 # This file defines a complete experiment configuration for both phases.
 
+# ----------------------------------------------------------------------------
+# LEGACY / UNMAINTAINED. The project has narrowed to the torus; the other
+# surface providers are retained for a follow-on project, not actively
+# maintained here. This config has NOT been run since the energy-
+# discretization fix (6ff71a0, which corrected the double well to q=u(1-u)),
+# so whether it still converges is unverified. In particular it keeps
+# `init_method: random`, which traps on the corrected well at higher cell
+# counts -- deliberately left as-is rather than flipped to `seeded`, because
+# claiming it works without running it would be worse than marking it stale.
+# Verify before trusting any result from it.
+# ----------------------------------------------------------------------------
+
 experiment:
   name: double-torus-10-partitions
   surface: double_torus

@@ -7,7 +7,16 @@
 1. **Phase 1 (Relaxation):** Γ-convergence energy minimization via Projected Gradient Descent (PGD) on nodal density functions, with multi-level mesh refinement.
 2. **Phase 2 (Refinement):** Direct constrained perimeter minimization on extracted contour variable points, with automatic topology migrations (Type 1 and Type 2).
 
-Surfaces currently implemented: **torus** (`TorusMeshProvider`), **ellipsoid** (`EllipsoidMeshProvider`), **double torus** (`DoubleTorusMeshProvider`), and **Banchoff-Chmutov order 4** (`BanchoffChmutovMeshProvider`).
+Surfaces implemented: **torus** (`TorusMeshProvider`), **ellipsoid** (`EllipsoidMeshProvider`), **double torus** (`DoubleTorusMeshProvider`), and **Banchoff-Chmutov order 4** (`BanchoffChmutovMeshProvider`).
+
+**Surface scope — this project is torus-focused.** It began aiming at arbitrary
+closed surfaces; it has since narrowed to the torus, and the work that matters
+here (high-N validity, the λ window, the balanced readout, Phase 1 cost) is all
+torus work. The ellipsoid, double-torus, and Banchoff-Chmutov providers and
+their configs are **retained but unmaintained** — kept to seed a follow-on
+project, not exercised since the energy-discretization fix (`6ff71a0`), and so
+of unverified convergence. Treat any result from them as unvalidated until
+re-run. Representative config: `parameters/torus_100part_coarse_seeded.yaml`.
 
 ## Build & Run
 
@@ -18,12 +27,34 @@ pip install -e .               # core only
 pip install -e ".[all]"        # or: core + PyVista + IPOPT + scikit-image
 
 # Phase 1: Γ-convergence relaxation
+# START HERE. The representative configuration — N=100, λ=5.1, seed 84172851,
+# seeded init, 5 levels (finest 348×328 = 114,144 vertices). This is the config
+# that produced the validated N=100 deliverable run_20260709_081548:
+# 0 dead / 0 weak / 0 imbalanced / 0 fragmented, worst cell 0.78% off target,
+# exported perimeter 185.2546. Phase 1 wall ≈ 13.4 h (48,132 s, Mac mini M-series).
+python scripts/find_surface_partition.py --config parameters/torus_100part_coarse_seeded.yaml
+
+# Fast variant for smoke-testing — same λ and seed, 3 levels instead of 5
+# (finest 224×212 = 47,488 vertices). Phase 1 wall ≈ 7.3 h (26,214 s).
+# It is levels 0-2 of the run above, bit-for-bit (deterministic given the seed),
+# so "fast" is relative: level 0 alone is 75% of it, because level 0 runs the
+# full 30,000-iteration cap. For a quick pipeline check use torus_10part.yaml.
+python scripts/find_surface_partition.py --config parameters/torus_100part_coarse_seeded_3lvl.yaml
+
+# Enable timing profiling (writes solution/timing_profile.yaml with per-level breakdown):
+python scripts/find_surface_partition.py --config parameters/torus_100part_coarse_seeded_3lvl.yaml --profile
+
+# Minimal legacy smoke test (N=10 — well below the cell counts this project
+# targets; use it to check the pipeline runs, not to judge quality). Note its
+# finest level runs to the 25,000-iteration cap (~6 h); lower refinement_levels
+# or max_iter for a quick check — the partition is valid several levels earlier.
 python scripts/find_surface_partition.py --config parameters/torus_10part.yaml
+
+# Other surfaces — LEGACY / UNMAINTAINED, unverified since the energy fix
+# (6ff71a0). See "Surface scope" below before relying on these.
 python scripts/find_surface_partition.py --config parameters/ellipsoid_6part.yaml
 python scripts/find_surface_partition.py --config parameters/double_torus_10part.yaml      # requires .[implicit]
 python scripts/find_surface_partition.py --config parameters/banchoff_chmutov_12part.yaml  # requires .[implicit]
-# Enable timing profiling (writes solution/timing_profile.yaml with per-level breakdown):
-python scripts/find_surface_partition.py --config parameters/torus_10part.yaml --profile
 
 # Balanced readout (optional Phase 1 → Phase 2 bridge; fixes the winner-take-all gap)
 # Writes <run_root>/readout/<campaign>/solution_balanced.h5 in the Phase 1 schema.
@@ -32,11 +63,11 @@ python scripts/balanced_readout.py --solution <path_to_solution.h5>
 python scripts/balanced_readout.py --solution <path_to_solution.h5> --no-repair  # dual shifts only
 
 # Phase 2: Perimeter refinement (requires Phase 1 output)
-python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_100part_coarse_seeded.yaml
 # Or with CLI overrides:
 python scripts/refine_perimeter.py --solution <path_to_solution.h5> --max-iterations 10 --method ipopt
 # Enable timing profiling (writes timing_profile.yaml per campaign):
-python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_10part.yaml --profile
+python scripts/refine_perimeter.py --solution <path_to_solution.h5> --config parameters/torus_100part_coarse_seeded.yaml --profile
 
 # Visualization (all require pyvista)
 # Production viewer — vectorized, handles fine meshes efficiently:
@@ -50,13 +81,13 @@ python scripts/visualize_type2_triple_point.py --solution <path_to_refined.h5> -
 # Export finalised partition to link-list-torus HDF5 schema
 python scripts/export_partition.py \
  --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
- --config parameters/torus_10part.yaml \
+ --config parameters/torus_100part_coarse_seeded.yaml \
  --output results/<run>/partition/torus_partition_<run-id>.h5
 # If Phase 2 stalled in the migration-cycling plateau (pending_migration never
 # clears), add --force-finalised to write finalised=True on the best iterate:
 python scripts/export_partition.py \
  --solution results/<run>/refinement/<campaign>/iteration_NNN_*.h5 \
- --config parameters/torus_10part.yaml \
+ --config parameters/torus_100part_coarse_seeded.yaml \
  --output results/<run>/partition/torus_partition_<run-id>.h5 --force-finalised
 
 # Analysis (auto-includes relaxation_timing_profile.png when --profile was used)
@@ -187,14 +218,19 @@ testing/
 ├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
-parameters/
-├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
+parameters/                       # (selected — see the directory for the full set)
+├── torus_100part_coarse_seeded.yaml      # ★ THE representative config: N=100, λ=5.1, seed 84172851, seeded, 5 levels (finest 348×328). Produced the validated deliverable run_20260709_081548 (all 3 gates pass, worst cell 0.78%, perimeter 185.2546). Phase 1 ≈ 13.4 h
+├── torus_100part_coarse_seeded_3lvl.yaml # ★ Fast variant of the above for smoke tests: same λ/seed, 3 levels (finest 224×212)
+├── torus_100part.yaml            # ⚠ KNOWN-BAD — λ=2.1 is below the N=100 working window, and its 142×136 mesh is the run_20260701_143238 "finer mesh made the runt worse" case. Use torus_100part_coarse_seeded.yaml
+├── torus_10part.yaml             # Torus, 10 partitions — minimal legacy smoke test only (N=10 is unrepresentative); seeded init since 2026-08-10
 ├── torus_30part.yaml             # Torus, 30 partitions (parametric mesh; seeded init)
+├── torus_30part_random_s*.yaml   # Torus N=30 random-init studies — random init is their experimental point; do not "fix"
 ├── torus_50part.yaml             # Torus, 50 partitions (parametric mesh; seeded init, 6 levels)
+├── torus_150part / 200part / 300part *.yaml  # High-N production and probe configs (seeded; λ from the window — see the λ-window gotcha)
 ├── torus_300part_seeded_lam11p5_original_energy.yaml  # N=300 λ-window probe; λ=11.5 (between proven N=200 λ=11 and N=300 λ=12→9/300 imbalanced), seed 61803399, 5 levels (levels 4-5 via --resume-from) — the last low-λ test after all prior N=300 (λ 12/13/15) failed the equal-area check
-├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
-├── double_torus_10part.yaml      # Double torus, 10 partitions (implicit / marching cubes)
-└── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions (implicit / marching cubes)
+├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions — LEGACY/UNMAINTAINED (see Surface scope)
+├── double_torus_10part.yaml      # Double torus, 10 partitions — LEGACY/UNMAINTAINED (implicit / marching cubes)
+└── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions — LEGACY/UNMAINTAINED (implicit / marching cubes)
 sweep/                              # Parameter sweep tool (independent from core pipeline)
 ├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
 ├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
@@ -615,16 +651,16 @@ Code and scripts live in `$HOME` (small, backed up). Large output data (results,
 
 **Single relaxation job:**
 ```bash
-bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml
-bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --time 24:00:00 --cpus 8
-bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --resume-from results/run_.../solution/surface_....h5
-bash cluster/submit_relaxation.sh --config parameters/torus_10part.yaml --dry-run
+bash cluster/submit_relaxation.sh --config parameters/torus_100part_coarse_seeded.yaml
+bash cluster/submit_relaxation.sh --config parameters/torus_100part_coarse_seeded.yaml --time 24:00:00 --cpus 8
+bash cluster/submit_relaxation.sh --config parameters/torus_100part_coarse_seeded.yaml --resume-from results/run_.../solution/surface_....h5
+bash cluster/submit_relaxation.sh --config parameters/torus_100part_coarse_seeded.yaml --dry-run
 ```
 
 **Single refinement job:**
 ```bash
-bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml
-bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_10part.yaml --method ipopt --exact-hessian
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_100part_coarse_seeded.yaml
+bash cluster/submit_refinement.sh --solution results/run_.../solution/surface_....h5 --config parameters/torus_100part_coarse_seeded.yaml --method ipopt --exact-hessian
 ```
 
 **Parameter sweep (submits one job per combination):**
@@ -653,6 +689,7 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
 - **Phase 2 migration-cycling plateau (high N).** At higher region counts (observed at N=100 and again at N=150), Phase 2 does not reach a clean convergence. After the large first-iteration perimeter drop, per-iteration gains decay to noise (~0.003%) and the topology *oscillates*: migrations (Type 1/2) periodically raise the perimeter by a hair and the next optimize step claws it back, so `pending_migration` never clears and `optimization_success` stays `False`. It runs to the iteration cap without converging — this is a **plateau, not a failure or a bug**. The exported geometry at the best iterate is complete and valid; it just wasn't topologically frozen. **Standard workflow:** pick the minimum-`final_perimeter` iteration across the campaign (scan `final_perimeter` on every `iteration_*.h5`) and export it. Because that iterate carries `pending_migration=True`, `scripts/export_partition.py` writes `finalised=False` by default (`finalised = not pending_migration` in `src/export/writer.py`); for the accepted final deliverable, pass **`--force-finalised`** — it writes `finalised=True` plus an explanatory `finalised_note` (best iterate at the plateau) in one reproducible step, so external repos that gate on `finalised==True` accept it. `--force-finalised` is mutually exclusive with `--strict`. The N=100 deliverables were finalised by hand-patching the attr (before the flag existed); the N=150 deliverable uses `--force-finalised`.
+- **`run_time_seconds` in `solution/metadata.yaml` is NOT the run's wall time.** It is `float(results[-1]['elapsed'])` — the **last level's** PGD elapsed time only (`src/pipeline/relaxation.py`). On the N=100 deliverable `run_20260709_081548` it reads **13,416 s** while the run actually took **48,132 s** (13.4 h) — a 3.6× under-report, because the last level is not the expensive one (level 0 is: it runs the 30,000-iteration cap and is 41% of that ladder). **For a real total, sum `level_wall_s` over `levels` in `solution/timing_profile.yaml`** (requires `--profile`), or read `summary.total_wall_s` on runs new enough to populate it. Anything comparing Phase 1 cost across configs — scaling studies, optimizer A/B arms — must use the profile, not `run_time_seconds`.
 - **Phase 1 `lambda_penalty` has a working *window* at high N — over-raising it backfires.** The crispness penalty is the main lever against the winner-take-all runt at high N, but it has an upper *ceiling*, not just a lower bound. Too low → diffuse runts (see `docs/reference/winner_take_all_partition_gap.md`). **Too high → the penalty dominates the energy, the multi-level refinement triggers misfire (finer levels fire after *tens* of iterations instead of thousands), and PGD stops before crisping the interfaces — leaving a diffuse `min peak density ≈ 0.7` mush with most cells area-imbalanced, and the run finishes suspiciously fast.** Concretely at N=300: `lambda_penalty: 12` relaxes properly (min peak ~0.98, finest level ~7.7k iterations); `15` collapses to mush (min peak 0.71, 234/300 imbalanced). The needed λ grows with N (~5 at N=100, ~11 at N=200) but stays under the ceiling; some high-N failures are also seed-specific (a different `seed` can resolve a runt — this unblocked N=200). **Diagnostic:** if a high-N run looks wrong, check the final min peak density (`dormant_cells.max_density_per_cell` in `metadata.yaml`) and the per-level `Refinement triggered at iteration N` counts in the log — a fast run with low peak density means λ is over the ceiling; lower it.
 
 ## Dependencies

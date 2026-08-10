@@ -1,4 +1,26 @@
 # Experiment: 10-partition torus of revolution
+#
+# SCOPE: minimal legacy smoke test, not a representative example. N=10 is far
+# below the cell counts this project targets; use it to check that the pipeline
+# runs end to end, not to judge partition quality or performance. The
+# representative configs are parameters/torus_100part_coarse_seeded.yaml (full)
+# and parameters/torus_100part_coarse_seeded_3lvl.yaml (fast).
+#
+# init_method was `random` until 2026-08-10. On the corrected double well
+# (6ff71a0) random init traps in the symmetric diffuse state: this config
+# fast-exited after ~30 iterations per level with the energy RISING and failed
+# all three validity gates (10/10 weak cells, worst cell 12.2% off target,
+# 10/10 fragmented). Switched to `seeded`, which fixes it: measured at the
+# level-4 checkpoint (4 of 5 levels, V=77,220) all three gates PASS -- min peak
+# density 1.0000, worst cell 0.13%, 0 fragmented.
+#
+# NOT A FAST SMOKE TEST despite the low N. The finest level (328x298 = 97,744
+# vertices) does not reach the refinement trigger: it descends at ~4e-6 per
+# iteration against refine_delta_energy = 1.0e-8, so it runs the full
+# max_iter = 25000 cap at ~63 iterations/min => ~6 h for that level alone.
+# The partition is already valid several levels earlier (see above), so for a
+# quick end-to-end check, lower `refinement_levels` or `max_iter`.
+#
 # This file defines a complete experiment configuration for both phases.
 
 experiment:
@@ -17,7 +39,7 @@ relaxation:
 
   # Initial condition for level 0: "random" (default; legacy uniform random)
   # or "seeded" (Voronoi seed regions; avoids dormant cells at higher N).
-  init_method: random
+  init_method: seeded
 
   # PGD step-size control
   pgd_step0: 1.0                      # initial step size

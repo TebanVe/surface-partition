@@ -2,6 +2,18 @@
 # Implicit surface: T4(x) + T4(y) + T4(z) = 0  where T4(X) = 8X^4 - 8X^2 + 1
 # This file defines a complete experiment configuration for both phases.
 
+# ----------------------------------------------------------------------------
+# LEGACY / UNMAINTAINED. The project has narrowed to the torus; the other
+# surface providers are retained for a follow-on project, not actively
+# maintained here. This config has NOT been run since the energy-
+# discretization fix (6ff71a0, which corrected the double well to q=u(1-u)),
+# so whether it still converges is unverified. In particular it keeps
+# `init_method: random`, which traps on the corrected well at higher cell
+# counts -- deliberately left as-is rather than flipped to `seeded`, because
+# claiming it works without running it would be worse than marking it stale.
+# Verify before trusting any result from it.
+# ----------------------------------------------------------------------------
+
 experiment:
   name: banchoff-chmutov-4-partitions
   surface: banchoff_chmutov
