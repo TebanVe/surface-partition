@@ -183,7 +183,6 @@ testing/
 ├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
 ├── test_white_triangle_fix.py           # Zero-length-boundary rendering-fix smoke test
 ├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
-├── test_wta_balance_gradient_analytical.py  # Phase 1 WTA balance-term gradient vs central FD (Stage 3 gate)
 ├── test_disconnected_cells_detection.py # Phase 1 connectivity gate: detect_disconnected_cells split/speckle logic
 ├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
@@ -192,11 +191,7 @@ parameters/
 ├── torus_10part.yaml             # Torus, 10 partitions (parametric mesh)
 ├── torus_30part.yaml             # Torus, 30 partitions (parametric mesh; seeded init)
 ├── torus_50part.yaml             # Torus, 50 partitions (parametric mesh; seeded init, 6 levels)
-├── torus_200part_coarse_seeded_lam9_territory_test.yaml  # Stage 6 confirming experiment: N=200 λ=9 bad-seed control + territory-aware flags on (WTA balance + trim + reduced gradient)
-├── torus_200part_coarse_seeded_lam9_adaptive.yaml  # N=200 λ=9 bad-seed (84172851), adaptive coarse-only schedule (wta_schedule: adaptive), 5 levels (finest 348×328=114k) — produced 3 disconnected cells (58,168,17); see the good-seed reseed below
-├── torus_200part_coarse_seeded_s61803399_lam11_adaptive.yaml  # N=200 λ=11 GOOD-seed (61803399) reseed: same adaptive schedule/mesh. **The reseed premise is FALSIFIED** — run_20260730_211516 gave 14/200 disconnected cells at level 2 (worse than the 3/200 it was meant to avoid); its header comment still states the disproven seed-specificity hypothesis. Do not re-run as-is; see docs/reference/winner_take_all_partition_gap.md §4b
-├── torus_200part_s61803399_lam11_iso_{baseline,reducedonly,trimonly,balanceonly}.yaml  # 4-cell isolation experiment to pin the split cells on the trim vs the balance term: seed 61803399, λ=11, wta_schedule: off (individual wta_balance_enabled/wta_trim_enabled/pgd_reduced_gradient flags used verbatim), 2 levels to the 162×154 = checkpoint_level02 comparison point (where the both-on reseed showed 14/200). See docs/plans/PHASE1_TRIM_VS_BALANCE_ISOLATION.md
-├── torus_300part_seeded_lam11p5_original_energy.yaml  # N=300 final λ-window probe on the ORIGINAL energy (all territory-aware terms explicitly OFF = main); λ=11.5 (between proven N=200 λ=11 and N=300 λ=12→9/300 imbalanced), seed 61803399, 3 levels — one last low-λ test before all prior N=300 (λ 12/13/15) failed the equal-area check
+├── torus_300part_seeded_lam11p5_original_energy.yaml  # N=300 λ-window probe; λ=11.5 (between proven N=200 λ=11 and N=300 λ=12→9/300 imbalanced), seed 61803399, 5 levels (levels 4-5 via --resume-from) — the last low-λ test after all prior N=300 (λ 12/13/15) failed the equal-area check
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions (parametric mesh)
 ├── double_torus_10part.yaml      # Double torus, 10 partitions (implicit / marching cubes)
 └── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions (implicit / marching cubes)
@@ -243,7 +238,7 @@ docs/math/
 ├── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ├── 05-phase1-nregion-scaling/  ← empirical wall-time scaling with number of regions
 ├── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
-└── 07-phase1-wta-balance/  ← Phase 1 winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration
+└── 07-phase1-wta-balance/  ← Phase 1 winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration. **NOT ADOPTED** — the term was implemented, measured, and removed (see "Territory-Aware Relaxation" below); the derivation is kept so the rejection is checkable
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
@@ -288,7 +283,9 @@ runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap) — both pair with
 `04-territory-aware-highn-validation/` (measured/partial: the WTA balance term drives the
 N=200 bad-seed runt from −34% to 0 imbalanced cells by level 1, `run_20260717_102306`; plus
 the no-refinement-trigger diagnosis — the trim removes the energy plateau — and the coarse-level
-resolution-floor finding). See `docs/experiments/README.md`. (Slot 03 is
+resolution-floor finding. **The approach was rejected on its side effects and the code
+removed** — the report stands as the measurement behind that call). See
+`docs/experiments/README.md`. (Slot 03 is
 `03-dual-projection-verification`, on `feat/newton-projection`.)
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
@@ -438,7 +435,7 @@ the Phase 1 breakdown).
 | `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
 | `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
 | `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
-| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. **Territory-aware additions (all flag-gated, default OFF; zero overhead when off):** (1) a **WTA balance term** `P_bal = (γ/2)·Σ_k r_k²`, `r_k = (T_k−Ā)/Ā`, soft territory `T_k = Σ_i v_i·u_ik^p/S_i` (`wta_balance_enabled`/`wta_balance_gamma`/`wta_balance_power`, default p=2, calibrated γ=7.0); (2) a **discrete-area trim** `_apply_wta_trim` retargeting the projection's per-cell targets `d` toward exact discrete (argmax) equality every `wta_trim_period` accepted iters (`wta_trim_enabled`/`_period`/`_damping`/`_clamp`); (3) a **P2 reduced-gradient step + acceptance + trigger fix** `_reduced_gradient` (`pgd_reduced_gradient`/`pgd_dual_sweeps`) that steps along the projected gradient `g_t` and classifies a stalled line search as STALLED (not converged). Derivation: `docs/math/07-phase1-wta-balance/`; rationale/diagnosis: `docs/plans/PHASE1_N1000_VALIDITY_PLAN.md`; FD gate: `testing/test_wta_balance_gradient_analytical.py`. |
+| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |
@@ -452,7 +449,7 @@ the Phase 1 breakdown).
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
-| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. Territory-aware flags (all default OFF, byte-for-byte backward compatible): `wta_balance_enabled`/`wta_balance_gamma`/`wta_balance_power`, `wta_trim_enabled`/`wta_trim_period`/`wta_trim_damping`/`wta_trim_clamp`, `pgd_reduced_gradient`/`pgd_dual_sweeps` — see the `ProjectedGradientOptimizer` row. **Adaptive coarse-only schedule:** `wta_schedule` (`'off'` default \| `'all_levels'` \| `'adaptive'`) + `wta_switch_margin`/`wta_rearm_threshold` gate the machinery per level — under `'adaptive'` it runs only while `detect_area_imbalance` worst\|dev\| exceeds `switch_margin`, hands off to the cheap E₀ once below it (with headroom under the 5% gate), and re-arms above `rearm_threshold`; the switch level rises with N. Driven in `run_relaxation`'s level loop via the `wta_active` override to `_setup_level`; the balance-plateau refinement trigger (bypassing the trim-sawtooth-broken energy plateau) is in `pgd_optimizer.py`. `__post_init__` normalizes and **validates** `wta_schedule` — YAML 1.1 parses an unquoted `off` as the boolean `False`, and an unrecognized value now raises rather than silently relaxing with plain E₀. See `docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md`. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
+| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
@@ -462,13 +459,13 @@ the Phase 1 breakdown).
 
    **Phase 1 timing profile:** `--profile` on `scripts/find_surface_partition.py` writes `<run_dir>/solution/timing_profile.yaml` with a per-level wall-clock breakdown by callback (`matrix_assembly`, `projection`, `energy`, `gradient`, `backtrack`, `h5_save`, …). Zero overhead when omitted. Parallels the Phase 2 `--profile` campaign profile. When the file is present, `optimization_analyzer.py` automatically produces `analysis/relaxation_timing_profile.png` (stacked wall-time bars, per-call scaling, projection inner-iter growth, backtrack rate — all across the 5 refinement levels).
 
-   **Per-level checkpoint / resume:** with `checkpoint_per_level: true` (the default), `run_relaxation` writes `solution/checkpoint_level{L}.h5` after every completed level except the last (the final solution follows immediately). The file has the same schema as a solution file — including `completed_levels` — so `--resume-from <checkpoint>` restarts the ladder at the next level instead of from level 0; under `wta_schedule: adaptive` the checkpoint also carries `wta_active`, so a resumed run keeps the schedule state rather than re-arming the expensive machinery. Writes go to a `.tmp` file and are moved into place, so a kill mid-write leaves the previous checkpoint intact; only the newest is kept, and all are deleted once the final solution is saved. **This is what makes a multi-day cluster run survivable** — the report-04 N=200 run died mid-level-2 and lost every completed level. Note that `completed_levels` is the *absolute* ladder position (`start_level + levels run this invocation`), so resuming a resumed run works.
+   **Per-level checkpoint / resume:** with `checkpoint_per_level: true` (the default), `run_relaxation` writes `solution/checkpoint_level{L}.h5` after every completed level except the last (the final solution follows immediately). The file has the same schema as a solution file — including `completed_levels` — so `--resume-from <checkpoint>` restarts the ladder at the next level instead of from level 0. Writes go to a `.tmp` file and are moved into place, so a kill mid-write leaves the previous checkpoint intact; only the newest is kept, and all are deleted once the final solution is saved. **This is what makes a multi-day cluster run survivable** — the report-04 N=200 run died mid-level-2 and lost every completed level. Note that `completed_levels` is the *absolute* ladder position (`start_level + levels run this invocation`), so resuming a resumed run works.
 
    **Dormant-cell detection:** `run_relaxation` calls `detect_dormant_cells()` (`src/partition/find_contours.py`) on the final solution. A cell is *dead* if it wins no vertex under winner-take-all argmax, or *weak* if its peak density stays below `WEAK_CELL_DENSITY_THRESHOLD = 0.5`. When any are found, a prominent warning is logged (console + `logs/relaxation.log`) and printed by the CLI — the solution is a consistent continuous minimizer but **not** a valid N-region partition (an under-resolved coarsest mesh is the usual cause; see `docs/reference/winner_take_all_partition_gap.md`). The full result is persisted as the `dormant_cells` block in `solution/metadata.yaml`.
 
    **Discrete-area-imbalance gate:** `run_relaxation` also calls `detect_area_imbalance()` (`src/partition/find_contours.py`) on the final solution. It computes the winner-take-all discrete cell areas (lumped mass assigned to each vertex's argmax cell) and flags cells whose area deviates from the equal-area target by more than `AREA_IMBALANCE_REL_THRESHOLD = 0.05`. This catches diffuse "runt" cells that pass the dormant check (peak density 1.0) but hold most of their mass outside their argmax territory — the worst cell's absolute deviation equals the Phase 2 equal-area constraint violation at iteration 0, so a large value predicts a Phase 2 run that *raises* perimeter and stalls at local infeasibility. Warning is logged + printed by the CLI (same pattern as dormant cells); the full result is the `area_imbalance` block in `solution/metadata.yaml`. This is a high-N failure distinct from dormant cells — a finer mesh does not reliably help; see `docs/reference/winner_take_all_partition_gap.md`.
 
-   **Disconnected-cell (connectivity) gate:** `run_relaxation` also calls `detect_disconnected_cells()` (`src/partition/find_contours.py`) on the final solution. It builds the induced subgraph of mesh edges (triangle sides) whose two endpoints share the same winner-take-all argmax cell and runs `scipy.sparse.csgraph.connected_components`; a cell is *fragmented* when its territory splits into ≥2 components on the surface — so it respects the true topology (e.g. torus periodic wrap encoded in `faces`), not a flat parametrization. A non-largest component counts as a genuine stray piece only if its area exceeds `DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01` of the equal-area target (smaller = argmax speckle, ignored). **This is a third validity dimension the other two gates are blind to:** a fragmented cell's pieces sum to the target area and each is crisp, so it passes *both* `detect_dormant_cells` (peak density ~1) and `detect_area_imbalance` (total area correct) — yet a minimal-perimeter cell is connected, so a split cell is a non-physical relaxation local minimum (nothing in the energy, the WTA balance term, or the discrete-area trim penalizes disconnection). Observed at torus N=200 (`run_20260722_121925`, seed 84172851): 3/200 cells split into 3–4 islands while the run reported 0 dead / 0 imbalanced. Warning is logged + printed by the CLI (same pattern as the other two gates); the full result is the `disconnected_cells` block in `solution/metadata.yaml` (`fragmented`, `n_fragmented`, per-cell `details` with `component_areas`, `worst_cell`/`worst_stray_rel`). A fragmented cell should not be handed to Phase 2 (it yields multi-loop contours). **This is NOT seed-specific — that hypothesis is falsified:** the proven-clean seed 61803399 with the territory-aware machinery ON gives **14/200** fragmented at level 2 (`run_20260730_211516`), worse than the 3/200 that motivated the reseed, and the trim's persistent worst-deviation cells at level 0 are exactly the worst fragmented cells later. The leading suspect is the discrete-area trim buying a cell's target area with disconnected mass (it enforces total area, not connectivity). **Note all three gates run only on the FINAL solution**, so a run still on the mesh ladder reports none of them — use `testing/check_fragmentation.py <solution_or_checkpoint.h5>` to check a per-level checkpoint mid-ladder. FD/logic gate: `testing/test_disconnected_cells_detection.py`. See `docs/reference/winner_take_all_partition_gap.md` §4b.
+   **Disconnected-cell (connectivity) gate:** `run_relaxation` also calls `detect_disconnected_cells()` (`src/partition/find_contours.py`) on the final solution. It builds the induced subgraph of mesh edges (triangle sides) whose two endpoints share the same winner-take-all argmax cell and runs `scipy.sparse.csgraph.connected_components`; a cell is *fragmented* when its territory splits into ≥2 components on the surface — so it respects the true topology (e.g. torus periodic wrap encoded in `faces`), not a flat parametrization. A non-largest component counts as a genuine stray piece only if its area exceeds `DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01` of the equal-area target (smaller = argmax speckle, ignored). **This is a third validity dimension the other two gates are blind to:** a fragmented cell's pieces sum to the target area and each is crisp, so it passes *both* `detect_dormant_cells` (peak density ~1) and `detect_area_imbalance` (total area correct) — yet a minimal-perimeter cell is connected, so a split cell is a non-physical relaxation local minimum (nothing in the energy penalizes disconnection). Observed at torus N=200 (`run_20260722_121925`, seed 84172851): 3/200 cells split into 3–4 islands while the run reported 0 dead / 0 imbalanced. Warning is logged + printed by the CLI (same pattern as the other two gates); the full result is the `disconnected_cells` block in `solution/metadata.yaml` (`fragmented`, `n_fragmented`, per-cell `details` with `component_areas`, `worst_cell`/`worst_stray_rel`). A fragmented cell should not be handed to Phase 2 (it yields multi-loop contours). **This is NOT seed-specific — that hypothesis is falsified:** the proven-clean seed 61803399 with the (since-removed) territory-aware machinery ON gave **14/200** fragmented at level 2 (`run_20260730_211516`), worse than the 3/200 that motivated the reseed. That machinery is gone; fragmentation on the plain energy is rare (2/300 at N=300) and is repaired by the balanced readout. **Note all three gates run only on the FINAL solution**, so a run still on the mesh ladder reports none of them — use `testing/check_fragmentation.py <solution_or_checkpoint.h5>` to check a per-level checkpoint mid-ladder. FD/logic gate: `testing/test_disconnected_cells_detection.py`. See `docs/reference/winner_take_all_partition_gap.md` §4b.
 
 2. **Phase 1 → Phase 2 bridge:** `ContourAnalyzer` loads HDF5, computes indicator functions, extracts boundary topology → `PartitionContour` is created with `VariablePoint`s on crossed edges.
 
@@ -546,44 +543,26 @@ Then: add the provider to `src/surfaces/__init__.py`, add a branch in `scripts/f
 
 Energy and gradient are in `ProjectedGradientOptimizer.compute_energy()` and `.compute_gradient()`. The penalty term is modular — controlled by `penalty_target_mode` and `lambda_penalty`.
 
-### Territory-Aware Relaxation (WTA balance + trim + reduced gradient)
+### Territory-Aware Relaxation — tried, measured, removed (do not re-add)
 
-Three independently flag-gated additions target the high-N winner-take-all
-validity gap (diffuse "runt" cells whose argmax territory is far from equal
-even though the continuous mass is pinned). All default OFF and add zero
-overhead when off (guarded by `if self.wta_balance_enabled:` etc.); existing
-configs are byte-for-byte unchanged (verified against `main`).
+A flag-gated "territory-aware" energy (a **WTA balance term** `P_bal = (γ/2)Σr_k²`
+over a soft argmax-surrogate territory, a **discrete-area trim** retargeting the
+projection toward exact argmax equality, a **P2 reduced-gradient** step/acceptance/
+trigger fix, and an adaptive `wta_schedule`) was implemented on
+`feat/phase1-territory-aware-relaxation`, merged for the record at commit `14e0518`,
+and **removed** immediately after. It worked on the axis it targeted (N=200 bad seed:
+worst runt −34% → 0 imbalanced) and was a **net regression overall**: it manufactured
+14/200 disconnected cells against a matched 0/200 control, and its ladder extrapolated
+to ~20 days at N=200. Root cause: it enforces *total* area through a **nonlocal**
+operator (the projection), which buys a runt's area with far-away territory.
 
-- **WTA balance term** (`wta_balance_enabled`, `wta_balance_gamma`,
-  `wta_balance_power`). Adds `P_bal = (γ/2)·Σ_k r_k²` to the energy with a soft
-  argmax-surrogate territory `T_k = Σ_i v_i·u_ik^p/S_i`, `S_i = Σ_l u_il^p`,
-  `r_k = (T_k−Ā)/Ā`, default `p=2`. Its gradient
-  `(γp/Ā)·v_i·(u_ik^(p-1)/S_i)·(r_k−m_i)`, `m_i = Σ_l r_l w_il`, is analytical,
-  O(V·N), and vanishes at balance and at crisp interiors (moves fences, not
-  interiors). `γ` is calibrated **once** (=7.0; not per-N) —
-  `scripts/debug_archive/calibrate_wta_gamma.py`. Derivation + proofs in
-  `docs/math/07-phase1-wta-balance/`.
-- **Discrete-area trim** (`wta_trim_enabled`, `wta_trim_period`,
-  `wta_trim_damping`, `wta_trim_clamp`). `_apply_wta_trim` retargets the
-  projection's per-cell area targets `d` toward exact discrete (argmax)
-  equality every `period` accepted iterations via a damped, clamped controller
-  (reuses `detect_area_imbalance`; `d` reset to Ā·1 per level — structural,
-  since each level builds a fresh `optimize()`). Fixed point = exact discrete
-  equality `T_wta = Ā`.
-- **P2 reduced-gradient/trigger fix** (`pgd_reduced_gradient`,
-  `pgd_dual_sweeps`). `_reduced_gradient` projects `g` onto the tangent of the
-  active constraints on the free set (`g_t = g − α⊗1 − v⊗βᵀ`, duals by
-  warm-started Gauss–Seidel); the line search steps along `g_t` (Armijo vs
-  `‖g_t‖²`) instead of the mostly bound-infeasible `g`, the triggers use `‖g_t‖`
-  stationarity relative to the level's cumulative decrease, and a stalled line
-  search is logged as **STALLED** rather than mis-fired as convergence. This is
-  the enabling prerequisite for the balance term; P2 alone does **not** fix
-  validity (`docs/plans/PHASE1_N1000_VALIDITY_PLAN.md` §2.4).
-
-FD correctness gate (mandatory before any run):
-`python testing/test_wta_balance_gradient_analytical.py` (< 1e-6). Stage 6
-confirming experiment config:
-`parameters/torus_200part_coarse_seeded_lam9_territory_test.yaml`.
+What replaced it is `src/partition/balanced_readout.py` — the same balance enforced
+**exactly, at extraction, in ~17 s** (see the `BalancedReadoutConfig` row and the
+"Balanced readout" paragraph of the Phase 1 data flow). Before proposing anything in this
+space again, read `docs/reference/winner_take_all_partition_gap.md` **§4b** (why it
+failed) and **§9b** (the local-operator test any replacement must pass). The
+derivation is kept at `docs/math/07-phase1-wta-balance/` (marked not-adopted) and the
+measurement at `docs/experiments/04-territory-aware-highn-validation/`.
 
 ### Phase 1 Initial Condition (`init_method`)
 

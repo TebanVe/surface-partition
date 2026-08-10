@@ -260,11 +260,15 @@ deliverable. The one remaining mismatch is the comparison level (2 vs final), an
 cuts *against* the machinery: the control was clean at the **end**, while the
 territory run is at 14 **mid-ladder** with no healing mechanism.
 
-What is *not* yet separated is **balance term vs trim**. `wta_balance_enabled` and
-`wta_trim_enabled` are independent flags but have never been enabled separately; the
+What was *never* separated is **balance term vs trim**. `wta_balance_enabled` and
+`wta_trim_enabled` were independent flags but were never enabled separately; the
 trim is the suspect (the log trace and the handoff correlation both point at it), not
-the proven culprit. Two cheap experiments settle it — relax seed 61803399, λ=11 to
-level 2 with (a) `wta_schedule: off`, and (b) balance term on / trim off.
+the proven culprit. A four-cell isolation experiment was specified for it (2×2 on
+balance × trim at seed 61803399, λ=11, two levels to the 162×154 comparison point,
+reduced gradient held as control) and its configs written, but the machinery was
+removed before the runs happened — §9b made the question moot. The design is in git
+history at commit `14e0518` (`docs/plans/PHASE1_TRIM_VS_BALANCE_ISOLATION.md` and
+`parameters/torus_200part_s61803399_lam11_iso_*.yaml`) if it ever needs re-asking.
 
 **At N=200 the machinery is a net regression, on two axes.** The term was added
 because it looked necessary at **N=300**; at N=200 the *original* energy already
@@ -289,25 +293,57 @@ Result 1: entrenched −34% runt → 0 imbalanced on the seed λ could not fix).
 defect is that **total area is the wrong invariant to enforce alone** — area and
 connectivity have to be enforced together, or fixing the first breaks the second.
 
-**Status: detected; reseed ruled out as mitigation; no automated fix.**
-`detect_disconnected_cells()` (§7) flags it. Options: (a) ~~reseed~~ —
-**falsified above**; (b) **brake the trim on connectivity** — the cheapest real
-fix: run `detect_disconnected_cells` periodically *during* relaxation and stop
-retargeting a cell once its territory splits, so the trim can no longer buy area
-with disconnected mass; (c) a **connectivity-repair** post-process that reassigns
-each stray island to the neighbour cell that most surrounds it, then rebalances
-(perturbs areas, adds local perimeter); (d) a connectivity-aware term in the
-relaxation (largest change). A fragmented cell must **not** be handed to Phase 2 —
-a disconnected cell produces multi-loop contours the equal-area / Steiner
-machinery is not built for.
+**Two findings from the machinery that outlive it.** Both were measured while
+diagnosing the above and are about the *mesh*, not the term, so they survive its
+removal:
 
-**Watch out: the gates only run at the *end* of `run_relaxation`**
-(`src/pipeline/relaxation.py:443-447`), so a run still on the mesh ladder — or one
-killed before the last level, which never writes `metadata.yaml` — reports
-*nothing*, and the per-level trim log shows only worst-|dev|, which is blind to
-splits. Use `testing/check_fragmentation.py <solution_or_checkpoint.h5>` (§7) to
-check any level's checkpoint mid-ladder. That is how the 14 above were found, on a
-run that was still reporting a healthy-looking 1 imbalanced cell.
+1. **The coarsest level is resolution-floor-limited, so refinement is necessary —
+   not merely faster.** At N=200 level 0 (48 verts/cell, band fraction
+   `f_b = 3.72/√(2V/N) ≈ 20%`) floors at **~10%** worst-cell deviation and flatlines
+   there (tail rate 0.23%/1000 it, still 4 cells over the 5% gate at the 30k cap) — no
+   corrective force fixes a runt below the resolution floor. **Level 1** (124
+   verts/cell) is the first level that crosses the gate, and it does so steeply
+   (2.2%/1000 it, 0 imbalanced by ~iter 9,000, floor ~2%); level 2 started at 0 and
+   held. The gate lies *between* the level-0 and level-1 floors.
+2. **~124 verts/cell sufficed to cross the gate**, which puts the mesh-budget validity
+   floor of `PHASE1_N1000_VALIDITY_PLAN.md` §5 (P3: finest-level verts/cell ≥ ~600)
+   nearer **~250–300** — a 2–4× compute rebate at N=1000, worth confirming before it
+   is assumed.
+
+Corroborating the second half of (1) with the *original* energy: at N=150, running
+plain E₀ on every level, the worst-cell deviation shrank monotonically with refinement
+(−10.6% at 2 levels → −5.84% at 3 → −1.24% at 5). Refining an already-balanced
+structure with the cheap energy improves balance; it does not break it.
+
+**The code is gone; the result is not (2026-08-10).** The territory-aware machinery —
+the WTA balance term, the discrete-area trim, the P2 reduced-gradient step/acceptance/
+trigger fix, and the adaptive `wta_schedule` — was **removed from `main`**, since a
+default-off path that is known to be a net regression is a trap for whoever finds the
+flag next. What survives, deliberately: the derivation
+(`docs/math/07-phase1-wta-balance/`, flagged not-adopted in the authoring guide), the
+measurement (`docs/experiments/04-territory-aware-highn-validation/`), this section,
+and the implementation itself in git history at commit `14e0518`. The three plans that
+drove it (`PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN`, `PHASE1_COARSE_ONLY_WTA_SCHEDULE`,
+`PHASE1_TRIM_VS_BALANCE_ISOLATION`) were retired into this section.
+
+**Status: detected; reseed ruled out as mitigation; resolved at extraction (§9b).**
+`detect_disconnected_cells()` (§7) flags it, and the balanced readout repairs it.
+The options weighed *before* §9b existed were: (a) ~~reseed~~ — **falsified above**;
+(b) ~~brake the trim on connectivity~~ — moot, the trim is gone; (c) a
+**connectivity-repair** post-process reassigning each stray island to the neighbour
+that most surrounds it, then rebalancing — **this is what §9b does**, at readout
+rather than in the flow; (d) a connectivity-aware term in the relaxation — not
+needed, and the reason is (2) of §9b: a term reaches the field through a *nonlocal*
+operator, which is how the trim manufactured islands in the first place. A fragmented
+cell must still **not** be handed to Phase 2 — a disconnected cell produces multi-loop
+contours the equal-area / Steiner machinery is not built for; run the readout first.
+
+**Watch out: the gates only run at the *end* of `run_relaxation`**, so a run still on
+the mesh ladder — or one killed before the last level, which never writes
+`metadata.yaml` — reports *nothing*. Use
+`testing/check_fragmentation.py <solution_or_checkpoint.h5>` (§7) to check any level's
+checkpoint mid-ladder. That is how the 14 above were found, on a run that was still
+reporting a healthy-looking 1 imbalanced cell.
 
 ## 5. Results analysis — where the runt comes from (Step 0)
 
@@ -375,7 +411,8 @@ finer mesh did not help.
 
 | Lever | Effect on **dormant** | Effect on **runt** | Verdict |
 |---|---|---|---|
-| **Territory-aware machinery** (WTA balance term + discrete-area trim) | n/a | drives worst abs deviation down hard (N=200 level ends 12.7% → 8.3% → 5.4%) | **fixes area, creates splits** ⚠️ — 14/200 fragmented (§4b); enforces *total* area, not connectivity |
+| **Territory-aware machinery** (WTA balance term + discrete-area trim) | n/a | drives worst abs deviation down hard (N=200 level ends 12.7% → 8.3% → 5.4%) | **rejected and removed** ❌ — fixes area, creates splits: 14/200 fragmented, ~20-day ladder (§4b); enforces *total* area, not connectivity |
+| **Balanced readout** (semi-discrete OT dual + connectivity repair, at extraction) | not measured on a dead cell (none in the test runs); the dual grows a zero-area cell in principle, but the seeded init already prevents them | **fixes it** — exact, by construction, to one-vertex granularity at any N | **the answer** ✅ — §9b; 10/300 → 0 imbalanced, 2 → 0 fragmented, +1.9% boundary, ~17 s |
 | **Energy discretization fix** (`u²(1−u)²`→`u(1−u)`) | n/a | **root cause** — the coded well was ~25× too weak, under-pricing the halo *and* leaving λ inert; correcting it is what makes the runt fixable | **the fix** ✅ |
 | λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
 | Seeded init (equal-mass Voronoi) | **fixes it** ✅ | necessary complement — avoids the corrected-energy symmetric trap (§3) and gives every cell a start, but not sufficient *alone* (seeded-λ2.1 still runts) | required, not sufficient |
@@ -415,10 +452,9 @@ worst_rel = np.abs(areas-target).max()/target     # == Phase 2 iter-0 constraint
   seed 84172851): 3/200 cells fragmented (worst 57% stray) while dormant=0 and
   imbalance=0. Logic gate: `testing/test_disconnected_cells_detection.py`.
 
-**All three run only on the FINAL solution** (`relaxation.py:443-447`), so a run
-still climbing the mesh ladder, or one killed before the last level (no
-`metadata.yaml`), reports none of them — and the per-level WTA-trim log line
-carries only worst-|dev|, which cannot see a split. To check any level mid-ladder:
+**All three run only on the FINAL solution**, so a run still climbing the mesh ladder,
+or one killed before the last level (no `metadata.yaml`), reports none of them. To
+check any level mid-ladder:
 
 ```bash
 python testing/check_fragmentation.py <run_dir>/solution/checkpoint_level02.h5
@@ -518,19 +554,17 @@ lever — not more λ. N=200 is the clean demonstration: at seed 84172851 two ce
 wall-time. Runt placement is geometric and seed-dependent; λ cannot rescue a cell the
 seeding squeezed.
 
-**Territory-aware resolution — an alternative to the seed lottery (2026-07-20).** The WTA
-balance term (`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md`,
-`docs/math/07-phase1-wta-balance/`) rescues this *exact* bad-seed case **without** changing the
-seed: re-running the N=200 seed-84172851 λ=9 control with the balance term + discrete trim +
-reduced gradient enabled drove the two runts from −34% to **0 imbalanced cells (worst ±2.1%)**
-by level 1 (`run_20260717_102306`; recomputed in
-`docs/experiments/04-territory-aware-highn-validation/`). This is the anti-lottery property
-N=1000 needs — a corrective *force* instead of a lucky seed. Caveats: the run was interrupted
-mid-level-2 (finest-level completion gate pending a cluster re-run), and it is expensive on the
-coarse levels — no mesh-refinement trigger fires (the trim removes the energy plateau) and the
-coarsest level is resolution-floor-limited at ~10% (so refinement is *necessary*, not merely
-faster). Next A/B: N=300 vs `run_20260714_224821`. Scaling schedule:
-`docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md`.
+**Territory-aware resolution — the anti-lottery attempt that failed (2026-07-20, rejected
+2026-08-03).** The WTA balance term (`docs/math/07-phase1-wta-balance/`) rescued this *exact*
+bad-seed case **without** changing the seed: re-running the N=200 seed-84172851 λ=9 control
+with the balance term + discrete trim + reduced gradient enabled drove the two runts from
+−34% to **0 imbalanced cells (worst ±2.1%)** by level 1 (`run_20260717_102306`; recomputed in
+`docs/experiments/04-territory-aware-highn-validation/`). That looked like the anti-lottery
+property N=1000 needs — a corrective *force* instead of a lucky seed. **It does not survive
+its side effects:** it costs ~20 days for a 5-level N=200 ladder and it manufactures
+disconnected cells (14/200 against a matched 0/200 control). Measured, rejected, and removed
+from the code — see **§4b**. The anti-lottery property is delivered instead by the balanced
+readout (**§9b**), at ~17 s and exactly, at readout rather than in the flow.
 
 **Status ladder (as of this writing).** N=100, 150, 200 are valid, finalised, and
 exported (the N=150 artifact cleared only after resuming to 5 levels). **N=300** relaxes

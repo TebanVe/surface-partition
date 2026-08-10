@@ -40,6 +40,32 @@ verified against central finite differences to relative error
 $<10^{-6}$ (\codefile{testing/test\_wta\_balance\_gradient\_analytical.py}).
 \end{abstract}
 
+\begin{tcolorbox}[colback=red!5!white, colframe=red!60!black,
+                  title={Not adopted --- the code this document derives was
+                  removed from \code{main} on 2026-08-10},
+                  fontupper=\small]
+The derivation below is sound and the six propositions hold; the
+\emph{mechanism} was measured and \textbf{rejected}. Enabled at $N{=}200$ it did
+drive discrete-area imbalance to zero, but it manufactured $14/200$
+\emph{disconnected} cells against a matched $0/200$ control and made the
+5-level ladder unaffordable ($\sim$20 days). The defect is not in any
+proposition here: total area is enforced through the \emph{nonlocal}
+projection, so a runt's area is bought with far-away territory --- a failure
+mode none of \S\ref{sec:props} addresses, because all six are statements about
+the term, not about the operator that delivers it.
+
+Consequently every \code{\textbackslash codefile} pointer below to
+\code{wta\_*} / \code{pgd\_reduced\_gradient} configuration, to
+\code{compute\_energy}/\code{compute\_gradient} guards, or to
+\code{testing/test\_wta\_balance\_gradient\_analytical.py} refers to
+\textbf{git commit \code{14e0518}}, not to the current tree. The validity gap
+is instead closed at extraction by the balanced readout
+(\codefile{src/partition/balanced\_readout.py}). See
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} \S4b (the
+rejection) and \S9b (the replacement, and the locality test any future
+territory mechanism must pass).
+\end{tcolorbox}
+
 \tableofcontents
 \newpage
 

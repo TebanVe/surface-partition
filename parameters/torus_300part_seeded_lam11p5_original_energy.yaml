@@ -1,12 +1,12 @@
 # ============================================================================
 # N=300 -- FINAL lambda-window probe on the ORIGINAL energy (NO new terms).
 #
-# WHAT THIS IS. A last N=300 test using ONLY the main-branch energy -- none of
-# this branch's territory-aware machinery (balance term / discrete-area trim /
-# reduced gradient). The block below sets every one of those switches OFF, which
-# is byte-for-byte identical to main's original (corrected-double-well) energy
-# (the flags default OFF and are verified backward-compatible). Runs identically
-# whether launched from this branch or the `main` worktree.
+# WHAT THIS IS. A last N=300 test on the original (corrected-double-well)
+# energy. It was written while the territory-aware machinery existed behind
+# default-off flags, and set every one of those switches OFF explicitly; that
+# machinery has since been removed (measured and rejected -- see
+# docs/reference/winner_take_all_partition_gap.md §4b), so the config now just
+# describes the only energy there is.
 #
 # WHY lambda = 11.5. Every N=300 run so far has FAILED the equal-area validity
 # check by sweeping lambda + seed:
@@ -48,11 +48,10 @@ relaxation:
                                       # the N=200 5-level configs). Levels 4-5 are being reached by
                                       # --resume-from on the 3-level solution, NOT by a fresh run.
 
-  # --- ORIGINAL ENERGY ONLY: every territory-aware switch OFF (= main branch) ---
-  wta_schedule: off
-  wta_balance_enabled: false
-  wta_trim_enabled: false
-  pgd_reduced_gradient: false
+  # The territory-aware switches this config used to set OFF explicitly were
+  # removed from the code (measured and rejected — see
+  # docs/reference/winner_take_all_partition_gap.md §4b); the original energy
+  # is now the only energy.
 
   use_analytic: true
   use_discrete_area_for_constraints: true

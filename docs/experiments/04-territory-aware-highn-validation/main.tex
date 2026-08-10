@@ -31,8 +31,8 @@
                   title={Status --- measured (partial: the finest level was
                   interrupted; confirmation is solid through level~1)},
                   fontupper=\small]
-This report \textbf{confirms} the Stage-6 hypothesis of
-\codefile{docs/plans/PHASE1\_TERRITORY\_AWARE\_IMPLEMENTATION\_PLAN.md}: on the
+This report \textbf{confirms} the Stage-6 hypothesis of the territory-aware
+implementation plan (retired; git commit \code{14e0518}): on the
 \emph{bad} seed and \(\lambda\) that produced two entrenched \(-34\%\) runts under
 the original energy, enabling the winner-take-all balance term drives the partition
 to \(0\) imbalanced cells (worst \(\approx 2\%\)), holding through a mesh transition.
@@ -64,6 +64,15 @@ unaffordable, this makes the term a \emph{net regression} at \(N{=}200\), where 
 original energy already produced a valid finalised partition. See
 \S\ref{sec:addendum}. Conclusion~1 of \S\ref{sec:conclusions} must be read with
 that qualification.
+
+\medskip
+\textbf{Outcome (2026-08-10): the machinery was removed from \code{main}.} The
+flags this report exercises (\code{wta\_balance\_enabled},
+\code{wta\_trim\_enabled}, \code{pgd\_reduced\_gradient}, \code{wta\_schedule})
+\emph{no longer exist} --- reproducing these runs requires checking out commit
+\code{14e0518}. The validity gap they targeted is instead closed at extraction by
+the balanced readout (\codefile{src/partition/balanced\_readout.py}); see
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} \S4b and \S9b.
 \end{tcolorbox}
 
 % ---------------------------------------------------------------------

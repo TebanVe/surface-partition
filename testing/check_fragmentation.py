@@ -47,7 +47,6 @@ def main():
         faces = np.array(f['faces'])
         n_partitions = int(f.attrs['n_partitions'])
         completed_levels = int(f.attrs.get('completed_levels', -1))
-        wta_active = f.attrs.get('wta_active', None)
 
     n_vertices = vertices.shape[0]
     densities = x_opt.reshape(n_vertices, n_partitions)
@@ -55,8 +54,6 @@ def main():
     print(f"file              : {args.checkpoint}")
     print(f"levels completed  : {completed_levels}")
     print(f"mesh              : V={n_vertices}, N={n_partitions}")
-    if wta_active is not None:
-        print(f"wta_active        : {bool(wta_active)}")
     print("assembling FEM matrices (this takes a few seconds) ...")
 
     mesh = TriMesh(vertices, faces)

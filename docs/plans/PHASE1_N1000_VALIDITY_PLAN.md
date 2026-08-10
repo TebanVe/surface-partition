@@ -1,13 +1,20 @@
 # Phase 1 High-N Validity Plan — Territory-Aware Relaxation (WTA balance term + optimizer fix)
 
-**Status:** IN PROGRESS — P1 (WTA balance term + discrete trim) and P2
-(reduced-gradient/trigger fix) are implemented behind default-off flags on
-`feat/phase1-territory-aware-relaxation` per the executable spec
-`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md` (see its progress
-log). The §5.3 verifications are done: the frozen-optimizer/identity findings
-below were re-confirmed on `run_20260714_224821` (Stage 0), and the P1 gradient
-passes the FD check. The confirming experiment (§4) is prepared but not yet run.
-The diagnosis text below is retained as the standing rationale.
+**Status:** DIAGNOSIS RETAINED; PROPOSED FIXES REJECTED (2026-08-10). P1 (WTA
+balance term + discrete trim) and P2 (reduced-gradient/trigger fix) *were*
+implemented behind default-off flags, run at N=200, and **measured to be a net
+regression** — they fix area but manufacture disconnected cells (14/200 vs a
+matched 0/200 control) at ~20 days per ladder. The code was removed from `main`;
+the negative result is `docs/reference/winner_take_all_partition_gap.md` §4b, the
+measurement `docs/experiments/04-territory-aware-highn-validation/`, the derivation
+`docs/math/07-phase1-wta-balance/`, and the implementation git commit `14e0518`.
+**The validity wall itself is resolved — at extraction, not in the flow**: see §9b
+of the same reference (the balanced readout, `src/partition/balanced_readout.py`).
+The §5.3 verifications were completed (the frozen-optimizer/identity findings below
+were re-confirmed on `run_20260714_224821`), and **the diagnosis in §2 remains
+valid and is the reason this document is kept** — the accounting identity, the √N
+band-fraction law, and the frozen-optimizer finding are all independent of the
+rejected fixes. §3–§6 (the proposed P1/P2 work and its schedule) are superseded.
 
 **Provenance:** produced by a Fable analysis agent on 2026-07-16, from the N=300
 winner-take-all scaling wall. Quantitative claims marked *measured* come from the
