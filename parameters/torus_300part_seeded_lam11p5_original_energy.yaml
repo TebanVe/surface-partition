@@ -1,0 +1,114 @@
+# ============================================================================
+# N=300 -- FINAL lambda-window probe on the ORIGINAL energy (NO new terms).
+#
+# WHAT THIS IS. A last N=300 test using ONLY the main-branch energy -- none of
+# this branch's territory-aware machinery (balance term / discrete-area trim /
+# reduced gradient). The block below sets every one of those switches OFF, which
+# is byte-for-byte identical to main's original (corrected-double-well) energy
+# (the flags default OFF and are verified backward-compatible). Runs identically
+# whether launched from this branch or the `main` worktree.
+#
+# WHY lambda = 11.5. Every N=300 run so far has FAILED the equal-area validity
+# check by sweeping lambda + seed:
+#     lam 12, seed 61803399 :   9/300 imbalanced, worst 34.9%   (best so far)
+#     lam 12, seed 27182818 :  10/300 imbalanced, worst 40.6%
+#     lam 13, seed 61803399 : 189/300 imbalanced (collapsed, min peak 0.73)
+#     lam 15, seed 61803399 : 234/300 imbalanced (collapsed to mush, min peak 0.71)
+# lambda has a CEILING (>=13 -> the crispness penalty dominates, the refinement
+# triggers misfire, PGD stops before crisping -> mush). 11.5 probes just BELOW
+# the best-so-far 12, toward the proven N=200 value 11 -- exactly what the lam=12
+# config's own note recommended ("if still mushy, drop to 11"). This is the only
+# change vs run_20260714_224821 (lam 12, seed 61803399); everything else is held
+# fixed so lambda is the sole variable.
+#
+# EXPECTATION. Likely still fails: the working lambda window at N=300 appears to
+# floor at ~9-10 undersized cells (a runt is a structural winner-take-all effect,
+# not something fine lambda tuning removes). But it is cheap (3 coarse levels,
+# triggers early -> hours) and gives a clean final data point on the low side of
+# the window before deciding where to invest next.
+#
+# CHECK AFTER: python testing/check_fragmentation.py results/<run>/solution/surface_*.h5
+#   (area-imbalance n_imbalanced / worst_rel_dev are the numbers that matter;
+#    dormant + connectivity gates run too.)
+# ============================================================================
+
+experiment:
+  name: torus-300-seeded-lam11p5-original-energy
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 11.5                 # ONLY change vs the lam=12 run; between proven N=200 lam=11 and N=300 lam=12
+  seed: 61803399                       # best prior N=300 seed (lam=12 -> 9 imbalanced); isolate lambda
+  init_method: seeded                 # mandatory at high N
+  max_iter: 30000                      # a cap; the original-energy plateau trigger fires earlier
+  refinement_levels: 5                # 100x96, 162x154, 224x212, 286x270, 348x328 (114k verts)
+                                      # Was 3 for the original probe; raised to 5 to match the mesh
+                                      # resolution the downstream repos expect (same finest level as
+                                      # the N=200 5-level configs). Levels 4-5 are being reached by
+                                      # --resume-from on the 3-level solution, NOT by a fresh run.
+
+  # --- ORIGINAL ENERGY ONLY: every territory-aware switch OFF (= main branch) ---
+  wta_schedule: off
+  wta_balance_enabled: false
+  wta_trim_enabled: false
+  pgd_reduced_gradient: false
+
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8           # 1e-9 sits below the iterative-projection floor at N=300; 1e-8 converges cleanly
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  checkpoint_per_level: true
+  profile: true
+
+# Phase 2 settings mirror parameters/torus_300part_coarse_seeded.yaml (the N=300
+# precedent). This section was absent while the config was a Phase-1-only probe;
+# without it RefinementConfig silently falls back to dataclass defaults (SLSQP,
+# max_opt_iter 1000, no exact Hessian, no best_iterate, NO save_iterations), which
+# is the wrong optimizer at N=300 and leaves no per-iteration checkpoints to pick
+# from at the migration-cycling plateau.
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true                # mandatory at N=300: the plateau workflow
+                                       # exports the minimum-perimeter iterate
+  distance_preservation: preserve
+
+surface:
+  torus:
+    n_theta: 100                      # levels: 100x96, 162x154, 224x212
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58

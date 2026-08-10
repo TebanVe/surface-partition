@@ -20,6 +20,13 @@ WEAK_CELL_DENSITY_THRESHOLD = 0.5
 # docs/reference/winner_take_all_partition_gap.md.
 AREA_IMBALANCE_REL_THRESHOLD = 0.05
 
+# A connected component of a cell's winner-take-all territory smaller than this
+# fraction of the equal-area target is treated as argmax "speckle" (a stray
+# vertex or two at a boundary), not a genuine disconnected piece. Real fragments
+# observed at torus N=200 were >=5% of target; speckle is <0.1%. 1% cleanly
+# separates them. See docs/reference/winner_take_all_partition_gap.md.
+DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01
+
 
 def detect_area_imbalance(densities: np.ndarray,
                           lumped_mass: np.ndarray,
@@ -117,6 +124,128 @@ def detect_dormant_cells(densities: np.ndarray,
         'n_cells': n_cells,
         'n_effective': n_cells - len(dead),
         'weak_threshold': float(weak_threshold),
+    }
+
+
+def detect_disconnected_cells(
+        densities: np.ndarray,
+        faces: np.ndarray,
+        lumped_mass: np.ndarray,
+        fragment_rel_threshold: float = DISCONNECTED_FRAGMENT_REL_THRESHOLD) -> dict:
+    """Identify cells whose winner-take-all territory splits into disconnected pieces.
+
+    A relaxation solution can pass the equal-area, sum-to-one, dormant, and
+    discrete-area-imbalance checks while a cell's argmax territory is broken into
+    two or more disconnected islands on the surface: the pieces sum to the target
+    area and each is crisp (density ~1), so :func:`detect_dormant_cells` and
+    :func:`detect_area_imbalance` both pass. But a minimal-perimeter partition has
+    *connected* cells (a split cell carries excess perimeter), so a fragmented
+    cell is a non-physical relaxation local minimum -- nothing in the energy, the
+    WTA balance term, or the discrete-area trim penalizes disconnection, so an
+    area-balanced fragmented cell is a stable fixed point. Connectivity is a
+    third validity dimension the other two detectors do not test. See
+    ``docs/reference/winner_take_all_partition_gap.md``.
+
+    Connectivity is computed on the mesh's own edge graph (triangle sides), so it
+    respects the true surface topology (e.g. torus periodic wrap-around, encoded
+    in ``faces``) rather than any flat parametrization. Two vertices are linked
+    only when they are mesh-adjacent *and* share the same argmax winner; the
+    number of connected components of that induced subgraph is the number of
+    disconnected pieces of the cell. Each component lies entirely within one cell
+    (edges never cross cells), so per-component area is aggregated in one pass.
+
+    Args:
+        densities: (V, n) density matrix (rows approximately sum to 1).
+        faces: (T, 3) triangle vertex-index array (the mesh connectivity).
+        lumped_mass: (V,) lumped P1 mass per vertex (``TriMesh.v``); a piece's
+            area is the sum of its vertices' lumped mass.
+        fragment_rel_threshold: a non-largest component counts as a genuine
+            fragment (and flags the cell) only if its area exceeds this fraction
+            of the equal-area target; smaller components are treated as argmax
+            speckle. Set to 0 to count every component.
+
+    Returns:
+        dict with keys: n_components_per_cell (raw component count per cell, 0 for
+        dead cells), fragmented (indices of cells with a significant stray piece,
+        worst first), n_fragmented, details (per fragmented cell: cell,
+        n_components, n_significant, main_area, stray_area, stray_rel,
+        component_areas sorted desc), worst_cell, worst_stray_rel,
+        worst_stray_abs, total_stray_area, target_area, fragment_rel_threshold.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    phi = np.asarray(densities)
+    if phi.ndim != 2:
+        raise ValueError(f"densities must be 2-D (V, n); got shape {phi.shape}")
+    n_vertices, N = phi.shape
+    v = np.asarray(lumped_mass).ravel()
+    if v.shape[0] != n_vertices:
+        raise ValueError(
+            f"lumped_mass length {v.shape[0]} != n_vertices {n_vertices}"
+        )
+    F = np.asarray(faces)
+    if F.ndim != 2 or F.shape[1] != 3:
+        raise ValueError(f"faces must be (T, 3); got shape {F.shape}")
+
+    winners = np.argmax(phi, axis=1)
+    target = float(v.sum()) / N if N else 0.0
+    frag_area_cutoff = fragment_rel_threshold * target
+
+    # Induced subgraph: mesh edges whose endpoints share an argmax winner.
+    edges = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    same = winners[edges[:, 0]] == winners[edges[:, 1]]
+    edges = edges[same]
+    adj = coo_matrix(
+        (np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
+        shape=(n_vertices, n_vertices),
+    )
+    adj = adj + adj.T
+    ncomp, comp = connected_components(adj, directed=False)
+
+    # Every connected component lies within a single cell, so aggregate its area
+    # and owning cell in one pass over the component labels.
+    comp_area = np.zeros(ncomp)
+    np.add.at(comp_area, comp, v)
+    comp_cell = np.full(ncomp, -1, dtype=int)
+    comp_cell[comp] = winners
+
+    n_components_per_cell = [0] * N
+    details = []
+    for k in range(N):
+        cids = np.where(comp_cell == k)[0]
+        n_components_per_cell[k] = int(len(cids))
+        if len(cids) <= 1:
+            continue
+        areas = np.sort(comp_area[cids])[::-1]
+        n_sig_stray = int((areas[1:] > frag_area_cutoff).sum())
+        if n_sig_stray == 0:
+            continue  # only speckle beyond the main body -> not a real split
+        stray = float(areas[1:].sum())
+        details.append({
+            'cell': int(k),
+            'n_components': int(len(cids)),
+            'n_significant': int((areas > frag_area_cutoff).sum()),
+            'main_area': float(areas[0]),
+            'stray_area': stray,
+            'stray_rel': float(stray / target) if target > 0 else 0.0,
+            'component_areas': [float(a) for a in areas],
+        })
+
+    details.sort(key=lambda d: -d['stray_rel'])
+    fragmented = [d['cell'] for d in details]
+    worst = details[0] if details else None
+    return {
+        'n_components_per_cell': n_components_per_cell,
+        'fragmented': fragmented,
+        'n_fragmented': len(fragmented),
+        'details': details,
+        'worst_cell': int(worst['cell']) if worst else -1,
+        'worst_stray_rel': float(worst['stray_rel']) if worst else 0.0,
+        'worst_stray_abs': float(worst['stray_area']) if worst else 0.0,
+        'total_stray_area': float(sum(d['stray_area'] for d in details)),
+        'target_area': float(target),
+        'fragment_rel_threshold': float(fragment_rel_threshold),
     }
 
 

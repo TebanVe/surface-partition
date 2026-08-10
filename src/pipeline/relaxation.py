@@ -29,6 +29,7 @@ from ..optimization.projection import (
 from ..optimization.initialization import create_seeded_initial_condition
 from ..partition.find_contours import (
     ContourAnalyzer, detect_dormant_cells, detect_area_imbalance,
+    detect_disconnected_cells,
 )
 from ..partition.contour_partition import PartitionContour
 from ..optimization.perimeter_optimizer import PerimeterOptimizer
@@ -78,6 +79,65 @@ class RelaxationConfig:
     profile: bool = False
     init_method: str = 'random'
 
+    # Per-level resume checkpoint: after each level completes, write that level's
+    # solution to solution/checkpoint_level{L}.h5 so a killed multi-day run can be
+    # restarted with --resume-from instead of losing every completed level.
+    # Only the most recent checkpoint is kept; all are removed once the final
+    # solution is written.
+    checkpoint_per_level: bool = True
+
+    # Territory-aware relaxation (docs/math/07-phase1-wta-balance).
+    # All defaulted OFF so existing configs are byte-for-byte unchanged.
+    wta_balance_enabled: bool = False
+    wta_balance_gamma: float = 0.0
+    wta_balance_power: float = 2.0
+    wta_trim_enabled: bool = False
+    wta_trim_period: int = 200
+    wta_trim_damping: float = 0.5
+    wta_trim_clamp: float = 0.20
+    pgd_reduced_gradient: bool = False
+    pgd_dual_sweeps: int = 8
+
+    # Adaptive coarse-only schedule (docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md).
+    # 'off' (default): use the individual wta_* / pgd_reduced_gradient flags above
+    #   verbatim -- byte-for-byte identical to main.
+    # 'all_levels': force the full machinery on every level (the report-04 run).
+    # 'adaptive': run the machinery only while the winner-take-all structure is not yet
+    #   correct -- a gate-conditioned switch driven by detect_area_imbalance after each
+    #   level, with a hysteresis band (switch off below switch_margin, re-arm above
+    #   rearm_threshold). The switch level rises with N automatically.
+    wta_schedule: str = 'off'
+    wta_switch_margin: float = 0.03    # expensive->cheap once worst|dev| < margin
+    wta_rearm_threshold: float = 0.05  # cheap->expensive if a cheap level ends > threshold
+
+    WTA_SCHEDULES = ('off', 'all_levels', 'adaptive')
+
+    def __post_init__(self):
+        # YAML 1.1 parses an unquoted `off` as the boolean False, so the
+        # documented default `wta_schedule: off` arrives here as False and
+        # would otherwise read as the string 'False' -- i.e. NOT 'off', which
+        # silently takes the scheduled path and overrides the individual wta_*
+        # flags. Normalize, then reject anything unrecognized: a typo must fail
+        # loudly rather than quietly relax with the plain E0 energy.
+        sched = self.wta_schedule
+        if isinstance(sched, bool):
+            if sched:
+                raise ValueError(
+                    "wta_schedule: true is ambiguous. Use one of "
+                    f"{self.WTA_SCHEDULES} (quote 'off' to keep YAML from "
+                    "parsing it as a boolean)."
+                )
+            sched = 'off'
+        sched = str(sched).strip().lower()
+        if sched in ('false', 'none', 'no'):
+            sched = 'off'
+        if sched not in self.WTA_SCHEDULES:
+            raise ValueError(
+                f"Unknown wta_schedule {self.wta_schedule!r}. "
+                f"Valid values: {self.WTA_SCHEDULES}."
+            )
+        self.wta_schedule = sched
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -120,6 +180,7 @@ class RelaxationResult:
     metadata: dict
     dormant_cells: dict = field(default_factory=dict)
     area_imbalance: dict = field(default_factory=dict)
+    disconnected_cells: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable summary for the AI agent layer."""
@@ -207,6 +268,7 @@ def run_relaxation(provider, config: RelaxationConfig,
         prev_x_opt = None
         start_level = 0
 
+        ws = None
         if warm_start_path is not None:
             ws = _load_warm_start(warm_start_path)
             prev_vertices = ws['prev_vertices']
@@ -229,6 +291,27 @@ def run_relaxation(provider, config: RelaxationConfig,
             f"refinement levels"
         )
 
+        # Adaptive coarse-only schedule state (docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md).
+        # 'off' -> individual flags (None override); 'all_levels' -> always on;
+        # 'adaptive' -> starts on, gate-conditioned switch after each level.
+        wta_schedule = str(getattr(config, 'wta_schedule', 'off'))
+        wta_active = wta_schedule in ('adaptive', 'all_levels')
+        if (wta_schedule == 'adaptive' and ws is not None
+                and ws.get('wta_active') is not None):
+            # Resume with the mode the checkpoint had already switched to,
+            # rather than re-arming the expensive machinery from scratch.
+            wta_active = bool(ws['wta_active'])
+            logger.info(
+                f"Warm start: restoring WTA machinery "
+                f"{'ON' if wta_active else 'OFF'} from checkpoint"
+            )
+        if wta_schedule != 'off':
+            logger.info(
+                f"WTA schedule: '{wta_schedule}' "
+                f"(switch_margin={config.wta_switch_margin}, "
+                f"rearm_threshold={config.wta_rearm_threshold})"
+            )
+
         for level in range(start_level, config.refinement_levels):
             logger.info("=" * 80)
             logger.info(
@@ -239,8 +322,16 @@ def run_relaxation(provider, config: RelaxationConfig,
             if prof is not None:
                 prof.start_level(level)
 
-            level_ctx = _setup_level(provider, config, level, logger, profile=prof)
+            level_ctx = _setup_level(
+                provider, config, level, logger, profile=prof,
+                wta_active=(wta_active if wta_schedule != 'off' else None),
+            )
             mesh = level_ctx['mesh']
+            if wta_schedule != 'off':
+                logger.info(
+                    f"  Level {level+1} machinery: "
+                    f"{'territory-aware (expensive)' if wta_active else 'original E0 (cheap)'}"
+                )
 
             if prof is not None:
                 prof.set_level_mesh_stats(
@@ -291,13 +382,47 @@ def run_relaxation(provider, config: RelaxationConfig,
             prev_vertices = mesh.vertices.copy()
             prev_x_opt = level_result['x_opt'].copy()
 
+            # Adaptive switch: measure the winner-take-all imbalance on this level's
+            # result and decide the next level's machinery (hysteresis band).
+            if wta_schedule == 'adaptive' and level < config.refinement_levels - 1:
+                lvl_dens = level_result['x_opt'].reshape(
+                    len(mesh.v), config.n_partitions
+                )
+                w = float(detect_area_imbalance(
+                    lvl_dens, mesh.v, config.n_partitions
+                )['worst_rel_dev'])
+                prev_active = wta_active
+                if wta_active and w < config.wta_switch_margin:
+                    wta_active = False
+                elif (not wta_active) and w > config.wta_rearm_threshold:
+                    wta_active = True
+                logger.info(
+                    f"  WTA adaptive switch: worst|dev|={w:.4f} -> machinery "
+                    f"{'ON' if prev_active else 'OFF'} -> "
+                    f"{'ON' if wta_active else 'OFF'} for level {level+2}"
+                )
+
             if level < config.refinement_levels - 1:
+                # Persist this level before the mesh is freed, so an
+                # interrupted run resumes here instead of from level 0. The
+                # final level needs none: _save_solution() follows the loop.
+                if config.checkpoint_per_level:
+                    ckpt_attrs = {'checkpoint': True}
+                    if wta_schedule != 'off':
+                        ckpt_attrs['wta_schedule'] = wta_schedule
+                        ckpt_attrs['wta_active'] = bool(wta_active)
+                    _save_level_checkpoint(
+                        mesh, level_result['x_opt'], x0, config, provider,
+                        levels_meta, level + 1, solution_dir, logger,
+                        extra_attrs=ckpt_attrs,
+                    )
+
                 # Release this level's FEM matrices before building the finer
                 # one. K/M/v are read-only properties; the backing store is
                 # mass_matrix/stiffness_matrix (setting mesh.K/M silently raised
                 # AttributeError and freed nothing). Also drop the level_ctx
-                # references so the mesh + optimizer are collectable now, not one
-                # level late (level_ctx is only rebound at the next iteration).
+                # references so the finished mesh + optimizer are collectable
+                # now, not one level late (level_ctx is rebound next iteration).
                 mesh.mass_matrix = None
                 mesh.stiffness_matrix = None
                 del level_ctx['optimizer']
@@ -319,11 +444,23 @@ def run_relaxation(provider, config: RelaxationConfig,
         area_imbalance = detect_area_imbalance(
             final_densities, mesh.v, config.n_partitions
         )
+        disconnected = detect_disconnected_cells(
+            final_densities, mesh.faces, mesh.v
+        )
 
+        # The schedule attrs are written only on the scheduled path, so an
+        # off-path solution file stays byte-identical to main's.
+        sched_attrs = (
+            {'wta_schedule': wta_schedule, 'wta_active': bool(wta_active)}
+            if wta_schedule != 'off' else None
+        )
         solution_path = _save_solution(
             mesh, final['x_opt'], x0, config, provider,
-            levels_meta, timestamp, solution_dir
+            levels_meta, timestamp, solution_dir,
+            completed_levels=start_level + len(levels_meta),
+            extra_attrs=sched_attrs,
         )
+        _cleanup_level_checkpoints(solution_dir, logger)
 
         initial_perimeter = compute_initial_perimeter(
             solution_path, config.n_partitions, logger
@@ -334,6 +471,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             timestamp, solution_path, logfile_path, initial_perimeter,
             warm_start_path=warm_start_path, dormant_cells=dormant,
             area_imbalance=area_imbalance,
+            disconnected_cells=disconnected,
         )
 
         with open(os.path.join(solution_dir, 'metadata.yaml'), 'w') as f:
@@ -365,6 +503,7 @@ def run_relaxation(provider, config: RelaxationConfig,
 
         _warn_if_dormant_cells(dormant, levels_meta, config, logger)
         _warn_if_area_imbalance(area_imbalance, config, logger)
+        _warn_if_disconnected_cells(disconnected, config, logger)
 
         overall_success = all(r['success'] for r in results)
         total_elapsed = sum(r['elapsed'] for r in results)
@@ -386,6 +525,7 @@ def run_relaxation(provider, config: RelaxationConfig,
             metadata=metadata,
             dormant_cells=dormant,
             area_imbalance=area_imbalance,
+            disconnected_cells=disconnected,
         )
 
     finally:
@@ -450,6 +590,8 @@ def _load_warm_start(solution_path: str) -> dict:
         'prev_x_opt'        np.ndarray — optimized solution from last completed level
         'prev_vertices'     np.ndarray — mesh vertices from last completed level
         'completed_levels'  int        — number of levels already completed
+        'wta_active'        Optional[bool] — adaptive-schedule mode the checkpoint
+            was going to use for the next level (None if the file predates it)
     Raises ValueError if the file is missing required datasets or attributes.
     """
     with h5py.File(solution_path, 'r') as f:
@@ -463,15 +605,25 @@ def _load_warm_start(solution_path: str) -> dict:
                 f"Warm-start file {solution_path} has no 'completed_levels' "
                 f"attribute. Re-run the original relaxation to regenerate it."
             )
+        wta_active = None
+        if 'wta_active' in f.attrs:
+            wta_active = bool(f.attrs['wta_active'])
         return {
             'prev_x_opt': np.array(f['x_opt']),
             'prev_vertices': np.array(f['vertices']),
             'completed_levels': int(f.attrs['completed_levels']),
+            'wta_active': wta_active,
         }
 
 
-def _setup_level(provider, config, level, logger, profile=None) -> dict:
-    """Build mesh and PGD optimizer for one refinement level."""
+def _setup_level(provider, config, level, logger, profile=None,
+                 wta_active=None) -> dict:
+    """Build mesh and PGD optimizer for one refinement level.
+
+    ``wta_active`` is the adaptive-schedule override: ``None`` (default) uses the
+    individual ``config`` flags verbatim (legacy / ``wta_schedule='off'``); a bool
+    gates the balance term, trim, and reduced gradient together on/off for this level.
+    """
     n1, n2 = provider.get_initial_resolution()
     dn1, dn2 = provider.get_resolution_increment()
     n1 = n1 + level * dn1
@@ -498,6 +650,16 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         val = provider.theoretical_total_area() if callable(theoretical) else None
         total_area = float(val) if val is not None else float(np.sum(mesh.v))
 
+    # Effective territory-aware flags for this level. Under 'off' the individual config
+    # flags are used verbatim (byte-identical); under adaptive/all_levels, wta_active
+    # gates balance + trim + reduced gradient together.
+    if wta_active is None:
+        eff_balance = bool(config.wta_balance_enabled)
+        eff_trim = bool(config.wta_trim_enabled)
+        eff_reduced = bool(config.pgd_reduced_gradient)
+    else:
+        eff_balance = eff_trim = eff_reduced = bool(wta_active)
+
     optimizer = ProjectedGradientOptimizer(
         K=mesh.K, M=mesh.M, v=mesh.v,
         n_partitions=config.n_partitions,
@@ -507,6 +669,15 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
+        wta_balance_enabled=eff_balance,
+        wta_balance_gamma=float(config.wta_balance_gamma),
+        wta_balance_power=float(config.wta_balance_power),
+        wta_trim_enabled=eff_trim,
+        wta_trim_period=int(config.wta_trim_period),
+        wta_trim_damping=float(config.wta_trim_damping),
+        wta_trim_clamp=float(config.wta_trim_clamp),
+        pgd_reduced_gradient=eff_reduced,
+        pgd_dual_sweeps=int(config.pgd_dual_sweeps),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):
@@ -648,20 +819,20 @@ def _write_timing_profile(prof, solution_dir, provider, config, logger):
     logger.info(f"Timing profile written to: {tp_path}")
 
 
-def _save_solution(mesh, x_opt, x0, config, provider,
-                   levels_meta, timestamp, solution_dir) -> str:
-    """Write final solution HDF5 file. Returns path."""
+def _write_solution_h5(path, mesh, x_opt, x0, config, provider,
+                       levels_meta, completed_levels,
+                       extra_attrs=None) -> None:
+    """Write a solution/checkpoint HDF5 at ``path``.
+
+    ``completed_levels`` is the ABSOLUTE number of levels completed across the
+    whole ladder (start_level + levels run in this invocation), which is what
+    ``_load_warm_start`` resumes from — not ``len(levels_meta)``, which counts
+    only the levels this invocation ran.
+    """
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
-    v1_info, v2_info = provider.resolution_summary(config.refinement_levels)
 
-    solution_path = os.path.join(
-        solution_dir,
-        f"surface_part{config.n_partitions}_surf{surface}"
-        f"_v1{label1}{v1_info}_v2{label2}{v2_info}"
-        f"_lam{config.lambda_penalty}_seed{config.seed}_{timestamp}.h5"
-    )
-    with h5py.File(solution_path, 'w') as f:
+    with h5py.File(path, 'w') as f:
         f.create_dataset('x_opt', data=x_opt)
         f.create_dataset('x0', data=x0)
         f.create_dataset('vertices', data=mesh.vertices)
@@ -684,9 +855,79 @@ def _save_solution(mesh, x_opt, x0, config, provider,
         f.attrs['seed'] = int(config.seed)
         f.attrs['optimizer'] = 'PGD'
         f.attrs['use_analytic'] = bool(config.use_analytic)
-        f.attrs['completed_levels'] = len(levels_meta)
+        f.attrs['completed_levels'] = int(completed_levels)
+        for k, v in (extra_attrs or {}).items():
+            f.attrs[k] = v
 
+
+def _save_solution(mesh, x_opt, x0, config, provider,
+                   levels_meta, timestamp, solution_dir,
+                   completed_levels, extra_attrs=None) -> str:
+    """Write final solution HDF5 file. Returns path."""
+    surface = provider.surface_name()
+    label1, label2 = provider.resolution_labels()
+    v1_info, v2_info = provider.resolution_summary(config.refinement_levels)
+
+    solution_path = os.path.join(
+        solution_dir,
+        f"surface_part{config.n_partitions}_surf{surface}"
+        f"_v1{label1}{v1_info}_v2{label2}{v2_info}"
+        f"_lam{config.lambda_penalty}_seed{config.seed}_{timestamp}.h5"
+    )
+    _write_solution_h5(
+        solution_path, mesh, x_opt, x0, config, provider,
+        levels_meta, completed_levels, extra_attrs=extra_attrs
+    )
     return solution_path
+
+
+def _save_level_checkpoint(mesh, x_opt, x0, config, provider, levels_meta,
+                           completed_levels, solution_dir, logger,
+                           extra_attrs=None) -> Optional[str]:
+    """Write the per-level resume checkpoint, replacing any earlier one.
+
+    Written to a temporary file and moved into place, so a run killed mid-write
+    still leaves the previous checkpoint intact. Only the newest checkpoint is
+    kept; a failure here is logged and swallowed — losing a checkpoint must
+    never kill a multi-day run.
+    """
+    path = os.path.join(
+        solution_dir, f"checkpoint_level{completed_levels:02d}.h5"
+    )
+    tmp_path = path + '.tmp'
+    try:
+        _write_solution_h5(
+            tmp_path, mesh, x_opt, x0, config, provider,
+            levels_meta, completed_levels, extra_attrs=extra_attrs
+        )
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.warning(f"Could not write level checkpoint {path}: {e}")
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return None
+
+    _cleanup_level_checkpoints(solution_dir, logger, keep=path)
+    logger.info(
+        f"Level checkpoint written: {path} "
+        f"(resume with --resume-from {path})"
+    )
+    return path
+
+
+def _cleanup_level_checkpoints(solution_dir, logger, keep=None) -> None:
+    """Remove per-level checkpoints in ``solution_dir`` except ``keep``."""
+    import glob
+    for p in glob.glob(os.path.join(solution_dir, 'checkpoint_level*.h5')):
+        if keep is not None and os.path.abspath(p) == os.path.abspath(keep):
+            continue
+        try:
+            os.remove(p)
+        except OSError as e:
+            logger.warning(f"Could not remove stale checkpoint {p}: {e}")
 
 
 def _warn_if_dormant_cells(dormant, levels_meta, config, logger) -> None:
@@ -785,12 +1026,61 @@ def _warn_if_area_imbalance(area_imbalance, config, logger) -> None:
     logger.warning("=" * 80)
 
 
+def _warn_if_disconnected_cells(disconnected, config, logger) -> None:
+    """Log a prominent warning when cells split into disconnected pieces.
+
+    A cell whose winner-take-all territory breaks into two or more disconnected
+    islands passes both the dormant-cell and discrete-area-imbalance checks -- its
+    pieces sum to the target area and each is crisp -- yet it is not a physical
+    minimal-perimeter cell, since optimal cells are connected. This is a
+    relaxation local minimum: nothing in the energy, the WTA balance term, or the
+    discrete-area trim penalizes disconnection, so an area-balanced fragmented
+    cell is a stable fixed point. Distinct from the dormant and imbalance
+    warnings, both of which pass for a fragmented cell. See
+    docs/reference/winner_take_all_partition_gap.md.
+    """
+    if not disconnected or not disconnected.get('fragmented'):
+        return
+
+    worst = disconnected.get('worst_cell')
+    logger.warning("=" * 80)
+    logger.warning(
+        f"DISCONNECTED CELLS - {disconnected.get('n_fragmented')} cell(s) of this "
+        f"{config.n_partitions}-region solution split into disconnected pieces."
+    )
+    logger.warning(
+        "Each flagged cell's winner-take-all territory breaks into 2+ islands on "
+        "the surface. The pieces sum to the target area and are crisp, so the "
+        "dormant and area-imbalance checks pass -- but a minimal-perimeter cell "
+        "is connected, so this is a non-physical relaxation local minimum."
+    )
+    logger.warning(
+        f"  Worst cell {worst}: stray (non-largest) pieces total "
+        f"{disconnected.get('worst_stray_rel', 0.0) * 100:.1f}% of a cell's target "
+        f"area (abs {disconnected.get('worst_stray_abs', 0.0):.4g})."
+    )
+    logger.warning(f"  Fragmented cells: {disconnected.get('fragmented')}")
+    for d in disconnected.get('details', [])[:8]:
+        logger.warning(
+            f"    cell {d['cell']}: {d['n_components']} pieces, areas "
+            f"{[round(a, 5) for a in d['component_areas']]}"
+        )
+    logger.warning(
+        "Likely cause: a cell pinched apart on the coarse mesh (large epsilon) "
+        "and refinement could not reconnect it; connectivity is not in the "
+        "objective. Try a different seed, or a connectivity-repair post-process. "
+        "Do NOT hand a fragmented cell to Phase 2 (it yields multi-loop contours)."
+    )
+    logger.warning("=" * 80)
+
+
 def _collect_metadata(config, provider, results, levels_meta, mesh,
                       timestamp, solution_path, logfile_path,
                       initial_perimeter,
                       warm_start_path: Optional[str] = None,
                       dormant_cells: Optional[dict] = None,
-                      area_imbalance: Optional[dict] = None) -> dict:
+                      area_imbalance: Optional[dict] = None,
+                      disconnected_cells: Optional[dict] = None) -> dict:
     """Assemble comprehensive metadata dictionary."""
     surface = provider.surface_name()
     label1, label2 = provider.resolution_labels()
@@ -870,5 +1160,6 @@ def _collect_metadata(config, provider, results, levels_meta, mesh,
         ),
         'dormant_cells': dormant_cells,
         'area_imbalance': area_imbalance,
+        'disconnected_cells': disconnected_cells,
     }
     return meta

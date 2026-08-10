@@ -169,6 +169,20 @@ def main():
         print("   lambda_penalty. See docs/reference/winner_take_all_partition_gap.md")
         print("=" * 70)
 
+    dcx = result.disconnected_cells or {}
+    if dcx.get('fragmented'):
+        print("\n" + "=" * 70)
+        print("⚠️  WARNING: DISCONNECTED CELLS")
+        print(f"   {dcx['n_fragmented']} cell(s) split into disconnected pieces on the")
+        print("   surface — the dormant and area-imbalance checks pass, but a")
+        print("   minimal-perimeter cell is connected, so this is a non-physical")
+        print("   relaxation local minimum (not caught by the other two gates).")
+        print(f"   Worst cell {dcx['worst_cell']}: stray pieces total "
+              f"{dcx['worst_stray_rel'] * 100:.1f}% of a cell's target area.")
+        print(f"   Fragmented cells: {dcx['fragmented']}")
+        print("   Try a different seed. Do NOT hand a fragmented cell to Phase 2.")
+        print("=" * 70)
+
     return 0
 
 

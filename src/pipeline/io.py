@@ -29,6 +29,13 @@ def detect_run_layout(file_path):
         For structured layout, run_dir is the root of the run directory
         (parent of solution/, refinement/, etc.).
         For flat layout, run_dir is the immediate parent directory.
+
+    A balanced-readout campaign (``readout/{campaign}/solution_balanced.h5``) is
+    treated as its own run root, so Phase 2 output nests *inside* it as
+    ``readout/{campaign}/refinement/{campaign}/``. Refining the raw
+    ``solution/`` file and refining a readout of it produce the same campaign
+    name, so without this they would write into one directory and interleave
+    iterates from two different inputs.
     """
     abs_path = os.path.abspath(file_path)
     parent = os.path.dirname(abs_path)
@@ -41,6 +48,9 @@ def detect_run_layout(file_path):
     grandparent_name = os.path.basename(grandparent)
     if grandparent_name == 'refinement':
         return 'structured', os.path.dirname(grandparent)
+
+    if grandparent_name == 'readout':
+        return 'structured', parent
 
     return 'flat', parent
 

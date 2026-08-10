@@ -1,7 +1,13 @@
 # Phase 1 High-N Validity Plan — Territory-Aware Relaxation (WTA balance term + optimizer fix)
 
-**Status:** PROPOSED — not implemented. Captured for later decision; intended to be
-implemented on a **separate branch**. No code has been changed.
+**Status:** IN PROGRESS — P1 (WTA balance term + discrete trim) and P2
+(reduced-gradient/trigger fix) are implemented behind default-off flags on
+`feat/phase1-territory-aware-relaxation` per the executable spec
+`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md` (see its progress
+log). The §5.3 verifications are done: the frozen-optimizer/identity findings
+below were re-confirmed on `run_20260714_224821` (Stage 0), and the P1 gradient
+passes the FD check. The confirming experiment (§4) is prepared but not yet run.
+The diagnosis text below is retained as the standing rationale.
 
 **Provenance:** produced by a Fable analysis agent on 2026-07-16, from the N=300
 winner-take-all scaling wall. Quantitative claims marked *measured* come from the

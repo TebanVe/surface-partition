@@ -265,6 +265,9 @@ Current entries:
 | `bogosel2023partitions` | Bogosel & Oudet — the foundational paper for Phase 1 and Phase 2 |
 | `wachter2006ipopt` | Wächter & Biegler — IPOPT algorithm |
 | `nocedal2006numerical` | Nocedal & Wright — Numerical Optimization textbook |
+| `modica1977esempio` | Modica & Mortola — the original Γ-convergence example |
+| `braides2002gamma` | Braides — Γ-convergence for Beginners (perturbation stability) |
+| `bertsekas1999nonlinear` | Bertsekas — Nonlinear Programming (gradient projection) |
 | `kuhn1974steiner` | Kuhn — Steiner's problem / Fermat-Torricelli construction |
 
 Add new entries to `shared/references.bib`, not inline in `main.tex`.
@@ -294,6 +297,7 @@ a forward-looking design document.
 | `04-phase1-timing-profile/` | Empirical Phase 1 PGD timing profile; projection bottleneck; line-search thrashing | Complete |
 | `05-phase1-nregion-scaling/` | Empirical wall-time scaling with number of regions; projections to N=50/100/1000 | Complete |
 | `06-phase1-energy-discretization/` | Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty, and all gradients | Complete |
+| `07-phase1-wta-balance/` | Winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration | Complete — derivation sound, but the mechanism was **not adopted**: measured a net regression at N=200 (~20× slower; 14/200 fragmented cells). The failure came from the trim reaching the field through the *nonlocal* projection, which none of the six propositions addressed. Superseded by the balanced readout (`src/partition/balanced_readout.py`); see `docs/reference/winner_take_all_partition_gap.md` §4b/§9b. |
 | `08-dual-newton-projection/` | Phase 1 exact constraint projection via the concave dual: QP dual, per-vertex cap-free simplex solve, outer Jacobian J=−∇²q (sym. PSD, structural kernel span{1}), L-BFGS + semismooth-Newton polish, exactness/idempotency | Complete — derivation sound, but the method was **not adopted**: measured slower than the incumbent iterative projection (`docs/reference/phase1_dual_projection_negative_result.md`, `docs/experiments/03-dual-projection-verification/`). Implementation retained on branch `feat/newton-projection`. |
 
 When you create a new document, add a row to this table.

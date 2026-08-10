@@ -1,10 +1,10 @@
-# The Winner-Take-All Partition Gap at High N (Dormant & Runt Cells)
+# The Winner-Take-All Partition Gap at High N (Dormant, Runt & Split Cells)
 
 Phase 1 optimizes **continuous density functions** and enforces equal areas on
 them; the actual partition is then extracted by a **winner-take-all** (argmax)
 hard decision. These two representations do not agree: a cell can satisfy the
 *continuous* equal-area constraint exactly while its *discrete* winner-take-all
-territory is far from equal. This gap is the single root cause behind two failures
+territory is far from equal. This gap is the single root cause behind three failures
 we have hit as the number of regions **N** grows:
 
 - **Dormant cells** — a cell wins *no* territory and vanishes; you asked for N
@@ -21,8 +21,14 @@ we have hit as the number of regions **N** grows:
   with a moderate `lambda_penalty=5.1`, the N=100 worst-cell area error drops from
   **22.5% → 0.8%** and Phase 2 refinement *decreases* perimeter (**−13.6%**) instead
   of crashing. See §4 and §8.
+- **Split cells** — a cell holds ≈ the right *total* area but in 2+ **disconnected
+  islands**; it passes both area-based gates and only a connectivity test sees it.
+  **Status: open.** Reseeding is *falsified* as a mitigation (the proven-clean seed
+  gives 14/200 fragmented, worse than the 3/200 that motivated the reseed), and the
+  leading suspect is now the discrete-area trim buying a cell's area with
+  disconnected mass. See §4b.
 
-They are two severities of the same disease. This document unifies both: the
+They are three severities of the same disease. This document unifies them: the
 shared mechanism, what was tried, what worked, what did not, the results analysis
 that located the runt's origin, and how it was resolved. It supersedes the earlier
 `phase1_dormant_cell_argmax_issue.md` and `phase2_high_n_equal_area_infeasibility.md`.
@@ -83,18 +89,22 @@ failure.
 
 ## 2. Two manifestations of one gap
 
-| | **Dormant cell** | **Runt cell** |
-|---|---|---|
-| Winner-take-all territory | **zero** — wins no vertex | nonzero but **≈ ⅓ of target** |
-| Peak density `max(u_k)` | low (~0.08), never a winner | **1.0** — a confident winner in its small core |
-| Alive on the map? | no — cell vanishes (N→N−k) | yes — present but undersized |
-| What breaks | wrong cell **count** | unequal **areas** → Phase 2 infeasible |
-| Caught by `detect_dormant_cells()` | **yes** (0 wins / peak < 0.5) | **no** (peak = 1.0, wins > 0) |
-| Caught by `detect_area_imbalance()` | yes (territory 0) | **yes** (territory ≪ target) |
-| Status | **resolved** (seeded init) | **resolved** (corrected energy + moderate λ) |
+| | **Dormant cell** | **Runt cell** | **Split cell** |
+|---|---|---|---|
+| Winner-take-all territory | **zero** — wins no vertex | nonzero but **≈ ⅓ of target** | ≈ target total, but in **2+ disconnected islands** |
+| Peak density `max(u_k)` | low (~0.08), never a winner | **1.0** — a confident winner in its small core | **1.0** in every piece |
+| Alive on the map? | no — cell vanishes (N→N−k) | yes — present but undersized | yes — present but fragmented |
+| What breaks | wrong cell **count** | unequal **areas** → Phase 2 infeasible | non-physical topology → Phase 2 multi-loop contours |
+| Caught by `detect_dormant_cells()` | **yes** (0 wins / peak < 0.5) | **no** (peak = 1.0, wins > 0) | **no** (peak = 1.0, wins > 0) |
+| Caught by `detect_area_imbalance()` | yes (territory 0) | **yes** (territory ≪ target) | **no** (total territory ≈ target) |
+| Caught by `detect_disconnected_cells()` | — | — | **yes** (≥2 components) |
+| Status | **resolved** (seeded init) | **resolved** (corrected energy + moderate λ) | **open** — detected only; reseed **falsified** as a mitigation (§4b) |
 
 Dormant = the extreme where territory collapses to zero. Runt = territory nonzero
-but nowhere near fair. Same root cause; different severity and different symptom.
+but nowhere near fair. Split = territory the right *total* size but broken into
+disconnected pieces. Same winner-take-all root cause; three different symptoms,
+and the split cell is the only one that slips through *both* area-based gates
+(§ Manifestation C).
 
 ## 3. Manifestation A — Dormant cells (RESOLVED)
 
@@ -179,6 +189,126 @@ dormant — peak density 1.0, wins 689 vertices — just tiny on the map.
 
 ![Continuous mass vs winner-take-all territory for the runt cell 92 versus a healthy cell. Both hold the same paint; the runt's territory is a third of target because two-thirds of its mass is diffuse halo.](figures/mass_vs_territory_runt.png)
 
+## 4b. Manifestation C — Split (disconnected) cells
+
+**The failure.** A cell's winner-take-all territory holds ≈ the right *total* area
+but is broken into two or more **disconnected islands** on the surface. Each island
+is crisp (peak density 1.0) and the islands sum to the target area, so the cell
+passes **both** area-based gates — `detect_dormant_cells()` (it wins plenty of
+vertices) *and* `detect_area_imbalance()` (its total territory is fair). Only a
+connectivity test sees it. A minimal-perimeter cell is connected (a split cell
+carries excess boundary), so this is a **non-physical relaxation local minimum**,
+not a valid partition cell.
+
+**Why the optimizer is happy with it.** Nothing in the objective penalizes
+disconnection: the Γ-convergence energy, the WTA balance term
+(`P_bal = (γ/2)Σr_k²` over *total* territory), and the discrete-area trim all
+reward the correct *total* area per cell, none cares how many pieces that area is
+in. So an area-balanced fragmented cell is a stable fixed point.
+
+**Where it was first seen.** Torus **N=200** (`run_20260722_121925`, seed
+84172851, λ=9, adaptive schedule): the final solution reported **0 dead, 0
+imbalanced** (worst-cell area dev 2.68%), yet **3/200 cells** (58, 168, 17) were
+split into 3–4 islands — worst cell 58 in three chunks of 0.050 / 0.039 / 0.028
+(stray = 57% of a cell). Tracing connectivity back through the mesh levels showed
+the fragmentation was *worst at the coarsest level* (8 split cells at level 0,
+where large ε makes the diffuse argmax boundary easy for a neighbour to pinch
+through) and the count then *fell* with refinement (8 → 6 → 3 → 3). At the time
+this was read as a coarse-level pinch that finer levels could not fully reconnect,
+and attributed to the **seed lottery** of §9.
+
+**That seed-lottery reading is falsified** (2026-08-03). The reseed run
+`run_20260730_211516` (seed **61803399** — the seed *proven clean* at this N and
+mesh, 0 fragmented, in the term-**OFF** deliverable `run_20260722_175451` — with
+λ=11 and the same adaptive schedule) was checked mid-ladder at
+`solution/checkpoint_level02.h5` (levels 0–1 done, V=24,948, `wta_active=True`):
+
+| | seed 84172851, λ=9 | seed 61803399, λ=11 |
+|---|---|---|
+| dead / imbalanced | 0 / 0 | 0 / **1** (cell 184, 8.31%) |
+| **fragmented** | **3**/200 (final, level 4) | **14**/200 (level 2) |
+| worst stray | 57% (cell 58) | **43.6%** (cell 198, 3 pieces) |
+| most pieces | 4 | **7** (cell 16) |
+
+The "good" seed is **worse**, so reseeding is not a mitigation. Fragment sizes
+confirm these are real splits, not `DISCONNECTED_FRAGMENT_REL_THRESHOLD` noise:
+target area = 4π²Rr/200 = 0.1184, and cell 198's pieces are
+0.0663 + 0.0474 + 0.0042 = **0.1179** — dead on target, in three places at once,
+with the second piece 40% of a whole cell. Cell 198 does **not** appear in the
+imbalanced list; only 15 cells have >1 raw component and 14 clear the threshold.
+
+**The driver is the discrete-area trim, not the seed.** In this run the adaptive
+handoff **never fired** (level ends 12.69% and 8.31% both exceed
+`wta_switch_margin=0.03`), so the trim ran on *every* level — unlike
+`run_20260722_121925`, where the fragment count fell precisely over the levels
+that had handed off to cheap E₀. The `relaxation.log` carries the causal trace:
+the trim's persistent worst-deviation targets at level 0 were cells **198**
+(dev 41.8 → 44.4 → 53.1 → 55.8 → 57.8 → 61.2 → 67.0 → 63.7%, dominating for
+hours) and **16** (48.2, 45.4, 38.3, 37.0, 35.4%), with 37 still flagged at the
+level end. Those are exactly the **two worst fragmented cells** at level 2 (198 at
+43.6%; 16 with seven components), and 37 is in the flagged list. The trim drove
+their *total* area to target by handing them **disconnected territory** — which is
+the stable fixed point described above, since nothing penalizes disconnection.
+The trim was also **clamp-saturated** (`d range [0.800, 1.200] × Ā` = exactly
+±`wta_trim_clamp=0.20`) for most of the run, i.e. pushing at maximum authority.
+
+*Confidence.* The counts and the log trace are measured, and the **term-OFF control
+is matched**: `run_20260722_175451` differs from `run_20260730_211516` only in the
+machinery flags — same seed 61803399, same λ=11, same 5-level mesh — and it finished
+all five levels with **0 fragmented** (worst area dev 1.7%) and was finalised as a
+deliverable. The one remaining mismatch is the comparison level (2 vs final), and it
+cuts *against* the machinery: the control was clean at the **end**, while the
+territory run is at 14 **mid-ladder** with no healing mechanism.
+
+What is *not* yet separated is **balance term vs trim**. `wta_balance_enabled` and
+`wta_trim_enabled` are independent flags but have never been enabled separately; the
+trim is the suspect (the log trace and the handoff correlation both point at it), not
+the proven culprit. Two cheap experiments settle it — relax seed 61803399, λ=11 to
+level 2 with (a) `wta_schedule: off`, and (b) balance term on / trim off.
+
+**At N=200 the machinery is a net regression, on two axes.** The term was added
+because it looked necessary at **N=300**; at N=200 the *original* energy already
+produces a valid, finalised partition (`run_20260722_175451`). Measured against
+that baseline the machinery costs:
+
+1. **Wall clock.** No level ever triggered mesh refinement — every completed level
+   ran the full 30,000-iteration cap. The balance-plateau trigger built to bypass
+   the trim sawtooth is *structurally unreachable while the trim runs*: the trim
+   moves the target every 200 accepted iterations, so ‖g_t‖ never approaches zero
+   (it flatlined at ≈20.33 against `refine_grad_tol=1e-2`, and the plateau fallback
+   needs 30 consecutive |Δ‖g_t‖| < 1e-4). The adaptive handoff never fired either
+   (level ends 12.69% and 8.31%, both above the 3% margin), so the expensive path
+   ran on every level. Four days bought 2.4 of 5 levels — 11.2 h, 53.5 h, then
+   31.4 h for 9,500/30,000 iterations; the full ladder extrapolates to **~20 days**.
+2. **Connectivity.** 14/200 fragmented (above), versus 0 for the control.
+
+So the term trades a problem N=200 does not have for two that it does. It is not
+ready to be the N=300 answer either, since it would carry the fragmentation there.
+This does not retract its measured success on *area* (`docs/experiments/04-...`,
+Result 1: entrenched −34% runt → 0 imbalanced on the seed λ could not fix). The
+defect is that **total area is the wrong invariant to enforce alone** — area and
+connectivity have to be enforced together, or fixing the first breaks the second.
+
+**Status: detected; reseed ruled out as mitigation; no automated fix.**
+`detect_disconnected_cells()` (§7) flags it. Options: (a) ~~reseed~~ —
+**falsified above**; (b) **brake the trim on connectivity** — the cheapest real
+fix: run `detect_disconnected_cells` periodically *during* relaxation and stop
+retargeting a cell once its territory splits, so the trim can no longer buy area
+with disconnected mass; (c) a **connectivity-repair** post-process that reassigns
+each stray island to the neighbour cell that most surrounds it, then rebalances
+(perturbs areas, adds local perimeter); (d) a connectivity-aware term in the
+relaxation (largest change). A fragmented cell must **not** be handed to Phase 2 —
+a disconnected cell produces multi-loop contours the equal-area / Steiner
+machinery is not built for.
+
+**Watch out: the gates only run at the *end* of `run_relaxation`**
+(`src/pipeline/relaxation.py:443-447`), so a run still on the mesh ladder — or one
+killed before the last level, which never writes `metadata.yaml` — reports
+*nothing*, and the per-level trim log shows only worst-|dev|, which is blind to
+splits. Use `testing/check_fragmentation.py <solution_or_checkpoint.h5>` (§7) to
+check any level's checkpoint mid-ladder. That is how the 14 above were found, on a
+run that was still reporting a healthy-looking 1 imbalanced cell.
+
 ## 5. Results analysis — where the runt comes from (Step 0)
 
 A forensic pass over the three existing solutions (zero new compute) tracked every
@@ -245,6 +375,7 @@ finer mesh did not help.
 
 | Lever | Effect on **dormant** | Effect on **runt** | Verdict |
 |---|---|---|---|
+| **Territory-aware machinery** (WTA balance term + discrete-area trim) | n/a | drives worst abs deviation down hard (N=200 level ends 12.7% → 8.3% → 5.4%) | **fixes area, creates splits** ⚠️ — 14/200 fragmented (§4b); enforces *total* area, not connectivity |
 | **Energy discretization fix** (`u²(1−u)²`→`u(1−u)`) | n/a | **root cause** — the coded well was ~25× too weak, under-pricing the halo *and* leaving λ inert; correcting it is what makes the runt fixable | **the fix** ✅ |
 | λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
 | Seeded init (equal-mass Voronoi) | **fixes it** ✅ | necessary complement — avoids the corrected-energy symmetric trap (§3) and gives every cell a start, but not sufficient *alone* (seeded-λ2.1 still runts) | required, not sufficient |
@@ -252,9 +383,9 @@ finer mesh did not help.
 | Detection gate | `detect_dormant_cells()` ✅ | `detect_area_imbalance()` ✅ | both catch |
 | Hard discrete-territory / crispness **constraint** | n/a | **not needed** — once the well is correct, the *soft* λ penalty suffices; the hard-floor idea is superseded | superseded |
 
-## 7. Detection (both gates implemented)
+## 7. Detection (three gates implemented)
 
-Both run at the end of Phase 1 in `run_relaxation` (log + CLI banner + a
+All three run at the end of Phase 1 in `run_relaxation` (log + CLI banner + a
 `metadata.yaml` block). From an existing solution:
 
 ```python
@@ -273,6 +404,29 @@ worst_rel = np.abs(areas-target).max()/target     # == Phase 2 iter-0 constraint
 - `detect_area_imbalance()` — flags cells whose territory deviates > `AREA_IMBALANCE_REL_THRESHOLD = 0.05`
   from target. Catches both dormant (territory 0) and runts. Verified: fires on both
   N=100 solutions (0.160 / 0.053), silent on N=50 (0.0036).
+- `detect_disconnected_cells()` — flags *split* cells (Manifestation C, below):
+  builds the induced subgraph of mesh edges whose endpoints share an argmax winner
+  and counts connected components per cell (via `scipy.sparse.csgraph`), so it
+  respects true surface topology (torus periodic wrap in `faces`). A non-largest
+  component is a genuine stray piece only if its area exceeds
+  `DISCONNECTED_FRAGMENT_REL_THRESHOLD = 0.01` of target (else = argmax speckle).
+  Catches what the other two miss — a split cell's pieces sum to target and each is
+  crisp, so it passes *both*. Verified at torus N=200 (`run_20260722_121925`,
+  seed 84172851): 3/200 cells fragmented (worst 57% stray) while dormant=0 and
+  imbalance=0. Logic gate: `testing/test_disconnected_cells_detection.py`.
+
+**All three run only on the FINAL solution** (`relaxation.py:443-447`), so a run
+still climbing the mesh ladder, or one killed before the last level (no
+`metadata.yaml`), reports none of them — and the per-level WTA-trim log line
+carries only worst-|dev|, which cannot see a split. To check any level mid-ladder:
+
+```bash
+python testing/check_fragmentation.py <run_dir>/solution/checkpoint_level02.h5
+```
+
+It runs all three gates against a solution *or* a per-level checkpoint and prints
+a pass/fail verdict. This is what exposed the 14 fragmented cells in §4b on a run
+whose own logging still looked healthy.
 
 ## 8. Resolution — the corrected energy plus a moderate λ
 
@@ -364,6 +518,20 @@ lever — not more λ. N=200 is the clean demonstration: at seed 84172851 two ce
 wall-time. Runt placement is geometric and seed-dependent; λ cannot rescue a cell the
 seeding squeezed.
 
+**Territory-aware resolution — an alternative to the seed lottery (2026-07-20).** The WTA
+balance term (`docs/plans/PHASE1_TERRITORY_AWARE_IMPLEMENTATION_PLAN.md`,
+`docs/math/07-phase1-wta-balance/`) rescues this *exact* bad-seed case **without** changing the
+seed: re-running the N=200 seed-84172851 λ=9 control with the balance term + discrete trim +
+reduced gradient enabled drove the two runts from −34% to **0 imbalanced cells (worst ±2.1%)**
+by level 1 (`run_20260717_102306`; recomputed in
+`docs/experiments/04-territory-aware-highn-validation/`). This is the anti-lottery property
+N=1000 needs — a corrective *force* instead of a lucky seed. Caveats: the run was interrupted
+mid-level-2 (finest-level completion gate pending a cluster re-run), and it is expensive on the
+coarse levels — no mesh-refinement trigger fires (the trim removes the energy plateau) and the
+coarsest level is resolution-floor-limited at ~10% (so refinement is *necessary*, not merely
+faster). Next A/B: N=300 vs `run_20260714_224821`. Scaling schedule:
+`docs/plans/PHASE1_COARSE_ONLY_WTA_SCHEDULE.md`.
+
 **Status ladder (as of this writing).** N=100, 150, 200 are valid, finalised, and
 exported (the N=150 artifact cleared only after resuming to 5 levels). **N=300** relaxes
 cleanly at λ=12 but is **not yet valid** — 9 cells over the gate (worst −34.9%), a mix of
@@ -378,6 +546,71 @@ topology oscillates on migrations, so `pending_migration` never clears). This is
 plateau, not a failure; the workflow is to export the minimum-perimeter iterate with
 `scripts/export_partition.py --force-finalised`. See CLAUDE.md "Phase 2 migration-cycling
 plateau" and "Phase 1 `lambda_penalty` has a working window".
+
+## 9b. Resolution at extraction — the balanced readout (N=300, RESOLVED)
+
+Every lever in §6 tries to make the *relaxation* produce a valid partition. That
+framing is wrong, and it is what made the wall look structural: validity is a
+property of the **extraction**, not of the flow. Phase 1 constrains continuous mass;
+the delivered object is the argmax territory; nothing downstream consumes the masses
+(`ContourAnalyzer.compute_indicator_functions` reduces the densities to a hard 0/1
+indicator). So the gap can be closed *after* relaxation, and the relaxation left
+untouched.
+
+Two reasons this is not the discrete-area trim (§4b) in disguise:
+
+1. **It is tail-immune.** The gate binds on the *worst* of N cells, which drifts like
+   σ·√(2 ln N); every soft, variance-reducing mechanism — the λ penalty, the WTA
+   balance term — therefore degrades as N grows. An exact assignment does not: it is
+   balanced *by construction*, to one-vertex granularity, at any N.
+2. **The correction is local.** The trim raised a runt's continuous target and let the
+   *projection* deliver the mass — a nonlocal operator (rank-one + renormalize), which
+   flips the argmax in far-away places and manufactures islands. A per-cell offset in
+   log-density space grows a cell monotonically outward from its existing core. This is
+   the predictive test to apply to any future territory mechanism: **through what
+   operator does the correction reach the field, and is that operator local?**
+
+**Mechanism** (`src/partition/balanced_readout.py`, CLI `scripts/balanced_readout.py`):
+replace `argmax_k u_ik` with `argmax_k [log u_ik + ψ_k]`, the N offsets ψ solving the
+semi-discrete OT dual by subgradient ascent (`ψ_k -= η·(T_k − Ā)/Ā`); then repair
+connectivity — absorb stray components into the neighbour sharing the longest boundary,
+and restore areas by single-vertex boundary transfers (improving iff
+`T_donor − T_receiver > v_i`, ranked by `log u_ir − log u_id`), each gated by an exact
+articulation check so no move disconnects a donor.
+
+**Measured, torus N=300** (`run_20260806_123326`, λ=11.5, seed 61803399, V=47,488 — the
+clean-energy run of §9 that fails both gates), ~17 s, no cluster time:
+
+| Stage | Imbalanced | Worst dev | Fragmented | Boundary length |
+|---|---|---|---|---|
+| Source (plain argmax) | 10 / 300 | 36.15% | 2 | 189.73 |
+| + dual shifts | **0** | 2.12% | 2 | 190.71 (+0.52%) |
+| + connectivity repair | **0** | **1.63%** | **0** | 193.30 (+1.88%) |
+
+1840 vertices relabeled (3.9%); repair strain 1485 moves, 1 blocked by the articulation
+check, 38/50 sweeps. All three gates pass under `testing/check_fragmentation.py`.
+
+Two findings worth keeping:
+
+- **The support-binding refutation is dead.** The obvious way for this to fail is a runt
+  whose density does not *cover* enough vertices to reach Ā. It does not happen: every
+  runt has far more support than it needs (cell 299 exceeds density 1e−3 over **172×**
+  its target area). Runts are not starved, they are *diffuse* — the oversized cells, by
+  contrast, have a tight ~2× support. This is the §5 halo, measured at N=300.
+- **The dual shifts alone create no new splits, but deepen existing ones.** Auditing
+  every cell's raw component count (including sub-threshold speckle): exactly the two
+  already-broken cells gained components, zero others did. But cell 290's stray went
+  4.1% → 26.5% of target — the shift bought its area by growing the far island. Hence
+  the repair stage is not optional at high N. Both broken cells had their main body in
+  one region and their strays in the *same other* region: fragmentation here is **one
+  localized defect**, not a distributed phenomenon.
+
+**Scope.** This closes area at any N and connectivity for the defect density observed so
+far (2/300 on the clean energy; splits show no sign of exploding from N=200→300, and the
+one run where they did — 14/200 — is the rejected territory-aware machinery). It does
+**not** address Phase 1 cost (~22 h at N=300), which is the remaining N=1000 wall. The
+repair reports its own strain so a run beyond what repair can fix says so rather than
+returning a silently degraded partition.
 
 ## 10. Related documents, code, and data
 
@@ -403,14 +636,21 @@ plateau" and "Phase 1 `lambda_penalty` has a working window".
   `src/optimization/projection.py` (equal-mass + sum-to-one projection),
   `src/optimization/initialization.py` (seeded init),
   `src/partition/find_contours.py` (`detect_dormant_cells`, `detect_area_imbalance`,
-  winner-take-all classification),
+  `detect_disconnected_cells`, winner-take-all classification),
+  `src/partition/balanced_readout.py` + `scripts/balanced_readout.py` (§9b — the
+  balanced, connected extraction that closes the gap at readout),
   `src/optimization/perimeter_optimizer.py` (Phase 2 equal-area constraint).
 - Data: the pre-fix anchor runs under `results/` (N=50 `run_20260625_113015`,
   N=100 coarse `run_20260629_141012`, N=100 finer `run_20260701_143238`); and the
   post-fix corrected-energy runs (N=30 seeded/random head-to-head
   `run_20260707_080824` / `run_20260707_002828`; N=100 λ=5.1 production
   `run_20260709_081548`, worst-cell 0.8%, Phase-2 perimeter 185.25). Figures
-  regenerated from their `traces/` and `solution/` HDF5.
+  regenerated from their `traces/` and `solution/` HDF5. Split-cell (§4b) data:
+  `run_20260722_121925` (seed 84172851, λ=9 — 3/200 fragmented, final) and
+  `run_20260730_211516` (seed 61803399, λ=11 — **14/200 fragmented** at
+  `solution/checkpoint_level02.h5`; run killed mid-level-3, so it has no final
+  solution and no `metadata.yaml`), both on Pelle under
+  `/proj/.../LINKED_LST_MANIFOLD/results/`.
 - Method: Bogosel & Oudet, *Partitions of Minimal Length on Manifolds*,
   Experimental Mathematics (2023); arXiv:1606.02873 — ε ∝ h, winner-take-all
   recovery, equal-area constraint, demonstrated at modest N.

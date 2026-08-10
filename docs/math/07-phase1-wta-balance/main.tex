@@ -1,0 +1,763 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}      % loads ALL packages and notation — do not add
+                               % packages directly in main.tex
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 1 Winner-Take-All Balance Term},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{The Phase 1 Winner-Take-All Balance Term}\\[0.5em]
+  \large Soft territory, the balance penalty and its gradient,
+  the discrete-area trim, and $\Gamma$-consistency}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document derives the \emph{territory-aware} additions to the Phase~1
+relaxation energy of \code{ProjectedGradientOptimizer}
+(\codefile{src/optimization/pgd\_optimizer.py}): a differentiable
+\emph{soft winner-take-all territory} $T_k$ per cell built from
+power-normalized weights, the \emph{balance penalty}
+$P_{\mathrm{bal}} = \tfrac{\gamma}{2}\sum_k r_k^2$ with
+$r_k = (T_k-\Atgt)/\Atgt$, its exact analytical gradient, and the
+\emph{discrete-area trim} — a damped controller on the projection's per-cell
+area targets whose fixed point is exact discrete (argmax) area equality. We
+prove the six structural properties the design relies on (total-area
+consistency, self-deactivation, interface-band localization, neutrality at the
+symmetric state, restoration of starving cells, and $\Gamma$-consistency),
+justify the default sharpening exponent $p=2$, and record the one-time
+calibration of the strength $\gamma$. All gradients are analytical and
+verified against central finite differences to relative error
+$<10^{-6}$ (\codefile{testing/test\_wta\_balance\_gradient\_analytical.py}).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Overview}
+\label{sec:overview}
+
+Phase~1 (see \codefile{docs/math/06-phase1-energy-discretization/} for the
+base energy) enforces equal \emph{continuous} cell masses
+$\sum_i v_i u_{i,k} = \Atgt$, but the deliverable of the relaxation is the
+\emph{winner-take-all} (WTA) partition: vertex $i$ belongs to cell
+$\argmax_k u_{i,k}$. Nothing in the base energy or the constraints references
+which side of the argmax boundary a unit of interface-band mass sits on, so at
+high cell counts $N$ the discrete (argmax) territories drift from equal even
+though the continuous masses are pinned. The measured diagnosis and the design
+rationale live in \codefile{docs/plans/PHASE1\_N1000\_VALIDITY\_PLAN.md}; the
+root cause is the following exact accounting identity.
+
+\begin{prop}[Accounting identity]
+\label{prop:identity}
+Let $U\in\mathbb{R}^{|V|\times N}$ be feasible (rows on the simplex, columns
+mass-pinned: $\sum_k u_{i,k}=1$, $u_{i,k}\ge 0$, $\sum_i v_i u_{i,k}=\Atgt$).
+Let $\omega(i)=\argmax_k u_{i,k}$, and define per cell $k$ the WTA territory,
+the lost mass, and the gained mass
+\[
+  T^{\mathrm{wta}}_k = \sum_{i:\,\omega(i)=k} v_i,
+  \qquad
+  \mathrm{lost}_k = \sum_{i:\,\omega(i)\neq k} v_i\, u_{i,k},
+  \qquad
+  \mathrm{gain}_k = \sum_{i:\,\omega(i)=k} v_i \bigl(1 - u_{i,k}\bigr).
+\]
+Then
+\begin{equation}
+  T^{\mathrm{wta}}_k - \Atgt \;=\; \mathrm{gain}_k - \mathrm{lost}_k .
+  \label{eq:identity}
+\end{equation}
+\end{prop}
+
+\begin{proof}
+Using $\sum_l u_{i,l}=1$ on each winning vertex,
+$T^{\mathrm{wta}}_k
+ = \sum_{i:\,\omega(i)=k} v_i \sum_l u_{i,l}
+ = \sum_{i:\,\omega(i)=k} v_i u_{i,k} + \mathrm{gain}_k$.
+The first sum is the cell's own mass on won vertices, i.e.\
+$\Atgt - \mathrm{lost}_k$ by the mass constraint.
+\end{proof}
+
+The imbalance $T^{\mathrm{wta}}_k-\Atgt$ is therefore exactly the cell's net
+interface-band mass exchange $\mathrm{gain}_k-\mathrm{lost}_k$ — a quantity
+the base energy prices \emph{symmetrically} about $u=\tfrac12$ and the
+projection never sees. The additions derived here couple it back into the
+optimality conditions:
+\begin{enumerate}[itemsep=1pt]
+  \item a smooth penalty $P_{\mathrm{bal}}$ on a differentiable surrogate
+        $T_k \approx T_k^{\mathrm{wta}}$ (Sections~\ref{sec:soft}--\ref{sec:props}),
+        added to the energy; and
+  \item a periodic, derivative-free retargeting of the projection's per-cell
+        area targets $d$ whose fixed point is \emph{exact} discrete equality
+        (Section~\ref{sec:trim}).
+\end{enumerate}
+Both are flag-gated and default-off; with the flags off the Phase~1 energy is
+byte-for-byte the one derived in
+\codefile{docs/math/06-phase1-energy-discretization/}.
+
+\section{Notation and setup}
+\label{sec:notation}
+
+We reuse the Phase~1 notation of
+\codefile{docs/math/06-phase1-energy-discretization/}. The mesh has $|V|$
+vertices with lumped-mass (area) weights $v_i>0$
+(\code{TriMesh.v}), total area $A=\sum_i v_i$, cell count $N$, and equal-area
+target $\Atgt = A/N$. The density matrix is $U\in\mathbb{R}^{|V|\times N}$
+with entries $u_{i,k}\in[0,1]$ (in the code: \code{phi = x.reshape(N, n)},
+vertices as rows, cells as columns). The projection
+(\codefile{src/optimization/projection.py}) enforces
+\begin{equation}
+  \sum_k u_{i,k} = 1 \ \ \forall i,
+  \qquad
+  0 \le u_{i,k} \le 1,
+  \qquad
+  \sum_i v_i\, u_{i,k} = d_k \ \ \forall k,
+  \label{eq:constraints}
+\end{equation}
+where $d\in\mathbb{R}^N$ is the per-cell area-target vector, by default
+$d = \Atgt\mathbf 1$. The base energy (unchanged by this document) is
+\begin{equation}
+  E_0(U) = \sum_k \Bigl[\varepsilon\, u_k^\top K u_k
+        + \tfrac1\varepsilon\, q_k^\top M q_k\Bigr]
+        + \lambda \sum_k \Bigl(1 - \tfrac{\operatorname{Var}(u_k)}{T_{\mathrm{eff}}}\Bigr),
+  \qquad q_k = u_k\odot(1-u_k).
+  \label{eq:E0}
+\end{equation}
+This document adds $E = E_0 + P_{\mathrm{bal}}$.
+
+\begin{remark}[Total area symbol]
+Document 06 writes $W$ for the total area; here we write $A$ (and reserve $W$
+for nothing) to match the implementation plan. The row-simplex constraint in
+\eqref{eq:constraints} makes each row $u_{i,\cdot}$ a point of the standard
+simplex $\Delta^{N-1}$; all bounds below exploit only this.
+\end{remark}
+
+\section{Soft territory}
+\label{sec:soft}
+
+The hard WTA territory $T^{\mathrm{wta}}_k=\sum_{i:\,\omega(i)=k}v_i$ is
+piecewise constant in $U$ (its derivative is zero a.e.\ and undefined on the
+tie set), so it cannot enter a gradient method directly. We replace the hard
+argmax indicator by a \emph{power-normalized (Gibbs-type) soft assignment}.
+
+\begin{defn}[Power-normalized weights and soft territory]
+\label{defn:soft}
+Fix a sharpening exponent $p\ge 1$ (default $p=2$). For each vertex $i$ and
+cell $k$,
+\begin{align}
+  w_{i,k} &\;=\; \frac{u_{i,k}^{\,p}}{S_i},
+  \qquad
+  S_i \;=\; \sum_{l=1}^{N} u_{i,l}^{\,p},
+  \qquad\text{so}\qquad
+  \sum_k w_{i,k} = 1 ,
+  \label{eq:weights}\\
+  T_k &\;=\; \sum_{i=1}^{|V|} v_i\, w_{i,k}.
+  \label{eq:softT}
+\end{align}
+\end{defn}
+
+\begin{prop}[Bounds on the normalizer]
+\label{prop:Sbounds}
+On the row simplex ($u_{i,\cdot}\in\Delta^{N-1}$), for every $p\ge1$,
+\begin{equation}
+  N^{1-p} \;\le\; S_i \;\le\; 1 .
+  \label{eq:Sbounds}
+\end{equation}
+\end{prop}
+
+\begin{proof}
+Upper bound: $u_{i,l}\le\sum_m u_{i,m}=1$, so
+$u_{i,l}^{\,p}\le u_{i,l}$ and $S_i\le\sum_l u_{i,l}=1$.
+Lower bound: $x\mapsto x^p$ is convex, so by Jensen
+$\tfrac1N S_i \ge \bigl(\tfrac1N\sum_l u_{i,l}\bigr)^p = N^{-p}$.
+Both are attained: the upper at one-hot rows, the lower at the uniform row.
+\end{proof}
+
+$S_i$ is therefore bounded away from zero \emph{on the feasible set}, and
+$w_{i,\cdot}$ is a smooth ($C^\infty$ in $u$ for integer $p$, wherever
+$S_i>0$) partition of unity. The implementation nevertheless guards
+$S_i \leftarrow \max(S_i,\text{tiny})$ defensively, because the gradient may
+be evaluated on pre-projection iterates that violate \eqref{eq:constraints}.
+
+\begin{prop}[Sharpening toward the argmax]
+\label{prop:sharpen}
+For $p>1$ and any row $u_{i,\cdot}\in\Delta^{N-1}$, the winner's share weakly
+increases and every non-winner's ratio to the winner strictly decreases:
+\[
+  w_{i,\omega(i)} \ge u_{i,\omega(i)},
+  \qquad
+  \frac{w_{i,l}}{w_{i,\omega(i)}}
+   = \Bigl(\frac{u_{i,l}}{u_{i,\omega(i)}}\Bigr)^{p}
+   \le \frac{u_{i,l}}{u_{i,\omega(i)}} ,
+\]
+with equality only at ties or one-hot rows. As $p\to\infty$,
+$w_{i,\cdot}$ converges to the uniform distribution on the argmax set
+(the hard indicator when the winner is unique); at $p=1$, $w=u$ identically.
+\end{prop}
+
+\begin{proof}
+$S_i=\sum_l u_{i,l}\,u_{i,l}^{\,p-1}\le u_{i,\omega(i)}^{\,p-1}\sum_l u_{i,l}
+ = u_{i,\omega(i)}^{\,p-1}$, hence
+$w_{i,\omega(i)}=u_{i,\omega(i)}^{\,p}/S_i \ge u_{i,\omega(i)}$. The ratio
+identity is immediate from \eqref{eq:weights}; for $p\to\infty$ divide
+numerator and denominator by $u_{i,\omega(i)}^{\,p}$.
+\end{proof}
+
+\begin{remark}[Why $p=2$ is the default, and $p=1$ is the blind spot]
+\label{rem:p2}
+At $p=1$ the soft territory degenerates to the \emph{continuous mass},
+$T_k=\sum_i v_i u_{i,k} = d_k$, which the projection pins at $\Atgt$: the
+term is identically zero on the feasible set. This is precisely the existing
+blind spot — the equal-mass constraint cannot see territory. $p=2$ is the
+smallest integer exponent that (a) strictly sharpens toward the argmax
+(Proposition~\ref{prop:sharpen}), (b) keeps $w_{i,\cdot}$ a smooth partition
+of unity with $S_i\ge 1/N$ (Proposition~\ref{prop:Sbounds}), and (c) yields
+the closed-form, bounded gradient of Section~\ref{sec:gradient}
+(Proposition~\ref{prop:gradbound}). Larger $p$ sharpens more but steepens the
+gradient near crisp states and worsens conditioning; $p$ is exposed as the
+config knob \code{wta\_balance\_power} (default $2.0$).
+\end{remark}
+
+\begin{remark}[Alternative surrogate: temperature softmax]
+\label{rem:softmax}
+The temperature softmax $w_{i,k}=e^{u_{i,k}/\tau}/\sum_l e^{u_{i,l}/\tau}$ is
+also a partition of unity (so Property~\ref{prop:consistency} would hold), but
+it is not used, for two reasons. First, it never reaches a one-hot weight at a
+crisp vertex: at $u_{i,\cdot}=e_k$ it gives
+$w_{i,k}=e^{1/\tau}/(e^{1/\tau}+N-1)<1$, so the interior force of
+Property~\ref{prop:band} vanishes only up to an $O\!\bigl(N e^{-1/\tau}\bigr)$
+residual, whereas power weights are \emph{exactly} one-hot there. Second, its
+sharpening saturates at the fixed ratio $e^{1/\tau}$ on the bounded density
+range $[0,1]$, so approaching the argmax requires $\tau\to0$, which inflates
+the gradient's Lipschitz constant like $1/\tau$; the power weights sharpen
+exactly at crisp states with the bounded gradient of
+Proposition~\ref{prop:gradbound} and introduce no extra scale parameter.
+\end{remark}
+
+\section{The balance penalty}
+\label{sec:penalty}
+
+\begin{defn}[Relative territory deviation and balance penalty]
+\label{defn:penalty}
+\begin{equation}
+  r_k \;=\; \frac{T_k - \Atgt}{\Atgt}
+  \qquad\text{(dimensionless)},
+  \qquad
+  P_{\mathrm{bal}}(U) \;=\; \frac{\gamma}{2}\sum_{k=1}^{N} r_k^{\,2},
+  \qquad \gamma \ge 0 .
+  \label{eq:penalty}
+\end{equation}
+\end{defn}
+
+The strength $\gamma$ (\code{wta\_balance\_gamma}) is calibrated once in
+Section~\ref{sec:gamma}. The deviations are \emph{relative} — everything
+downstream is in units of the fair share $\Atgt$ — which is what makes one
+$\gamma$ portable across $N$ (Section~\ref{sec:gamma}).
+
+\section{The gradient}
+\label{sec:gradient}
+
+Only vertex $i$'s own weights depend on $u_{i,k}$, so the derivative is local
+in $i$ and couples all cells at that vertex through the normalizer $S_i$.
+
+\begin{prop}[Weight and territory derivatives]
+\label{prop:dw}
+For all cells $l,k$ and vertices $i$,
+\begin{align}
+  \pd{w_{i,l}}{u_{i,k}}
+  &\;=\; \frac{p\, u_{i,k}^{\,p-1}}{S_i}\,\bigl(\delta_{lk} - w_{i,l}\bigr),
+  \label{eq:dw}\\
+  \pd{T_l}{u_{i,k}}
+  &\;=\; v_i\,\frac{p\, u_{i,k}^{\,p-1}}{S_i}\,\bigl(\delta_{lk} - w_{i,l}\bigr).
+  \label{eq:dT}
+\end{align}
+\end{prop}
+
+\begin{proof}
+From $w_{i,l}=u_{i,l}^{\,p}/S_i$ and
+$\partial S_i/\partial u_{i,k} = p\,u_{i,k}^{\,p-1}$, the quotient rule gives
+\[
+  \pd{w_{i,l}}{u_{i,k}}
+  = \frac{p\,u_{i,k}^{\,p-1}\,\delta_{lk}\,S_i
+        - u_{i,l}^{\,p}\; p\,u_{i,k}^{\,p-1}}{S_i^{\,2}}
+  = \frac{p\,u_{i,k}^{\,p-1}}{S_i}\Bigl(\delta_{lk}
+        - \frac{u_{i,l}^{\,p}}{S_i}\Bigr),
+\]
+which is \eqref{eq:dw}; \eqref{eq:dT} follows since $T_l$ is linear in the
+weights with coefficients $v_i$ and $w_{j,l}$ with $j\neq i$ does not depend
+on $u_{i,k}$.
+\end{proof}
+
+\begin{prop}[Gradient of the balance penalty]
+\label{prop:grad}
+Define the per-vertex mean deviation $m_i = \sum_l r_l\, w_{i,l}$ (a convex
+combination of the $r_l$). Then
+\begin{equation}
+  \pd{P_{\mathrm{bal}}}{u_{i,k}}
+  \;=\; \frac{\gamma}{\Atgt}\sum_l r_l \pd{T_l}{u_{i,k}}
+  \;=\; \frac{\gamma\, p}{\Atgt}\; v_i\;
+        \frac{u_{i,k}^{\,p-1}}{S_i}\;\bigl(r_k - m_i\bigr).
+  \label{eq:grad}
+\end{equation}
+For the default $p=2$,
+\begin{equation}
+  \pd{P_{\mathrm{bal}}}{u_{i,k}}
+  \;=\; \frac{2\gamma}{\Atgt}\; v_i\; \frac{u_{i,k}}{S_i}\;
+        \bigl(r_k - m_i\bigr).
+  \label{eq:gradp2}
+\end{equation}
+\end{prop}
+
+\begin{proof}
+Chain rule on \eqref{eq:penalty}:
+$\partial P_{\mathrm{bal}}/\partial u_{i,k}
+ = \gamma\sum_l r_l\,\partial r_l/\partial u_{i,k}
+ = (\gamma/\Atgt)\sum_l r_l\,\partial T_l/\partial u_{i,k}$.
+Insert \eqref{eq:dT} and split the $\delta_{lk}$ and $w_{i,l}$ parts:
+$\sum_l r_l(\delta_{lk}-w_{i,l}) = r_k - m_i$.
+\end{proof}
+
+\begin{prop}[Entry-wise gradient bound]
+\label{prop:gradbound}
+On the feasible set, for $p=2$,
+\begin{equation}
+  \Bigl|\pd{P_{\mathrm{bal}}}{u_{i,k}}\Bigr|
+  \;\le\; \frac{2\gamma\, v_i}{\Atgt}\,\sqrt{N}\;
+          \operatorname{osc}(r),
+  \qquad
+  \operatorname{osc}(r) = \max_l r_l - \min_l r_l .
+  \label{eq:gradbound}
+\end{equation}
+\end{prop}
+
+\begin{proof}
+Since $m_i$ is a convex combination of the $r_l$,
+$|r_k-m_i|\le\operatorname{osc}(r)$. For the factor $u_{i,k}/S_i$: by
+Proposition~\ref{prop:Sbounds} and $S_i\ge u_{i,k}^{\,2}$,
+\[
+  \frac{u_{i,k}}{S_i}
+  \le \frac{u_{i,k}}{\max\bigl(u_{i,k}^{\,2},\,1/N\bigr)}
+  = \min\Bigl(\frac{1}{u_{i,k}},\, N u_{i,k}\Bigr)
+  \le \sqrt N,
+\]
+the last step at the crossover $u_{i,k}=N^{-1/2}$.
+\end{proof}
+
+The gradient is thus uniformly bounded on the feasible set — no barrier-like
+blow-up anywhere, including crisp states.
+
+\paragraph{Vectorized assembly.}
+With $U\in\mathbb{R}^{|V|\times N}$ the whole computation is two $O(|V|N)$
+elementwise passes and two reductions (one over cells, one over vertices):
+\begin{align*}
+  &U^p \to S \to W = U^p / S
+  \quad\text{(rows)},\qquad
+  T = (v \odot) \text{-weighted column sums of } W,\\
+  &r = (T-\Atgt)/\Atgt,\qquad
+  P_{\mathrm{bal}} = \tfrac\gamma2\, r^\top r,\qquad
+  m = W r \quad\text{(per-vertex reduction)},\\
+  &\grad_U P_{\mathrm{bal}}
+   = \frac{\gamma p}{\Atgt}\; v \odot \frac{U^{\,p-1}}{S}
+     \odot \bigl(\mathbf 1\, r^\top - m\,\mathbf 1^\top\bigr),
+\end{align*}
+broadcasting $v$ and $S$ over columns and $r$, $m$ over rows/columns
+respectively. This is the same cost class $O(|V|N)$ as the base energy.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: WTA balance term and gradient}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}:
+\code{compute\_energy} / \code{compute\_gradient}, guarded by
+\code{wta\_balance\_enabled} (default off; zero overhead when off)\\[2pt]
+\code{Up = phi**p;\ S = np.maximum(Up.sum(1), tiny);\ W = Up / S[:, None]}\\
+\code{T = W.T @ v;\ r = (T - Abar) / Abar;\ P\_bal = 0.5 * gamma * (r @ r)}\\
+\code{m = W @ r}\\
+\code{G += (gamma * p / Abar) * v[:, None] * (phi**(p-1) / S[:, None])
+      * (r[None, :] - m[:, None])}\\[2pt]
+Config: \code{wta\_balance\_enabled}, \code{wta\_balance\_gamma} ($\gamma$),
+\code{wta\_balance\_power} ($p$) in \code{RelaxationConfig}
+(\codefile{src/pipeline/relaxation.py}).\ \
+FD check: \codefile{testing/test\_wta\_balance\_gradient\_analytical.py}.
+\end{tcolorbox}
+
+\section{Structural properties}
+\label{sec:props}
+
+\begin{prop}[1. Total-area consistency]
+\label{prop:consistency}
+$\displaystyle\sum_k T_k = \sum_i v_i \sum_k w_{i,k} = \sum_i v_i = A$
+exactly, for every feasible or infeasible $U$ with $S_i>0$. Consequently
+$\sum_k r_k = 0$: the deviation vector always lies in the zero-mean subspace,
+so $P_{\mathrm{bal}}$ measures only the \emph{spread} of territories and is
+compatible with the fixed total area — it never fights the sum-to-one
+constraint.
+\end{prop}
+
+\begin{proof}
+Immediate from $\sum_k w_{i,k}=1$ \eqref{eq:weights} and
+$\sum_k r_k = (\sum_k T_k - N\Atgt)/\Atgt = (A-A)/\Atgt = 0$.
+\end{proof}
+
+\begin{prop}[2. Self-deactivation — no penalty ceiling]
+\label{prop:selfdeact}
+At any balanced configuration ($T_k=\Atgt$ for all $k$): $r=0$, hence
+$P_{\mathrm{bal}}=0$ and, by \eqref{eq:grad},
+$\grad_U P_{\mathrm{bal}}=0$ identically. Moreover the Hessian there reduces
+to the positive-semidefinite Gauss--Newton block
+$\frac{\gamma}{\Atgt^2} J^\top J$ (with $J_{l,(i,k)}=\partial T_l/\partial
+u_{i,k}$), since the second term
+$\frac{\gamma}{\Atgt}\sum_l r_l \nabla^2 T_l$ vanishes with $r$.
+\end{prop}
+
+\begin{proof}
+Every entry of \eqref{eq:grad} carries the factor $r_k-m_i$, which is a
+linear combination of the $r_l$; $r=0$ annihilates it. Differentiating
+$\grad P_{\mathrm{bal}} = \frac{\gamma}{\Atgt^2} J^\top (T-\Atgt\mathbf 1)$
+gives $\nabla^2 P_{\mathrm{bal}} = \frac{\gamma}{\Atgt^2} J^\top J
++ \frac{\gamma}{\Atgt}\sum_l r_l\,\nabla^2 T_l$.
+\end{proof}
+
+\begin{remark}[Contrast with the $\lambda$ crispness penalty]
+The crispness penalty's gradient
+$-\lambda\,\grad\operatorname{Var}(u_k)/T_{\mathrm{eff}}$ (document 06,
+eq.~(24)) is nonzero at every non-constant $u_k$ — it is \emph{constant
+pressure} that never switches off, which is the mechanism of the empirically
+observed $\lambda$ ceiling (raise $\lambda$ too far and the pressure dominates
+the perimeter terms; see
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} \S9). The
+balance force instead fades to zero \emph{at} the balanced solutions it
+targets, and near them contributes only benign $\succeq 0$ curvature along
+the $N$ territory directions — it cannot dominate the energy at the solution,
+so it has no analogous ceiling.
+\end{remark}
+
+\begin{prop}[3. Interface-band localization]
+\label{prop:band}
+Let vertex $i$ be $\delta$-crisp for cell $k$: $u_{i,k}=1-\delta$ and
+$\sum_{l\ne k} u_{i,l}=\delta$, $\delta\in[0,\tfrac12)$. Then, with $p=2$,
+\[
+  1 - w_{i,k} \;\le\; \frac{\delta^2}{(1-\delta)^2},
+  \qquad
+  \Bigl|\pd{P_{\mathrm{bal}}}{u_{i,k}}\Bigr|
+  \;\le\; \frac{2\gamma v_i}{\Atgt}\,
+          \frac{\operatorname{osc}(r)\,\delta^2}{(1-\delta)^3},
+  \qquad
+  \Bigl|\pd{P_{\mathrm{bal}}}{u_{i,l}}\Bigr|
+  \;\le\; \frac{2\gamma v_i}{\Atgt}\,
+          \frac{\operatorname{osc}(r)\,\delta}{(1-\delta)^2}
+  \quad (l\ne k).
+\]
+In particular at an exactly crisp vertex ($\delta=0$) the force vanishes
+identically in every component. The balance force is supported on the blurry
+interface band where $w_{i,\cdot}$ is spread — it \emph{moves fences, not
+interiors}.
+\end{prop}
+
+\begin{proof}
+$1-w_{i,k} = \sum_{l\neq k} u_{i,l}^2 / S_i
+ \le (\sum_{l\neq k} u_{i,l})^2 / S_i \le \delta^2/(1-\delta)^2$
+using $S_i \ge u_{i,k}^2=(1-\delta)^2$. For the winner entry, in
+\eqref{eq:gradp2}: $u_{i,k}/S_i \le 1/u_{i,k} = 1/(1-\delta)$ and
+$|r_k - m_i| = |\sum_{l\ne k} w_{i,l}(r_k - r_l)|
+ \le \operatorname{osc}(r)\,(1-w_{i,k})
+ \le \operatorname{osc}(r)\,\delta^2/(1-\delta)^2$.
+For a loser entry $l\ne k$: $u_{i,l}\le\delta$, so
+$u_{i,l}/S_i \le \delta/(1-\delta)^2$ and $|r_l-m_i|\le\operatorname{osc}(r)$.
+\end{proof}
+
+\begin{prop}[4. Neutrality at the symmetric state]
+\label{prop:symmetric}
+At the uniform (symmetric) configuration $u_{i,k}\equiv 1/N$:
+$w_{i,k}=1/N$, $T_k=\Atgt$, $r=0$, hence $P_{\mathrm{bal}}=0$ and
+$\grad P_{\mathrm{bal}}=0$. The symmetric state remains a critical point of
+the total energy with unchanged value. The added curvature there is the
+Gauss--Newton block of Proposition~\ref{prop:selfdeact}, which vanishes on
+every \emph{territory-neutral} perturbation ($Je=0$); in particular
+symmetry-breaking directions that keep the soft territories equal (the ones a
+seeded, balanced initialization excites) feel no new resistance, and the term
+cannot deepen the random-init symmetric trap
+(\codefile{docs/reference/winner\_take\_all\_partition\_gap.md}).
+\end{prop}
+
+\begin{proof}
+Uniform rows give $S_i=N^{1-p}$ and $w_{i,k}=N^{-p}/N^{1-p}=1/N$, so
+$T_k=A/N=\Atgt$ and $r=0$; apply Proposition~\ref{prop:selfdeact}.
+\end{proof}
+
+\begin{prop}[5. Restoration of a starving cell]
+\label{prop:restore}
+Let cell $k$ be in deficit, $r_k<0$. At every vertex $i$ where $k$ has
+partial presence ($u_{i,k}>0$) and at least one co-present cell is less in
+deficit ($\exists\, l:\ w_{i,l}>0,\ r_l>r_k$), we have $m_i > r_k$ and hence
+\[
+  \pd{P_{\mathrm{bal}}}{u_{i,k}} \;<\; 0 ,
+\]
+i.e.\ the descent direction $-\grad$ strictly \emph{raises} $u_{i,k}$, with
+magnitude proportional to the local deficit contrast $m_i - r_k$. For a
+starving cell $T_k\to0$ gives $r_k\to-1 \le r_l$ for all $l$, so the lift is
+active on the cell's entire halo. This is the built-in ``reward for winning
+territory'' that no term of the base energy provides.
+\end{prop}
+
+\begin{proof}
+$m_i = \sum_l w_{i,l} r_l$ is a convex combination with weight
+$w_{i,k}<1$ (since some other cell is present), so
+$m_i \ge r_k + w_{i,l}(r_l - r_k) > r_k$. The sign follows from
+\eqref{eq:grad}, whose prefactor is positive when $u_{i,k}>0$.
+\end{proof}
+
+\subsection{6. \texorpdfstring{$\Gamma$}{Gamma}-consistency}
+\label{sec:gammaconsistency}
+
+Two statements make the consistency claim precise: the $\Gamma$-limit of the
+total energy is unchanged on the constrained domain (Proposition~\ref{prop:gammalimit}),
+and the soft--hard territory gap is quantitatively band-confined
+(Proposition~\ref{prop:gap}).
+
+For the continuum statement, define for measurable
+$u:S\to\Delta^{N-1}$ with $\int_S u_k\,dA=\Atgt$ the continuum soft territory
+and balance term
+\[
+  T_k(u) = \int_S \frac{u_k^{\,p}}{\sum_l u_l^{\,p}}\; dA,
+  \qquad
+  P_{\mathrm{bal}}(u) = \frac{\gamma}{2}\sum_k
+      \Bigl(\frac{T_k(u)-\Atgt}{\Atgt}\Bigr)^{\!2}.
+\]
+
+\begin{prop}[$\Gamma$-limit invariance]
+\label{prop:gammalimit}
+Let $E_\varepsilon(u) = \sum_k F_\varepsilon(u_k)$ be the Modica--Mortola
+partition energy, which $\Gamma$-converges in $L^1(S)^N$ as
+$\varepsilon\to0$ to $F_0(u) = 2c_W\cdot\tfrac12\operatorname{Per}(u)$ on
+partition indicators $u=\chi=(\chi_{\Omega_1},\dots,\chi_{\Omega_N})$ and
+$+\infty$ otherwise \cite{modica1977esempio,modica1987gradient,bogosel2023partitions}.
+Then:
+\begin{enumerate}[itemsep=1pt]
+\item $P_{\mathrm{bal}}$ is continuous on the admissible set with respect to
+      $L^1$ convergence;
+\item hence $E_\varepsilon + P_{\mathrm{bal}}$ $\Gamma$-converges to
+      $F_0 + P_{\mathrm{bal}}$ \cite[Remark~1.7]{braides2002gamma};
+\item on the limit domain the equal-area constraint forces
+      $|\Omega_k| = \int_S \chi_k\,dA = \Atgt$, and for indicators
+      $T_k(\chi)=|\Omega_k|$, so $P_{\mathrm{bal}}(\chi)=0$ there:
+      \emph{the constrained $\Gamma$-limit is the unchanged perimeter
+      functional.}
+\end{enumerate}
+\end{prop}
+
+\begin{proof}
+(1) The map $g:\Delta^{N-1}\to\Delta^{N-1}$,
+$g_k(z)=z_k^{\,p}/\sum_l z_l^{\,p}$, is continuous and bounded on the compact
+simplex (the denominator is $\ge N^{1-p}$ by
+Proposition~\ref{prop:Sbounds}). If $u^n\to u$ in $L^1$, every subsequence
+has a further subsequence converging a.e.; along it $g(u^n)\to g(u)$ a.e.,
+and $|g|\le1$ allows dominated convergence, so $T_k(u^n)\to T_k(u)$ along
+that sub-subsequence. Since the limit is independent of the subsequence, the
+full sequence converges, and $P_{\mathrm{bal}}$, a polynomial in the $T_k$,
+converges too. (2) is the standard stability of $\Gamma$-limits under
+continuous additive perturbations. (3) For an indicator row
+$\chi_{i,\cdot}\in\{e_1,\dots,e_N\}$, $g(\chi)=\chi$ exactly, so
+$T_k(\chi)=\int\chi_k=|\Omega_k|$; the constraint $\int\chi_k=\Atgt$ gives
+$r=0$.
+\end{proof}
+
+\begin{prop}[Quantitative soft--hard gap along recovery fronts]
+\label{prop:gap}
+Let $u^\varepsilon$ be the standard Modica--Mortola recovery configuration
+for a two-cell interface of length $\operatorname{Per}_k$: the logistic
+profile $\phi(t)=(1+e^{-t/\varepsilon})^{-1}$ across the front (the
+heteroclinic of the quartic well $W(s)=s^2(1-s)^2$). Then for $p=2$
+\begin{equation}
+  \bigl| T_k(u^\varepsilon) - T_k^{\mathrm{wta}}(u^\varepsilon) \bigr|
+  \;\le\; C_2\,\varepsilon\, \operatorname{Per}_k + o(\varepsilon),
+  \qquad
+  C_2 = \int_{-\infty}^{\infty}
+        \bigl| g_k(\phi(s)) - H(s) \bigr|\, ds
+      = \ln 2 ,
+  \label{eq:gap}
+\end{equation}
+with $H$ the Heaviside step. Moreover, the \emph{signed} leading-order gap
+across a straight symmetric front vanishes: by the symmetry
+$g_k(1-z)=1-g_k(z)$ of the two-cell weight
+$g_k(z)=z^2/(z^2+(1-z)^2)$, the surplus on the winning side cancels the
+deficit on the losing side exactly, so the $O(\varepsilon)$ bound
+\eqref{eq:gap} is attained only through curvature and junction effects.
+\end{prop}
+
+\begin{proof}
+Write the gap as an integral over tubular coordinates around the interface;
+transversally, with $s$ the scaled signed distance,
+$T_k - T_k^{\mathrm{wta}} = \varepsilon\operatorname{Per}_k
+ \int_{\mathbb R}\bigl(g_k(\phi(s)) - H(s)\bigr)\,ds + o(\varepsilon)$
+(coarea; the profile relaxes to $0/1$ exponentially so the integral
+converges absolutely: for $s>0$,
+$1-g_k(\phi)= (1-\phi)^2/(\phi^2+(1-\phi)^2) \le ((1-\phi)/\phi)^2
+ = e^{-2s}$). For the constant: substitute $t=e^{-s}$,
+$1-g_k = t^2/(1+t^2)$, $ds = dt/t$, so
+$\int_0^\infty (1-g_k(\phi(s)))\,ds = \int_0^1 \frac{t}{1+t^2}\,dt
+ = \tfrac12\ln2$; doubling for the two sides gives $C_2=\ln2$. The signed
+cancellation follows from $g_k(1-z) = (1-z)^2/((1-z)^2+z^2) = 1-g_k(z)$.
+\end{proof}
+
+Together: adding $P_{\mathrm{bal}}$ leaves the $\varepsilon\to0$ perimeter
+$\Gamma$-limit untouched on the equal-area constraint manifold, and at finite
+$\varepsilon$ the surrogate $T_k$ tracks the delivered WTA territory to
+within an $O(\varepsilon\operatorname{Per}_k)$ band-confined error — the same
+order as the interface width itself.
+
+\section{Calibration of the strength \texorpdfstring{$\gamma$}{gamma}}
+\label{sec:gamma}
+
+\paragraph{Scaling.}
+By \eqref{eq:gradp2} a band-vertex entry of the balance gradient has magnitude
+$\sim \gamma\, v_i\,(u/S)/\Atgt$. With $v_i \sim A/|V|$ and $\Atgt = A/N$,
+this is $\sim \gamma\,N/|V| = \gamma / (\text{vertices per cell})$: under the
+mesh-budget policy that holds vertices-per-cell fixed as $N$ grows
+(\codefile{docs/plans/PHASE1\_N1000\_VALIDITY\_PLAN.md} P3), the force is
+\emph{$N$-invariant} and one calibrated $\gamma$ transfers across $N$.
+$\gamma$ is calibrated \textbf{once}, against the double-well force it must
+perturb but not overwhelm, and is \emph{not} retuned per $N$.
+
+\paragraph{Procedure (recorded; script
+\codefile{scripts/debug\_archive/calibrate\_wta\_gamma.py}).}
+On a converged production solution, collect the interface-band vertices
+(winning density $u_{\mathrm{win}} < 0.9$; the force is supported there by
+Proposition~\ref{prop:band}). At each band vertex compute (i) the local
+double-well gradient magnitude
+$\bigl|\tfrac2\varepsilon (Mq_k)_i (1-2u_{i,k})\bigr|$ of the winning cell,
+and (ii) the balance-force magnitude that a synthetic $5\%$ territory deficit
+of the winning cell would produce there,
+$\tfrac{2\gamma}{\Atgt} v_i \tfrac{u_{i,k}}{S_i}\cdot 0.05\,(1-w_{i,k})$
+(all other cells balanced). Choose $\gamma$ so the \emph{median} ratio
+(ii)/(i) over the band equals $10\%$ — the middle of the plan's
+$5$--$15\%$ target window: strong enough to move fences on a $5\%$ deficit,
+weak enough never to compete with the well away from balance.
+
+\paragraph{Measured calibration (N=300 reference run
+\code{run\_20260714\_224821}, $|V|=47{,}488$, $\varepsilon=0.0158$,
+$\Atgt=7.895\times10^{-2}$).}
+The band ($u_{\mathrm{win}}<0.9$) holds $18{,}974$ vertices ($40.0\%$ of
+$|V|$). The per-unit-$\gamma$ force ratio on the band has median
+$1.453\times10^{-2}$ (interquartile range
+$[4.17\times10^{-3},\,6.85\times10^{-2}]$), giving
+$\gamma = 0.10/1.453\times10^{-2} = 6.88$ for an exact $10\%$ median. The
+calibrated default is $\boldsymbol{\gamma = 7.0}$ (median ratio $10.2\%$;
+config \code{wta\_balance\_gamma}); the run configs under
+\codefile{parameters/} carry it explicitly. At fixed mesh the band-force
+ratio scales like $\gamma\varepsilon N$ (the well force per vertex is
+$\sim v_i/\varepsilon$), so on the \emph{same} finest mesh the Stage-6
+$N=200$ configuration sees a median ratio of ${\approx}\,6.8\%$
+(a factor $200/300$ smaller) — still inside the $5$--$15\%$ window.
+
+\section{The discrete-area trim}
+\label{sec:trim}
+
+The balance term controls the \emph{soft} territory; the residual soft--hard
+gap (Proposition~\ref{prop:gap}) is closed by a derivative-free controller on
+the projection targets. The projection
+(\codefile{src/optimization/projection.py}) already accepts an arbitrary
+feasible target vector $d$ with $\sum_k d_k = A$; the trim retargets it every
+$J$ accepted PGD iterations (default $J=200$,
+\code{wta\_trim\_period}):
+\begin{equation}
+  \tilde d_k \;=\; \operatorname{clip}\!\Bigl(
+      d_k + \beta\,\bigl(\Atgt - T^{\mathrm{wta}}_k\bigr),\;
+      \Atgt(1-c),\; \Atgt(1+c)\Bigr),
+  \qquad
+  d \;\leftarrow\; \tilde d\cdot\frac{A}{\sum_k \tilde d_k},
+  \label{eq:trim}
+\end{equation}
+with damping $\beta=0.5$ (\code{wta\_trim\_damping}) and clamp $c=0.20$
+(\code{wta\_trim\_clamp}). $T^{\mathrm{wta}}$ is measured by the existing
+argmax machinery (\code{detect\_area\_imbalance},
+\codefile{src/partition/find\_contours.py}); the update costs $O(|V|)$ per
+application, amortized to nothing.
+
+\begin{prop}[Fixed point of the trim]
+\label{prop:trimfp}
+Suppose $\sum_k d_k = A$ before an update. If the clamp in \eqref{eq:trim} is
+inactive, then $\sum_k \tilde d_k = A$ (because
+$\sum_k T^{\mathrm{wta}}_k = A$ identically), so the renormalization is the
+identity, and $d$ is a fixed point of the update iff
+$T^{\mathrm{wta}}_k = \Atgt$ for every $k$ — \emph{exact discrete equality},
+independent of any residual soft--hard surrogate gap.
+\end{prop}
+
+\begin{proof}
+$\sum_k\tilde d_k = \sum_k d_k + \beta(N\Atgt - \sum_k T^{\mathrm{wta}}_k)
+ = A + \beta(A - A) = A$. With the renormalization the identity,
+$\tilde d = d$ iff $\beta(\Atgt - T^{\mathrm{wta}}_k)=0$ for all $k$.
+\end{proof}
+
+\begin{remark}[What the trim trades away]
+At a fixed point the \emph{continuous} masses equal
+$d \neq \Atgt\mathbf 1$ in general — they are deliberately unpinned by up to
+the clamp $c\,\Atgt$, in exchange for exact \emph{discrete} equality. Phase~2
+is indifferent: its iteration-0 equal-area feasibility is exactly the
+discrete equality the trim delivers (the worst-cell discrete deviation
+\emph{is} the Phase~2 initial constraint violation; see
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} \S7). The
+damped Picard update has no global convergence proof on the nonconvex inner
+problem; the clamp and damping keep it a bounded perturbation, and the
+per-level reset below keeps levels independent.
+\end{remark}
+
+\paragraph{Lifecycle.}
+$d$ is carried \emph{within} a refinement level and reset to $\Atgt\mathbf 1$
+at the start of each new level (after interpolation): the mesh, and with it
+$T^{\mathrm{wta}}$, changes across levels. In the implementation this reset
+is structural — each level constructs a fresh optimizer whose \code{optimize}
+call re-initializes $d$.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: discrete-area trim}, fontupper=\small]
+\codefile{src/optimization/pgd\_optimizer.py}: \code{\_apply\_wta\_trim}
+(called from \code{optimize} every \code{wta\_trim\_period} accepted
+iterations, guarded by \code{wta\_trim\_enabled}; default off)\\[2pt]
+\code{T\_wta = np.asarray(detect\_area\_imbalance(A, v, N)['discrete\_areas'])}\\
+\code{d = np.clip(d + beta * (Abar - T\_wta), Abar*(1-c), Abar*(1+c))}\\
+\code{d *= total\_area / d.sum()}\\[2pt]
+Config: \code{wta\_trim\_enabled}, \code{wta\_trim\_period},
+\code{wta\_trim\_damping}, \code{wta\_trim\_clamp} in \code{RelaxationConfig}.
+\end{tcolorbox}
+
+\section*{Summary table}
+\addcontentsline{toc}{section}{Summary table}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}p{4.6cm}p{4.6cm}p{1.8cm}p{3.2cm}@{}}
+\toprule
+Quantity & Form & Method & Implementing function \\
+\midrule
+Soft weights \eqref{eq:weights} & $w_{i,k}=u_{i,k}^p/S_i$ & analytical & \code{compute\_energy} \\
+Soft territory \eqref{eq:softT} & $T_k=\sum_i v_i w_{i,k}$ & analytical & \code{compute\_energy} \\
+Balance penalty \eqref{eq:penalty} & $\tfrac\gamma2\sum_k r_k^2$, $r_k=(T_k-\Atgt)/\Atgt$ & analytical & \code{compute\_energy} \\
+\ \ its gradient \eqref{eq:grad} & $\tfrac{\gamma p}{\Atgt} v_i \tfrac{u_{i,k}^{p-1}}{S_i}(r_k-m_i)$ & analytical & \code{compute\_gradient} \\
+Normalizer bounds \eqref{eq:Sbounds} & $N^{1-p}\le S_i\le 1$ & analytical & (stability guard) \\
+Gradient bound \eqref{eq:gradbound} & $\le \tfrac{2\gamma v_i}{\Atgt}\sqrt N \operatorname{osc}(r)$ & analytical & --- (theory) \\
+Soft--hard gap \eqref{eq:gap} & $\le \varepsilon\ln 2\operatorname{Per}_k + o(\varepsilon)$ & analytical & --- (theory) \\
+Discrete trim \eqref{eq:trim} & damped clip'd retarget of $d$ & controller & \code{\_apply\_wta\_trim} \\
+FD verification & central difference, rel.\ err.\ $<10^{-6}$ & numerical & \codefile{testing/test\_wta\_balance\_...} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The balance gradient \eqref{eq:grad} is analytical and verified
+against Richardson-extrapolated central finite differences on deterministic
+feasible densities (\codefile{testing/test\_wta\_balance\_gradient\_analytical.py});
+the base energy $E_0$ and its gradient are unchanged
+(\codefile{docs/math/06-phase1-energy-discretization/}).
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}
