@@ -105,6 +105,16 @@ class RelaxationConfig:
     struct_window: int = 2000
     struct_rate_tol: float = 1e-6
 
+    # Structure GATE: the same signal used the other way -- blocks refinement
+    # while the label field is still moving, so a level cannot be stopped
+    # mid-churn and have a half-settled configuration frozen by the next mesh.
+    struct_gate_enabled: bool = False
+    struct_gate_window: int = 500
+    struct_gate_rate_tol: float = 1e-5
+    # Both structure rules are evaluated on this stride -- the same granularity
+    # they were validated at offline. Not a per-iteration rule.
+    struct_sample_stride: int = 500
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -560,6 +570,10 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         struct_trigger_enabled=bool(config.struct_trigger_enabled),
         struct_window=int(config.struct_window),
         struct_rate_tol=float(config.struct_rate_tol),
+        struct_gate_enabled=bool(config.struct_gate_enabled),
+        struct_gate_window=int(config.struct_gate_window),
+        struct_gate_rate_tol=float(config.struct_gate_rate_tol),
+        struct_sample_stride=int(config.struct_sample_stride),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):

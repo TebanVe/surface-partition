@@ -630,12 +630,31 @@ alone cannot separate "frozen for good" from "nearly done" — duration can.
 Validated offline against both runs with `testing/validate_struct_trigger.py`,
 which replays the rule over saved traces:
 
-| run / level | current rule | structure rule |
+| run / level | iterations | structure rule |
 |---|---|---|
 | N=100 level 0 | 30,000 (cap) | **fires ~6,500** (78% of the level reclaimed) |
 | N=100 levels 1–4 | 986–1,372 | silent (no full window) — unchanged |
-| N=300 level 3 | 3,838 | **silent** — unchanged |
-| N=300 level 4 | 2,246 | **silent** — unchanged |
+| N=300 levels 0–1 | 47, 57 | silent (too short to evaluate) — unchanged |
+| N=300 level 2 | 6,658 | **silent** — 228 flips vs budget 95 (thinnest margin of the set) |
+| N=300 level 3 | 3,838 | silent — unchanged |
+| N=300 level 4 | 2,246 | silent — unchanged |
+
+Both structure rules are **sampled** every `struct_sample_stride` (default 500)
+rather than evaluated per iteration — deliberately the granularity the offline
+replay uses, because a per-iteration rule is a *different* rule: it counts every
+flip, while a sampled one counts vertices whose label differs between samples,
+so a vertex that flips and flips back is invisible to it. Sampling also makes the
+signal free (one argmax per stride: 17.2 ms at V=114k/N=300 against a 43.6 s
+iteration, ~0.04% even unsampled).
+
+**The gate — the same signal used the other way.** `struct_gate_enabled` *blocks*
+refinement while the label field is still moving (default: >1e-5 flips per
+iteration per vertex over 500 iterations). The two Phase 1 pathologies are mirror
+images of one mis-calibrated signal: the exact-projection run's energy creeps so
+it never triggers and overruns a frozen structure, while the soft-area run's
+energy plateaus so it triggers at iteration 2,575 with 3.7% of vertices still
+changing cell every 500 iterations — and refinement then froze the pinched
+configuration that became its 3 disconnected cells.
 
 So it reclaims the pathology and provably does not touch the runs that already
 behave. Speedup from the per-level profile: **1.47× alone**; combined with an

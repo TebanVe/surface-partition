@@ -47,6 +47,10 @@ class ProjectedGradientOptimizer:
 		struct_trigger_enabled: bool = False,
 		struct_window: int = 2000,
 		struct_rate_tol: float = 1e-6,
+		struct_gate_enabled: bool = False,
+		struct_gate_window: int = 500,
+		struct_gate_rate_tol: float = 1e-5,
+		struct_sample_stride: int = 500,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -120,6 +124,35 @@ class ProjectedGradientOptimizer:
 		self.struct_trigger_enabled = bool(struct_trigger_enabled)
 		self.struct_window = int(struct_window)
 		self.struct_rate_tol = float(struct_rate_tol)
+
+		# Structure GATE -- the same signal used the other way round. The stuck
+		# detector above fires refinement when the label field has gone quiet;
+		# this BLOCKS refinement while the label field is still moving.
+		#
+		# The two pathologies are mirror images of one mis-calibrated signal.
+		# Measured on N=100 level 0 from the identical seeded x0, flips per 500
+		# iterations as a fraction of V:
+		#     iteration:      500    1000    1500    2000    2500
+		#     exact proj.  12.42%   3.94%   2.95%   2.11%   1.46%   (decaying)
+		#     soft-area     2.77%   5.14%   3.75%   2.92%   3.67%   (not decaying)
+		# The exact-projection run's energy kept creeping so it never triggered
+		# and ran 23,500 iterations past a frozen structure; the soft-area run's
+		# energy plateaued so it triggered at 2,575 while 3.7% of vertices were
+		# still changing cell every 500 iterations -- and refinement then locked
+		# in the pinched configuration that became its 3 disconnected cells.
+		#
+		# Gate threshold 1e-5 flips/iter/vertex sits between the two regimes: it
+		# would have blocked that 2,575 trigger (7.3e-5) while leaving both
+		# N=300 levels open (8.8e-7 and 4.6e-7 when they legitimately fired).
+		# maxiter still bounds the level, so a field that never settles cannot
+		# hang the run.
+		self.struct_gate_enabled = bool(struct_gate_enabled)
+		self.struct_gate_window = int(struct_gate_window)
+		self.struct_gate_rate_tol = float(struct_gate_rate_tol)
+		# Evaluate the structure signal on this stride. Default 500 = the
+		# h5_save_stride the offline replay used, so the live rule and the
+		# validated rule are the same rule.
+		self.struct_sample_stride = int(struct_sample_stride)
 
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
@@ -419,11 +452,34 @@ class ProjectedGradientOptimizer:
 
 			# Structure-trigger state: previous winner-take-all label field and
 			# a rolling per-iteration flip count over the confirmation window.
+			# Structure signal, SAMPLED every struct_sample_stride iterations --
+			# deliberately the same granularity the rule was validated at
+			# offline (testing/validate_struct_trigger.py replays it over trace
+			# samples). A per-iteration rule is a DIFFERENT rule: it counts every
+			# flip, while a sampled one counts vertices whose label differs
+			# between samples, so a vertex that flips and flips back is invisible
+			# to it. Sampling also makes the signal free (one argmax per stride:
+			# 17.2 ms at V=114k/N=300 against a 43.6 s iteration).
+			_track_labels = (self.struct_trigger_enabled
+			                 or self.struct_gate_enabled)
+			S = max(1, int(self.struct_sample_stride))
+			# History in SAMPLES, and the effective windows those samples span.
+			n_trig = max(1, int(round(self.struct_window / S)))
+			n_gate = max(1, int(round(self.struct_gate_window / S)))
+			eff_trig_window = n_trig * S
+			eff_gate_window = n_gate * S
 			prev_labels = None
 			label_changes = None
-			if self.struct_trigger_enabled:
-				label_changes = deque(maxlen=max(1, self.struct_window))
+			struct_gate_open = not self.struct_gate_enabled
+			if _track_labels:
+				label_changes = deque(maxlen=max(n_trig, n_gate))
 				prev_labels = np.argmax(x.reshape(N, n), axis=1)
+				if S != self.struct_sample_stride or eff_trig_window != self.struct_window:
+					self.logger.info(
+						f"Structure signal: stride {S}, trigger window "
+						f"{eff_trig_window} ({n_trig} samples), gate window "
+						f"{eff_gate_window} ({n_gate} samples)"
+					)
 
 			for k in range(maxiter):
 				# `g` holds the gradient at the current x on loop entry
@@ -518,7 +574,7 @@ class ProjectedGradientOptimizer:
 				self.log['energy_changes'].append(0.0 if k == 0 else (E - best_E))
 				self.log['gnorm'].append(gnorm_post)
 				self.log['feas'].append(feas_post)
-				if self.struct_trigger_enabled:
+				if _track_labels and ((k + 1) % S == 0):
 					labels = np.argmax(x.reshape(N, n), axis=1)
 					label_changes.append(
 						int(np.count_nonzero(labels != prev_labels))
@@ -556,26 +612,47 @@ class ProjectedGradientOptimizer:
 				# Refinement trigger check
 				if profile is not None:
 					_t_tc = time.perf_counter()
-				if (enable_refinement_triggers and self.struct_trigger_enabled
-						and len(label_changes) >= self.struct_window):
-					# Budget of permitted flips across the whole window:
-					# rate_tol (flips per iteration per vertex) * V * window.
-					budget = self.struct_rate_tol * N * self.struct_window
-					total_flips = sum(label_changes)
-					if total_flips <= budget:
-						self.logger.info(
-							f"Refinement triggered at iteration {k} (structure "
-							f"frozen: {total_flips} label flips over the last "
-							f"{self.struct_window} iterations, budget "
-							f"{budget:.1f}; the winner-take-all partition has "
-							f"stopped changing)"
-						)
-						if profile is not None:
-							profile.record(
-								'trigger_check', time.perf_counter() - _t_tc
+				# Structure gate and stuck detector, both re-evaluated only when a
+				# new sample lands; the decision persists in between.
+				if _track_labels and ((k + 1) % S == 0):
+					if self.struct_gate_enabled:
+						if len(label_changes) >= n_gate:
+							recent_flips = sum(list(label_changes)[-n_gate:])
+							gate_budget = (self.struct_gate_rate_tol * N
+							               * eff_gate_window)
+							struct_gate_open = recent_flips <= gate_budget
+							if not struct_gate_open:
+								self.logger.info(
+									f"    structure gate CLOSED at iteration "
+									f"{k}: {recent_flips} flips over "
+									f"{eff_gate_window} iters > budget "
+									f"{gate_budget:.1f} -- refinement held off"
+								)
+						else:
+							# Not enough history to judge: hold refinement.
+							struct_gate_open = False
+					if (enable_refinement_triggers
+							and self.struct_trigger_enabled
+							and len(label_changes) >= n_trig):
+						# Permitted flips across the window:
+						# rate_tol (flips per iteration per vertex) * V * window.
+						budget = self.struct_rate_tol * N * eff_trig_window
+						total_flips = sum(list(label_changes)[-n_trig:])
+						if total_flips <= budget:
+							self.logger.info(
+								f"Refinement triggered at iteration {k} "
+								f"(structure frozen: {total_flips} label flips "
+								f"over the last {eff_trig_window} iterations, "
+								f"budget {budget:.1f}; the winner-take-all "
+								f"partition has stopped changing)"
 							)
-						raise RefinementTriggered()
-				if enable_refinement_triggers and (k + 1 >= self.refine_patience):
+							if profile is not None:
+								profile.record(
+									'trigger_check', time.perf_counter() - _t_tc
+								)
+							raise RefinementTriggered()
+				if (enable_refinement_triggers and struct_gate_open
+						and (k + 1 >= self.refine_patience)):
 					recent = list(self.log['energy_changes'])[-self.refine_patience:]
 					stable = all(abs(de) < self.refine_delta_energy for de in recent)
 					if stable:

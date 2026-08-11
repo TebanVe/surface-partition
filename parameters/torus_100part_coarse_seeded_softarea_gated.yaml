@@ -1,0 +1,102 @@
+# ============================================================================
+# A2 + STRUCTURE GATE -- soft area, but refinement held off while the label
+# field is still moving.
+#
+# WHY. The plain A2 arm (torus_100part_coarse_seeded_softarea.yaml) was 32x
+# faster and killed no cells, but produced 3 disconnected cells whose repair
+# cost +22% boundary length and broke Phase 2 (IPOPT restoration failure).
+# The cause was measured, from the identical seeded x0, as flips per 500
+# iterations at level 0:
+#     iteration:      500    1000    1500    2000    2500
+#     exact proj.  12.42%   3.94%   2.95%   2.11%   1.46%   (decaying)
+#     soft-area     2.77%   5.14%   3.75%   2.92%   3.67%   (not decaying)
+# A2's energy plateaued and fired the refinement trigger at iteration 2,575
+# while 3.7% of vertices were still changing cell every 500 iterations. It was
+# not frozen -- it was STOPPED mid-churn, and the next mesh froze a pinched
+# configuration.
+#
+# THIS ARM adds struct_gate_enabled: refinement is blocked until the label
+# field goes quiet (<= 1e-5 flips per iteration per vertex over 500
+# iterations). That threshold would have blocked A2's 2,575 trigger (7.3e-5)
+# while leaving both N=300 levels open (8.8e-7, 4.6e-7 when they legitimately
+# fired). max_iter still bounds each level, so a field that never settles
+# cannot hang the run -- and if that happens it is itself the answer: it means
+# the soft-area flow does not converge structurally, not merely that it stops
+# early.
+#
+# The falsifier is unchanged and is now CONNECTIVITY as much as dormancy:
+# any dead/weak cell, or fragmentation not clearly better than the plain A2
+# arm's 3 cells / 46% stray / +22% repair cost, and the direction is finished.
+# ============================================================================
+
+experiment:
+  name: torus-100-coarse-seeded-fixedenergy
+  surface: torus
+
+relaxation:
+  n_partitions: 100
+  lambda_penalty: 5.1
+  seed: 84172851
+  init_method: seeded                 # required at high N (random init traps on the corrected energy)
+  max_iter: 30000
+  refinement_levels: 5
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+
+  # --- A2: soft continuous equal-area constraint (default OFF elsewhere) ---
+  soft_area_constraint: true
+  soft_area_mu: 245.9
+
+  # --- structure gate: do not refine while the labels are still moving ---
+  struct_gate_enabled: true
+  struct_gate_window: 500
+  struct_gate_rate_tol: 1.0e-5
+
+surface:
+  torus:
+    n_theta: 100                      # base; levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

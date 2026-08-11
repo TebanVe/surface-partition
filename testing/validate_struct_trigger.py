@@ -59,19 +59,30 @@ def level_flip_series(path, n_partitions):
 
 
 def replay(its, flips, V, window, rate_tol):
-    """First iteration at which the windowed rule would fire (or None)."""
-    if not flips:
-        return None, None
+    """First iteration at which the windowed rule would fire.
+
+    Returns ``(fire_iteration_or_None, total_at_fire_or_None, budget_or_None)``.
+    ``budget`` is None only when the level is too short to evaluate the rule at
+    all (fewer than two samples), which is itself a valid "cannot fire" answer.
+
+    The budget uses the EFFECTIVE window ``n_intervals * stride`` rather than
+    the nominal ``window``, mirroring the live implementation: both round the
+    window to a whole number of samples and price the budget on what they
+    actually measured.
+    """
+    if len(its) < 2 or not flips:
+        return None, None, None
     stride = its[1] - its[0]
     n_intervals = max(1, int(round(window / stride)))
-    budget = rate_tol * V * window
+    eff_window = n_intervals * stride
+    budget = rate_tol * V * eff_window
     for j in range(len(flips)):
         if (j + 1) < n_intervals:
             continue  # not enough history for a full window yet
         total = sum(flips[j + 1 - n_intervals : j + 1])
         if total <= budget:
-            return its[j + 1], (total, budget)
-    return None, (None, budget)
+            return its[j + 1], total, budget
+    return None, None, budget
 
 
 def main():
@@ -102,31 +113,36 @@ def main():
             print(f"level {lvl}: no x data in trace")
             continue
         last_iter = its[-1]
-        fire, info = replay(its, flips, V, args.window, args.rate_tol)
+        fire, total, budget = replay(its, flips, V, args.window, args.rate_tol)
         if args.verbose:
             for j, f in enumerate(flips):
                 print(f"      iter {its[j+1]:6d}: {f:7d} flips / {V}")
-        if fire is None:
+        if budget is None:
             print(
                 f"level {lvl} (V={V:>7}, trace ends {last_iter:>6}): "
-                f"WOULD NOT FIRE  (budget {info[1]:.1f}/window)"
+                f"TOO SHORT to evaluate ({len(its)} sample(s)) -- cannot fire"
             )
-            verdicts.append((lvl, None, last_iter))
+            verdicts.append((lvl, None, last_iter, "too short"))
+        elif fire is None:
+            print(
+                f"level {lvl} (V={V:>7}, trace ends {last_iter:>6}): "
+                f"WOULD NOT FIRE  (budget {budget:.1f} per window)"
+            )
+            verdicts.append((lvl, None, last_iter, "never quiet enough"))
         else:
-            total, budget = info
             print(
                 f"level {lvl} (V={V:>7}, trace ends {last_iter:>6}): "
                 f"would fire at ~{fire}  ({total} flips vs budget {budget:.1f})"
             )
-            verdicts.append((lvl, fire, last_iter))
+            verdicts.append((lvl, fire, last_iter, None))
 
     print()
     print("interpretation:")
-    for lvl, fire, last in verdicts:
+    for lvl, fire, last, why in verdicts:
         if fire is None:
             print(
-                f"  level {lvl}: rule stays silent -> the existing energy/gnorm "
-                f"trigger governs, run UNCHANGED"
+                f"  level {lvl}: rule stays silent ({why}) -> the existing "
+                f"energy/gnorm trigger governs, run UNCHANGED"
             )
         else:
             saved = last - fire
