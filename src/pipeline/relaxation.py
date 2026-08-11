@@ -94,6 +94,17 @@ class RelaxationConfig:
     soft_area_constraint: bool = False
     soft_area_mu: float = 0.0
 
+    # Structure-based refinement trigger (stuck detector). Default OFF.
+    # Fires when the winner-take-all label field has been frozen for
+    # `struct_window` iterations, at a flip rate under `struct_rate_tol` per
+    # iteration per vertex. Catches levels whose partition stopped changing but
+    # whose energy still creeps above the absolute refine_delta_energy -- 27.1%
+    # of the N=100 deliverable's Phase 1. See the ProjectedGradientOptimizer
+    # docstring for why the window is long rather than the rate tight.
+    struct_trigger_enabled: bool = False
+    struct_window: int = 2000
+    struct_rate_tol: float = 1e-6
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -546,6 +557,9 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_constraint_tol=float(config.refine_constraint_tol),
         soft_area_constraint=bool(config.soft_area_constraint),
         soft_area_mu=float(config.soft_area_mu),
+        struct_trigger_enabled=bool(config.struct_trigger_enabled),
+        struct_window=int(config.struct_window),
+        struct_rate_tol=float(config.struct_rate_tol),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):

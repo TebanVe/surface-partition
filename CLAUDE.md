@@ -216,6 +216,7 @@ testing/
 ├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
 ├── test_soft_area_constraint.py         # A2 gates: simplex projection vs KKT, penalty gradient vs FD, flag-off bit-identity
 ├── calibrate_soft_area_mu.py            # A2: pick soft_area_mu for a config (force parity at the 5% area gate)
+├── validate_struct_trigger.py           # Replay the structure-based refinement trigger offline against completed runs
 ├── test_disconnected_cells_detection.py # Phase 1 connectivity gate: detect_disconnected_cells split/speckle logic
 ├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
@@ -489,7 +490,7 @@ the Phase 1 breakdown).
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
-| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. `soft_area_constraint` (default `False`) + `soft_area_mu` select the A2 soft equal-area penalty — see the `ProjectedGradientOptimizer` row. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
+| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. `struct_trigger_enabled` / `struct_window` / `struct_rate_tol` add the structure-based refinement trigger (default off); `soft_area_constraint` (default `False`) + `soft_area_mu` select the A2 soft equal-area penalty — see the `ProjectedGradientOptimizer` row. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
@@ -603,6 +604,45 @@ space again, read `docs/reference/winner_take_all_partition_gap.md` **§4b** (wh
 failed) and **§9b** (the local-operator test any replacement must pass). The
 derivation is kept at `docs/math/07-phase1-wta-balance/` (marked not-adopted) and the
 measurement at `docs/experiments/04-territory-aware-highn-validation/`.
+
+### Structure-Based Refinement Trigger (`struct_trigger_enabled`) — experimental
+
+A **stuck detector**, not a second convergence test. The energy-plateau trigger
+compares `|dE|` against an *absolute* `refine_delta_energy`, so a level whose
+partition has stopped changing keeps running as long as the energy creeps. On the
+N=100 deliverable `run_20260709_081548`, level 0's winner-take-all labels are
+frozen from ~iteration 6,000 (≤2 of 9,600 vertices flip per 500 iterations) and
+its discrete areas are unchanged from 10,000 on — yet it runs all 30,000
+iterations. That is **15,340 s, 31.9% of that run's whole Phase 1 ladder**, spent
+after the answer stopped moving.
+
+`struct_trigger_enabled: true` (default `false`) tracks `argmax_k u_ik` each
+iteration and fires when fewer than `struct_rate_tol · V · struct_window` labels
+have flipped over the last `struct_window` iterations (defaults `1e-6` and
+`2000`). Cost: one O(V·N) argmax per iteration, ~0.1%.
+
+**The window is long rather than the rate tight, and that is the whole design.**
+The frozen churn rate at N=100 level 0 (4.2e-7 flips/iter/vertex) is
+indistinguishable from the rate at N=300 level 4 *shortly before its energy
+trigger legitimately fires* (4.6e-7 at iteration 2,000; fired at 2,246). Rate
+alone cannot separate "frozen for good" from "nearly done" — duration can.
+
+Validated offline against both runs with `testing/validate_struct_trigger.py`,
+which replays the rule over saved traces:
+
+| run / level | current rule | structure rule |
+|---|---|---|
+| N=100 level 0 | 30,000 (cap) | **fires ~6,500** (78% of the level reclaimed) |
+| N=100 levels 1–4 | 986–1,372 | silent (no full window) — unchanged |
+| N=300 level 3 | 3,838 | **silent** — unchanged |
+| N=300 level 4 | 2,246 | **silent** — unchanged |
+
+So it reclaims the pathology and provably does not touch the runs that already
+behave. Speedup from the per-level profile: **1.47× alone**; combined with an
+exact-projection-at-level-0 hybrid of the soft-area work, 4.41× (conservative:
+control iteration counts, A2 per-iteration cost) to 8.79× (optimistic: A2's own
+iteration counts hold — treat with suspicion, since some of A2's iteration
+reduction *is* the premature-freezing defect).
 
 ### Soft Continuous Equal-Area Constraint (`soft_area_constraint`) — experimental
 

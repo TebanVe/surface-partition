@@ -77,7 +77,7 @@ def parse_args():
         help="Relative area deviation counted as imbalanced (default: 0.05)",
     )
     p.add_argument("--dual-iters", type=int, default=400)
-    p.add_argument("--max-repair-sweeps", type=int, default=50)
+    p.add_argument("--max-repair-sweeps", type=int, default=200)
     p.add_argument(
         "--no-repair",
         action="store_true",

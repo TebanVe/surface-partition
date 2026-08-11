@@ -58,7 +58,11 @@ class BalancedReadoutConfig:
     dual_eta0: float = 0.5
     dual_decay: float = 0.02
     repair_enabled: bool = True
-    max_repair_sweeps: int = 50
+    # 50 was too low at 114k vertices: the N=300 five-level run needed 76
+    # sweeps to converge (0 blocked moves, +1.85% boundary). Hitting the cap
+    # is reported as hit_sweep_cap and means the repair stopped early, not
+    # that it finished.
+    max_repair_sweeps: int = 200
     fragment_rel_threshold: float = DISCONNECTED_FRAGMENT_REL_THRESHOLD
 
     def to_dict(self) -> dict:

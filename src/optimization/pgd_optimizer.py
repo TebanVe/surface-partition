@@ -44,6 +44,9 @@ class ProjectedGradientOptimizer:
 		refine_constraint_tol: float = 1e-2,
 		soft_area_constraint: bool = False,
 		soft_area_mu: float = 0.0,
+		struct_trigger_enabled: bool = False,
+		struct_window: int = 2000,
+		struct_rate_tol: float = 1e-6,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -84,6 +87,39 @@ class ProjectedGradientOptimizer:
 		# constraint was also the thing keeping cells alive early in the flow.
 		self.soft_area_constraint = bool(soft_area_constraint)
 		self.soft_area_mu = float(soft_area_mu)
+
+		# Structure-based refinement trigger: a STUCK DETECTOR, not a second
+		# convergence test. It watches the only thing the level actually
+		# delivers -- the winner-take-all label field argmax_k u_ik -- and fires
+		# when that field has been frozen for a long time.
+		#
+		# Why it exists: the energy-plateau trigger tests |dE| against an
+		# ABSOLUTE refine_delta_energy (1e-8), so a level whose partition has
+		# stopped changing still runs to the iteration cap as long as the energy
+		# keeps creeping. Measured on the N=100 deliverable run_20260709_081548:
+		# level 0's labels are frozen from ~iteration 6,000 (<=2 of 9,600
+		# vertices flip per 500 iterations) and its discrete areas are unchanged
+		# from 10,000 onward, yet it runs all 30,000 iterations -- 13,055 s,
+		# 27.1% of that run's entire Phase 1 ladder, after the answer stopped
+		# moving.
+		#
+		# Why the confirmation window is LONG (default 2,000 iterations) rather
+		# than the rate threshold being tight: the frozen churn rate at N=100
+		# level 0 (4.2e-7 flips per iteration per vertex) is indistinguishable
+		# from the rate at N=300 level 4 shortly BEFORE its energy trigger
+		# legitimately fires (4.6e-7 at iteration 2,000, fired at 2,246). Rate
+		# alone cannot separate "frozen for good" from "nearly done"; duration
+		# can. With a 2,000-iteration window this rule provably cannot fire on
+		# either N=300 level (they end at 3,838 and 2,247, so a sustained window
+		# never completes), leaving those runs governed by the existing rule,
+		# while the N=100 pathology fires at ~7,500.
+		#
+		# Cost: one O(V*n) argmax per iteration, ~0.1% of an iteration.
+		# Default OFF -- when off, no argmax is taken and the trigger logic is
+		# byte-for-byte the existing one.
+		self.struct_trigger_enabled = bool(struct_trigger_enabled)
+		self.struct_window = int(struct_window)
+		self.struct_rate_tol = float(struct_rate_tol)
 
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
@@ -381,6 +417,14 @@ class ProjectedGradientOptimizer:
 			# Seeded at step0 so iteration 0 is identical to the hard-reset version.
 			prev_step = float(step0)
 
+			# Structure-trigger state: previous winner-take-all label field and
+			# a rolling per-iteration flip count over the confirmation window.
+			prev_labels = None
+			label_changes = None
+			if self.struct_trigger_enabled:
+				label_changes = deque(maxlen=max(1, self.struct_window))
+				prev_labels = np.argmax(x.reshape(N, n), axis=1)
+
 			for k in range(maxiter):
 				# `g` holds the gradient at the current x on loop entry
 				# (the initial gradient above, or g_post carried forward below).
@@ -474,6 +518,12 @@ class ProjectedGradientOptimizer:
 				self.log['energy_changes'].append(0.0 if k == 0 else (E - best_E))
 				self.log['gnorm'].append(gnorm_post)
 				self.log['feas'].append(feas_post)
+				if self.struct_trigger_enabled:
+					labels = np.argmax(x.reshape(N, n), axis=1)
+					label_changes.append(
+						int(np.count_nonzero(labels != prev_labels))
+					)
+					prev_labels = labels
 				self.prev_x = self.curr_x
 				self.curr_x = x.copy()
 				# Change C: x is not mutated between g_post (above) and the next
@@ -506,6 +556,25 @@ class ProjectedGradientOptimizer:
 				# Refinement trigger check
 				if profile is not None:
 					_t_tc = time.perf_counter()
+				if (enable_refinement_triggers and self.struct_trigger_enabled
+						and len(label_changes) >= self.struct_window):
+					# Budget of permitted flips across the whole window:
+					# rate_tol (flips per iteration per vertex) * V * window.
+					budget = self.struct_rate_tol * N * self.struct_window
+					total_flips = sum(label_changes)
+					if total_flips <= budget:
+						self.logger.info(
+							f"Refinement triggered at iteration {k} (structure "
+							f"frozen: {total_flips} label flips over the last "
+							f"{self.struct_window} iterations, budget "
+							f"{budget:.1f}; the winner-take-all partition has "
+							f"stopped changing)"
+						)
+						if profile is not None:
+							profile.record(
+								'trigger_check', time.perf_counter() - _t_tc
+							)
+						raise RefinementTriggered()
 				if enable_refinement_triggers and (k + 1 >= self.refine_patience):
 					recent = list(self.log['energy_changes'])[-self.refine_patience:]
 					stable = all(abs(de) < self.refine_delta_energy for de in recent)
