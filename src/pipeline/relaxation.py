@@ -86,6 +86,14 @@ class RelaxationConfig:
     # solution is written.
     checkpoint_per_level: bool = True
 
+    # Soft continuous equal-area constraint (A2). Default OFF -- byte-for-byte
+    # backward compatible. ON replaces the iterative alternating projection
+    # (93.3% of Phase 1 wall time) with a closed-form per-vertex simplex
+    # projection, moving equal area into the objective as a quadratic penalty
+    # of weight `soft_area_mu`. See the ProjectedGradientOptimizer docstring.
+    soft_area_constraint: bool = False
+    soft_area_mu: float = 0.0
+
     @classmethod
     def from_yaml_dict(cls, params: dict) -> 'RelaxationConfig':
         """Construct from a YAML-loaded parameter dict.
@@ -536,6 +544,8 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
+        soft_area_constraint=bool(config.soft_area_constraint),
+        soft_area_mu=float(config.soft_area_mu),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):

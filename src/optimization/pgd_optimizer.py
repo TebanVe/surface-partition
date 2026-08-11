@@ -11,7 +11,10 @@ import numpy as np
 from ..logging_config import get_logger
 from ..profiling import RelaxationProfilingState
 from .exceptions import RefinementTriggered
-from .projection import orthogonal_projection_iterative
+from .projection import (
+	orthogonal_projection_iterative,
+	project_rows_onto_simplex,
+)
 
 # Cap for the bounded trailing-window run logs (energy_changes/gnorm/feas).
 # Must exceed every refine_*_patience so the trigger windows are unaffected;
@@ -39,6 +42,8 @@ class ProjectedGradientOptimizer:
 		refine_delta_energy: float = 1e-4,
 		refine_grad_tol: float = 1e-2,
 		refine_constraint_tol: float = 1e-2,
+		soft_area_constraint: bool = False,
+		soft_area_mu: float = 0.0,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -56,7 +61,30 @@ class ProjectedGradientOptimizer:
 		self.mu_target = 1.0 / self.n_partitions
 		self.penalty_target_mode = 'fixed'  # or 'adaptive'
 		self.penalty_eps = 1e-8
-		
+
+		# Soft continuous equal-area constraint (A2). Default OFF; when off,
+		# every code path below is byte-for-byte the exact-projection one.
+		#
+		# The exact constraint v^T u_k = Abar is enforced by an ITERATIVE
+		# alternating projection that costs 93.3% of Phase 1 wall time (mean
+		# 46.3 inner iterations per call at N=300). Enabling this flag moves
+		# equal area into the objective as
+		#     P_area = (mu/2) * sum_k ((v @ u_k - Abar)/Abar)^2,
+		#     dP_area/du_ik = (mu/Abar^2) * v_i * (v @ u_k - Abar),
+		# leaving only sum-to-one + box on the feasible set -- a CLOSED-FORM,
+		# non-iterative per-vertex simplex projection
+		# (projection.project_rows_onto_simplex).
+		#
+		# Rationale: the constraint's delivered meaning -- an equal-area
+		# WINNER-TAKE-ALL partition -- is now guaranteed independently, exactly
+		# and at any N, by the balanced readout at extraction time
+		# (src/partition/balanced_readout.py). What Phase 1 must still do is
+		# keep every cell ALIVE and grow a sensible interface structure; the
+		# open question this flag exists to answer is whether the hard mass
+		# constraint was also the thing keeping cells alive early in the flow.
+		self.soft_area_constraint = bool(soft_area_constraint)
+		self.soft_area_mu = float(soft_area_mu)
+
 		# Refinement criteria
 		self.refine_patience = int(refine_patience)
 		self.refine_delta_energy = float(refine_delta_energy)
@@ -123,15 +151,24 @@ class ProjectedGradientOptimizer:
 				penalty_term = self.lambda_penalty * (1.0 - var_w / T_eff)
 				total_penalty += penalty_term
 		
-		total_energy = total_grad + total_interface + total_penalty
-		
+		total_area_penalty = 0.0
+		if self.soft_area_constraint:
+			r = (self.v @ phi - self.target_area) / self.target_area
+			total_area_penalty = 0.5 * self.soft_area_mu * float(r @ r)
+
+		total_energy = (total_grad + total_interface + total_penalty
+		                + total_area_penalty)
+
 		if return_components:
-			return {
+			components = {
 				'total': total_energy,
 				'grad': total_grad,
 				'interface': total_interface,
 				'penalty': total_penalty
 			}
+			if self.soft_area_constraint:
+				components['area_penalty'] = total_area_penalty
+			return components
 		else:
 			return total_energy
 
@@ -171,16 +208,47 @@ class ProjectedGradientOptimizer:
 				else:
 					# Fixed target gradient: -lambda * (1/T) * grad_var
 					G[:, i] += -self.lambda_penalty * (grad_var / T_eff)
+		if self.soft_area_constraint:
+			# dP_area/du_ik = (mu/Abar^2) * v_i * (v @ u_k - Abar); rank-one in
+			# (v, area deviation), so O(V*n) with no extra passes over K or M.
+			dev = self.v @ phi - self.target_area
+			G += (self.soft_area_mu / (self.target_area ** 2)) * np.outer(self.v, dev)
 		return g
 
 	def constraint_fun(self, x: np.ndarray) -> np.ndarray:
+		"""Residuals of the constraints actually ENFORCED on the feasible set.
+
+		FEAS (the max-abs of this vector) drives the refinement trigger's
+		feasibility test, so it must describe the hard constraints only. Under
+		``soft_area_constraint`` equal area is no longer a constraint -- it is a
+		term in the objective, which the trigger already sees through the energy
+		plateau -- so including its residual here would permanently pin FEAS
+		above ``refine_constraint_tol`` and silently change the trigger's
+		meaning between the two arms. The area deviation is instead reported in
+		the progress log and via :meth:`area_deviation`.
+		"""
 		N = len(self.v)
 		n = self.n_partitions
 		phi = x.reshape(N, n)
 		row_sums = np.sum(phi, axis=1)[:-1] - 1.0
+		if self.soft_area_constraint:
+			return row_sums
 		area_sums = self.v @ phi
 		area_constraints = area_sums[:-1] - self.target_area
 		return np.concatenate([row_sums, area_constraints])
+
+	def area_deviation(self, x: np.ndarray) -> Tuple[float, float]:
+		"""(max abs, max relative) continuous cell-area deviation from target.
+
+		Diagnostic for the soft-area arm: this is the quantity the exact
+		projection drove to ~1e-10 and the penalty only discourages. Note it is
+		the CONTINUOUS mass deviation, not the winner-take-all territory
+		deviation that `detect_area_imbalance` gates on.
+		"""
+		phi = x.reshape(len(self.v), self.n_partitions)
+		dev = self.v @ phi - self.target_area
+		m = float(np.max(np.abs(dev)))
+		return m, m / self.target_area
 
 	def _save_iteration_h5(self, h5, k: int, x: np.ndarray, g: np.ndarray, f: float, cvec: np.ndarray, save_vars: List[str], energy_components: Optional[Dict[str, float]] = None):
 		grp = h5.create_group(f'iter_{k}')
@@ -199,6 +267,8 @@ class ProjectedGradientOptimizer:
 			grp.create_dataset('energy_grad', data=energy_components['grad'])
 			grp.create_dataset('energy_interface', data=energy_components['interface'])
 			grp.create_dataset('energy_penalty', data=energy_components['penalty'])
+			if 'area_penalty' in energy_components:
+				grp.create_dataset('energy_area_penalty', data=energy_components['area_penalty'])
 
 	def _append_summary_line(self, fh, k: int, f: float, gnorm: float, cnorm: float, feas: float, step: float):
 		# Columns (9 tokens): MAJOR-idx, NFEV, NGEV, OBJFUN, GNORM, CNORM, FEAS, OPT, STEP (OPT dummy 0)
@@ -263,6 +333,11 @@ class ProjectedGradientOptimizer:
 		A = np.clip(A, 1e-8, 1 - 1e-8)
 		c = np.ones(n)
 		d = (np.sum(self.v) / n) * np.ones(n)
+		# The ENTRY projection stays exact even under soft_area_constraint: it is
+		# one call per level (not per line-search trial), so it costs nothing
+		# measurable, and it makes both arms of the A/B start each level from the
+		# identical feasible iterate. Only the per-trial projection inside the
+		# line search below is swapped for the closed-form simplex projection.
 		A = orthogonal_projection_iterative(A, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile)
 		x = A.flatten()
 
@@ -288,6 +363,9 @@ class ProjectedGradientOptimizer:
 			h5f.attrs['lambda_penalty'] = self.lambda_penalty
 			h5f.attrs['penalty_target_mode'] = self.penalty_target_mode
 			h5f.attrs['n_partitions'] = self.n_partitions
+			h5f.attrs['soft_area_constraint'] = self.soft_area_constraint
+			if self.soft_area_constraint:
+				h5f.attrs['soft_area_mu'] = self.soft_area_mu
 			
 			# Optional header line (analyzer ignores lines starting with 'MAJOR')
 			summary_fh.write("MAJOR NFEV NGEV OBJFUN GNORM CNORM FEAS OPT STEP\n")
@@ -323,10 +401,18 @@ class ProjectedGradientOptimizer:
 					if profile is not None:
 						n_backtracks += 1
 					A_trial = x.reshape(N, n) - step * g.reshape(N, n)
-					A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
-					A_trial = orthogonal_projection_iterative(
-						A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile
-					)
+					if self.soft_area_constraint:
+						# Closed-form simplex projection: enforces sum-to-one +
+						# box exactly in one pass. It subsumes the clip above
+						# (the box floor is an argument), so no separate clip.
+						A_trial = project_rows_onto_simplex(
+							A_trial, lo=1e-8, _prof=profile
+						)
+					else:
+						A_trial = np.clip(A_trial, 1e-8, 1 - 1e-8)
+						A_trial = orthogonal_projection_iterative(
+							A_trial, c, d, self.v, max_iter=projection_max_iter, tol=projection_tol, logger=proj_logger, _prof=profile
+						)
 					x_trial = A_trial.flatten()
 					if profile is not None:
 						_t_e = time.perf_counter()
@@ -407,6 +493,14 @@ class ProjectedGradientOptimizer:
 					self.logger.info(f"    GNORM={gnorm_post:.6e}, FEAS={feas_post:.6e}, STEP={step:.3e}")
 					areas_log = self.v @ x.reshape(N, n)
 					self.logger.info(f"    Target area per partition: {self.target_area:.6e}")
+					if self.soft_area_constraint:
+						# FEAS above covers sum-to-one only; area is soft now, so
+						# report its drift explicitly or it goes unobserved.
+						a_abs, a_rel = self.area_deviation(x)
+						self.logger.info(
+							f"    Soft area: worst |dev|={a_abs:.6e} "
+							f"({a_rel * 100:.3f}% of target), mu={self.soft_area_mu:g}"
+						)
 					self.logger.info(f"    Current partition areas: {areas_log}")
 
 				# Refinement trigger check

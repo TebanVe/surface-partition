@@ -214,6 +214,8 @@ testing/
 ├── test_type1_triple_point_overlap.py   # Type 1 one-ring / Steiner overlap smoke test
 ├── test_white_triangle_fix.py           # Zero-length-boundary rendering-fix smoke test
 ├── validate_pgd_optimizations.py        # Phase 1 PGD serial-opt (Changes A/B/C) equivalence + A/B speedup
+├── test_soft_area_constraint.py         # A2 gates: simplex projection vs KKT, penalty gradient vs FD, flag-off bit-identity
+├── calibrate_soft_area_mu.py            # A2: pick soft_area_mu for a config (force parity at the 5% area gate)
 ├── test_disconnected_cells_detection.py # Phase 1 connectivity gate: detect_disconnected_cells split/speckle logic
 ├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
@@ -221,6 +223,8 @@ testing/
 parameters/                       # (selected — see the directory for the full set)
 ├── torus_100part_coarse_seeded.yaml      # ★ THE representative config: N=100, λ=5.1, seed 84172851, seeded, 5 levels (finest 348×328). Produced the validated deliverable run_20260709_081548 (all 3 gates pass, worst cell 0.78%, perimeter 185.2546). Phase 1 ≈ 13.4 h
 ├── torus_100part_coarse_seeded_3lvl.yaml # ★ Fast variant of the above for smoke tests: same λ/seed, 3 levels (finest 224×212)
+├── torus_100part_coarse_seeded_softarea.yaml # A2 experiment arm: the ★ config + soft_area_constraint (control = run_20260709_081548, not re-run)
+├── torus_30part_softarea.yaml    # A2 pre-flight at N=30 (cheap shakedown of the soft-area path)
 ├── torus_100part.yaml            # ⚠ KNOWN-BAD — λ=2.1 is below the N=100 working window, and its 142×136 mesh is the run_20260701_143238 "finer mesh made the runt worse" case. Use torus_100part_coarse_seeded.yaml
 ├── torus_10part.yaml             # Torus, 10 partitions — minimal legacy smoke test only (N=10 is unrepresentative); seeded init since 2026-08-10
 ├── torus_30part.yaml             # Torus, 30 partitions (parametric mesh; seeded init)
@@ -471,7 +475,7 @@ the Phase 1 breakdown).
 | `ImplicitSurfaceProvider` | `src/surfaces/implicit.py` | Abstract base for zero-level-set surfaces; uses `skimage.measure.marching_cubes`. |
 | `DoubleTorusMeshProvider` | `src/surfaces/double_torus.py` | Double torus: `(x(x-1)²(x-2)+y²)²+z²=0.03` (Bogosel & Oudet Figure 3). |
 | `BanchoffChmutovMeshProvider` | `src/surfaces/banchoff_chmutov.py` | Banchoff-Chmutov order 4: `T4(x)+T4(y)+T4(z)=0` (Bogosel & Oudet Figure 4). Keeps largest connected component. |
-| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. |
+| `ProjectedGradientOptimizer` | `src/optimization/pgd_optimizer.py` | Phase 1 PGD. Energy = ε·u^T·K·u + (1/ε)·q^T·M·q with q=u(1-u) (the double-well ∫u²(1-u)²) + λ·penalty. Constraints: partition sum-to-one, equal areas. The interface term was previously mis-discretized as `u²(1-u)²` (a typo copied from the paper, making the coded well ∫u⁴(1-u)⁴ with an inconsistent gradient); **fixed** in commit `6ff71a0` and validated at N=30/N=100. The corrected (steeper) well requires `init_method: seeded` — random init now traps in the symmetric state. See `docs/reference/phase1_energy_discretization_bug.md`, `docs/math/06-phase1-energy-discretization/`, `docs/experiments/02-corrected-energy-highn-validation/`. **Soft continuous equal-area constraint (`soft_area_constraint`, `soft_area_mu`; default OFF, byte-for-byte backward compatible):** replaces the exact equal-area constraint with a quadratic penalty `P = (μ/2)·Σ_k((v·u_k−Ā)/Ā)²` (gradient `(μ/Ā²)·v_i·(v·u_k−Ā)`), leaving sum-to-one + box — a closed-form per-vertex simplex projection instead of the iterative alternating projection that is 93.3% of Phase 1 wall time. See "Soft Continuous Equal-Area Constraint" below. |
 | `PerimeterOptimizer` | `src/optimization/perimeter_optimizer.py` | Phase 2. Minimizes total perimeter (regular + Steiner) subject to equal cell areas. Supports SLSQP, trust-constr, IPOPT. |
 | `IPOPTProblemAdapter` | `src/optimization/perimeter_optimizer.py` | Adapts PerimeterOptimizer for cyipopt interface. Optional best-iterate tracking and exact Hessian. |
 | `ContourAnalyzer` | `src/partition/find_contours.py` | Loads HDF5 solution, computes indicator functions (winner-take-all), extracts boundary triangles and topology. |
@@ -485,7 +489,7 @@ the Phase 1 breakdown).
 | `MigrationOrchestrator` | `src/migration/migration_orchestrator.py` | Detects Type 1 (vertex collapse: VP λ→0 or λ→1) and Type 2 (triple-point) triggers, executes migrations on partition state. |
 | `ProfilingState` | `src/profiling.py` | Opt-in timing accumulator for Phase 2 IPOPT callbacks. Tracks wall-clock time and Steiner recomputation counts per callback type. `finalize()` computes means and % breakdown; `to_yaml_dict()` writes `timing_profile.yaml`. Zero overhead when `--profile` is absent (all guards are `if _prof is not None:`). |
 | `RelaxationProfilingState` | `src/profiling.py` | Opt-in per-level + aggregate timing accumulator for Phase 1 PGD. Per-level lifecycle: `start_level()` → `set_level_mesh_stats()` → PGD → `finalize_level()`; `finalize()` partitions `total_wall_s` (backtrack reported net of nested energy/projection); `to_yaml_dict()` writes `solution/timing_profile.yaml`. Same zero-overhead contract (`if profile is not None:`). |
-| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
+| `RelaxationConfig` | `src/pipeline/relaxation.py` | Dataclass for Phase 1 config. `from_yaml_dict()` reads sectioned or flat YAML. `init_method` (`'random'` default \| `'seeded'`) selects the level-0 initial condition. `soft_area_constraint` (default `False`) + `soft_area_mu` select the A2 soft equal-area penalty — see the `ProjectedGradientOptimizer` row. **Per-level checkpointing:** `checkpoint_per_level` (default `True`) writes `solution/checkpoint_level{L}.h5` after every completed level — see the Phase 1 data-flow section. |
 | `RefinementConfig` | `src/pipeline/pipeline_orchestrator.py` | Dataclass for Phase 2 config. `from_yaml_dict()` reads sectioned or flat YAML. CLI flags override. |
 | `PipelineOrchestrator` | `src/pipeline/pipeline_orchestrator.py` | Phase 2 loop: optimize → detect → export checkpoint → migrate. Auto-detects base vs checkpoint files. Creates campaign directories under `refinement/`. |
 
@@ -599,6 +603,47 @@ space again, read `docs/reference/winner_take_all_partition_gap.md` **§4b** (wh
 failed) and **§9b** (the local-operator test any replacement must pass). The
 derivation is kept at `docs/math/07-phase1-wta-balance/` (marked not-adopted) and the
 measurement at `docs/experiments/04-territory-aware-highn-validation/`.
+
+### Soft Continuous Equal-Area Constraint (`soft_area_constraint`) — experimental
+
+Phase 1 enforces equal *continuous* cell mass `v·u_k = Ā` exactly, via an
+iterative alternating projection. That projection is **93.3% of Phase 1 wall
+time** (measured at N=300, λ=11.5: 21.96 h total, 6,762 major iterations, mean
+46.3 projection inner iterations; energy + gradient + backtrack together are
+6.49% — `docs/math/04-phase1-timing-profile/`). Its purpose — delivering an
+equal-area *winner-take-all* partition — is now met independently, exactly and
+at any N, by the **balanced readout** at extraction time.
+
+`soft_area_constraint: true` (default `false`) therefore moves equal area out of
+the feasible set and into the objective:
+
+- energy `+= (μ/2)·Σ_k r_k²`, `r_k = (v·u_k − Ā)/Ā`, `μ = soft_area_mu`;
+- gradient `+= (μ/Ā²)·v_i·(v·u_k − Ā)` (rank-one, O(V·N), no extra K/M passes);
+- the per-trial line-search projection becomes `project_rows_onto_simplex`
+  (`src/optimization/projection.py`) — sum-to-one + box in **closed form**, one
+  sort, no inner loop.
+
+Three things to know before using it:
+
+1. **The entry projection stays exact.** The once-per-level projection of the
+   initial iterate still uses `orthogonal_projection_iterative`; it is not on
+   the hot path and it makes an A/B start each level from the identical iterate.
+2. **`constraint_fun` drops the area block when the flag is on**, so `FEAS`
+   keeps meaning "the constraints actually enforced". Otherwise FEAS would sit
+   permanently above `refine_constraint_tol` and silently change what the
+   refinement trigger tests. Area drift is reported by
+   `ProjectedGradientOptimizer.area_deviation()` and in each progress log line.
+3. **`μ` is calibrated per config, and is not N-invariant** (it scales with
+   vertices-per-cell). Use `testing/calibrate_soft_area_mu.py --config <cfg>`:
+   it picks the μ at which the penalty force reaches parity with the base
+   energy's `‖g‖_∞` at a 5% relative area deviation (the discrete-area gate
+   threshold), at the level-0 seeded init. N=100 → 245.9; N=30 → 895.3.
+
+**The falsifier is dormant cells, not runts.** Runt (area-imbalanced) cells are
+expected here and the readout repairs them. The hard mass constraint may however
+be what keeps a cell *alive* early in the flow — so any dead or weak cell in a
+soft-area run fails the approach regardless of the speedup. Correctness gates:
+`python testing/test_soft_area_constraint.py`.
 
 ### Phase 1 Initial Condition (`init_method`)
 
