@@ -76,7 +76,15 @@ def main() -> int:
         return 1
 
     run_dir = Path(checkpoint_path).parent.parent.parent
-    source_run_id = run_dir.name
+    # run_dir is the campaign root used for the default output path. For a
+    # readout-derived checkpoint (readout/{campaign}/refinement/{campaign}/) that
+    # is the readout campaign, not the run, so source_run_id must be taken from
+    # the nearest run_* ancestor -- otherwise the exported file names a campaign
+    # instead of the relaxation run it came from.
+    source_run_id = next(
+        (p.name for p in Path(checkpoint_path).parents if p.name.startswith("run_")),
+        run_dir.name,
+    )
 
     with h5py.File(checkpoint_path, "r") as f:
         source_iteration = int(f.attrs["iteration_number"])
