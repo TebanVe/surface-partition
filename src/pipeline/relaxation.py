@@ -93,6 +93,20 @@ class RelaxationConfig:
     # of weight `soft_area_mu`. See the ProjectedGradientOptimizer docstring.
     soft_area_constraint: bool = False
     soft_area_mu: float = 0.0
+    # Level from which the soft-area treatment applies. None/-1 = every level
+    # (the plain A2 arm). Set to L to run levels < L on the EXACT treatment and
+    # levels >= L on the soft one.
+    #
+    # "Treatment" here means BOTH halves together, deliberately: the quadratic
+    # penalty in the objective AND the closed-form simplex projection in the
+    # line search. They are separate defects -- the penalty's uniform per-cell
+    # gradient buys area with disconnected territory, and the Euclidean simplex
+    # projection creates spurious fixed points that collapse the line search --
+    # so a hybrid that swapped only one of them would carry the other into the
+    # level it was built to protect. Level 0 is where fragmentation is born, so
+    # under soft_area_from_level: 1 level 0 gets no penalty AND the exact
+    # projection.
+    soft_area_from_level: Optional[int] = None
 
     # Structure-based refinement trigger (stuck detector). Default OFF.
     # Fires when the winner-take-all label field has been frozen for
@@ -529,7 +543,12 @@ def _load_warm_start(solution_path: str) -> dict:
 
 
 def _setup_level(provider, config, level, logger, profile=None) -> dict:
-    """Build mesh and PGD optimizer for one refinement level."""
+    """Build mesh and PGD optimizer for one refinement level.
+
+    ``config.soft_area_from_level`` gates the soft-area treatment by level: both
+    the penalty and the simplex projection are switched together, so a level is
+    either fully exact or fully soft.
+    """
     n1, n2 = provider.get_initial_resolution()
     dn1, dn2 = provider.get_resolution_increment()
     n1 = n1 + level * dn1
@@ -556,6 +575,17 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         val = provider.theoretical_total_area() if callable(theoretical) else None
         total_area = float(val) if val is not None else float(np.sum(mesh.v))
 
+    # Soft-area treatment for THIS level (penalty + simplex projection together).
+    soft_here = bool(config.soft_area_constraint)
+    _from = getattr(config, 'soft_area_from_level', None)
+    if soft_here and _from is not None and int(_from) >= 0:
+        soft_here = level >= int(_from)
+        logger.info(
+            f"  Level {level+1} area treatment: "
+            f"{'SOFT (penalty + simplex projection)' if soft_here else 'EXACT (no penalty, alternating projection)'}"
+            f"  [soft_area_from_level={int(_from)}]"
+        )
+
     optimizer = ProjectedGradientOptimizer(
         K=mesh.K, M=mesh.M, v=mesh.v,
         n_partitions=config.n_partitions,
@@ -565,7 +595,7 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         refine_delta_energy=float(config.refine_delta_energy),
         refine_grad_tol=float(config.refine_grad_tol),
         refine_constraint_tol=float(config.refine_constraint_tol),
-        soft_area_constraint=bool(config.soft_area_constraint),
+        soft_area_constraint=soft_here,
         soft_area_mu=float(config.soft_area_mu),
         struct_trigger_enabled=bool(config.struct_trigger_enabled),
         struct_window=int(config.struct_window),

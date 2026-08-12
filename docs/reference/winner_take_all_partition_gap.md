@@ -345,6 +345,64 @@ the mesh ladder — or one killed before the last level, which never writes
 checkpoint mid-ladder. That is how the 14 above were found, on a run that was still
 reporting a healthy-looking 1 imbalanced cell.
 
+## 4c. The locality criterion — apply this before writing code
+
+**Two independent attempts to cheapen or correct Phase 1 have now failed by
+manufacturing disconnected cells.** They look nothing alike, and they failed the
+same way:
+
+| attempt | how the correction reaches the field | result |
+|---|---|---|
+| Discrete-area trim (§4b) | retargets the projection's per-cell area targets `d`; the **projection** (rank-one + renormalise) delivers the mass | 14/200 fragmented vs 0/200 matched control |
+| Soft area penalty, "A2" (`docs/experiments/05-soft-area-constraint/`) | adds `(μ/Ā²)·v_i·(v·u_k − Ā)` to the gradient — a **uniform per-cell field** | 3–4/100 fragmented vs 0/100 matched control; readout repair costs +22% boundary and breaks Phase 2 |
+
+In both cases the correction is *nonlocal*: it reaches every part of a cell at
+once. A cell short on area is therefore grown wherever it already has any
+foothold — including a distant speck on the far side of a neighbour — and that
+speck becomes an island. Since nothing in the energy penalises disconnection, the
+island is a stable fixed point (§4b), so the damage is permanent.
+
+**The screening test.** Before implementing any mechanism that corrects cell
+area, territory, or balance, answer one question:
+
+> **Through what operator does the correction reach the field, and is that
+> operator local?**
+
+A correction is *local* if increasing cell *k*'s share grows it **outward from
+its existing boundary**, monotonically, without amplifying disconnected pieces.
+It is *nonlocal* if it reaches the whole cell uniformly, or passes through a
+global solve (a projection, a linear system, a normalisation coupling all
+vertices). **Nonlocal corrections buy area with disconnected territory.** Expect
+fragmentation and design for it, or choose a different operator.
+
+This is not a retrospective observation. §9b stated the criterion in
+2026-08-06, to explain why the trim failed and why the balanced readout's
+per-cell offset in log-density space does not — and it **predicted A2's failure
+mode four days before A2 was written**. The balanced readout passes the test:
+raising `ψ_k` in `argmax_k[log u_ik + ψ_k]` grows a cell monotonically outward
+from its core, which is why it relabels 1,840 vertices at N=300 for +1.9%
+boundary while the trim manufactured islands.
+
+**A corollary worth keeping.** Both failures were also invisible in their headline
+metrics — the trim's area numbers looked excellent, and A2 was "32× faster with no
+dead cells". **Check connectivity first**, before speed and before area:
+`testing/check_fragmentation.py` runs all three gates on any solution or
+mid-ladder checkpoint in seconds. A cheaper early read still is the balanced
+readout's own strain: 0 blocked moves and low single-digit boundary cost is the
+healthy signature (N=300: 1,485 moves, 1 blocked, +1.85%), while blocked moves
+plus double-digit boundary cost means the relaxation handed it something broken
+(A2: 13,540 moves, 213 blocked, +22.0%, sweep cap hit).
+
+**And a diagnostic for the optimizer itself.** A2's speedup was inflated by
+*every* level dying in a collapsed line search — no step accepted, energy frozen
+bit-identically, the energy-plateau trigger then firing on the frozen energy and
+reporting convergence. Two tells distinguish a dead optimizer from a converged
+one: winner-take-all label churn that is **exactly** zero rather than small, and
+per-iteration cost that *rises* at the moment progress stops (convergence gets
+cheaper; a collapsing line search backtracks ~40 times per iteration). A guard in
+`src/optimization/pgd_optimizer.py` now warns after 50 consecutive rejected
+iterations.
+
 ## 5. Results analysis — where the runt comes from (Step 0)
 
 A forensic pass over the three existing solutions (zero new compute) tracked every
@@ -412,6 +470,7 @@ finer mesh did not help.
 | Lever | Effect on **dormant** | Effect on **runt** | Verdict |
 |---|---|---|---|
 | **Territory-aware machinery** (WTA balance term + discrete-area trim) | n/a | drives worst abs deviation down hard (N=200 level ends 12.7% → 8.3% → 5.4%) | **rejected and removed** ❌ — fixes area, creates splits: 14/200 fragmented, ~20-day ladder (§4b); enforces *total* area, not connectivity |
+| **Soft continuous area constraint** ("A2": quadratic penalty + closed-form simplex projection) | n/a | holds it (worst 1.47%) | **rejected and removed from use** ❌ — 32× faster and 0 dead cells, but 3–4/100 fragmented and every level died in a collapsed line search; see §4c and `docs/experiments/05-soft-area-constraint/` |
 | **Balanced readout** (semi-discrete OT dual + connectivity repair, at extraction) | not measured on a dead cell (none in the test runs); the dual grows a zero-area cell in principle, but the seeded init already prevents them | **fixes it** — exact, by construction, to one-vertex granularity at any N | **the answer** ✅ — §9b; 10/300 → 0 imbalanced, 2 → 0 fragmented, +1.9% boundary, ~17 s |
 | **Energy discretization fix** (`u²(1−u)²`→`u(1−u)`) | n/a | **root cause** — the coded well was ~25× too weak, under-pricing the halo *and* leaving λ inert; correcting it is what makes the runt fixable | **the fix** ✅ |
 | λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
@@ -651,6 +710,9 @@ returning a silently degraded partition.
 - Reference: `docs/reference/phase1_energy_discretization_bug.md` — the
   mis-discretized double well that was the runt's root cause; its fix (with a moderate
   λ) is what resolved the runt (§8).
+- Experiment: `docs/experiments/05-soft-area-constraint/` — the measured rejection of the
+  soft equal-area constraint (§4c): two independent defects, and the confirmation that
+  §9b's locality criterion predicts failures before they are built.
 - Experiment: `docs/experiments/01-winner-take-all-partition-gap/` — the measured
   study behind §4–5 (the level-by-level trajectory reconstruction and the three
   figures, as a reproducible LaTeX report with provenance), taken under the *buggy*

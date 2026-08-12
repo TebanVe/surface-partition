@@ -1,0 +1,88 @@
+# ============================================================================
+# A2 HYBRID -- exact at level 0, soft from level 1.
+#
+# WHAT IS EXACT AT LEVEL 0: BOTH halves of the soft-area treatment. Level 0 runs
+# with NO quadratic penalty and the EXACT alternating projection; levels 1-4 run
+# with both the penalty and the closed-form simplex projection. They are gated
+# together on purpose, because they are two independent defects:
+#   (1) the penalty's gradient (mu/Abar^2)*v_i*(v.u_k - Abar) is a UNIFORM
+#       per-cell field, so a cell short on area is boosted everywhere at once,
+#       including at a distant foothold, which grows into an island. Measured:
+#       fragmented cells 0->1->2->3->4 while imbalanced fell 79->63->22->1->0.
+#       The flow buys area balance with disconnected territory.
+#   (2) the Euclidean simplex projection maps a whole small-step neighbourhood
+#       of a crisp iterate back onto the same simplex vertex, so E_trial == E
+#       and Armijo can never be satisfied. Measured: EVERY level of the plain A2
+#       arm collapsed to step 9.095e-13 (L0 at iter 2,548, L1 257, L2 182,
+#       L3 154, L4 232) and then sat frozen until the energy trigger fired.
+# Swapping only one of them would carry the other into level 0, which is where
+# fragmentation is born.
+#
+# EXPECTED TO FAIL, and run anyway to convert the prediction into a measurement:
+# levels 1-4 keep defect (2), so they should collapse after ~150-250 iterations
+# each and do almost no refinement. The informative outcome is what a clean,
+# well-annealed level-0 structure is worth when the finer levels cannot sharpen
+# it -- gates, perimeter, and whether fragmentation stays at 0.
+#
+# Also carries struct_trigger_enabled, which is independently validated
+# (1.38x, partition materially identical) and reclaims level 0's dead tail.
+# ============================================================================
+experiment:
+  name: torus-100-coarse-seeded-fixedenergy
+  surface: torus
+relaxation:
+  n_partitions: 100
+  lambda_penalty: 5.1
+  seed: 84172851
+  init_method: seeded
+  max_iter: 30000
+  refinement_levels: 5
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-09
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-08
+  refine_grad_tol: 0.01
+  refine_constraint_tol: 0.01
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 0.0001
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-06
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-08
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars:
+  - x
+  h5_always_save_first_last: true
+  profile: true
+  soft_area_constraint: true
+  soft_area_mu: 245.9
+  soft_area_from_level: 1
+  struct_trigger_enabled: true
+surface:
+  torus:
+    n_theta: 100
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-07
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

@@ -21,6 +21,11 @@ from .projection import (
 # patiences are O(10), so this is ~250x margin while keeping the logs O(1).
 _LOG_WINDOW_CAP = 8192
 
+# Consecutive rejected iterations before the line search is declared stalled.
+# Well above any legitimate run of hard iterations, well below the hundreds a
+# genuinely dead search racks up.
+_STALL_WARN_AFTER = 50
+
 
 class ProjectedGradientOptimizer:
 	"""
@@ -535,6 +540,33 @@ class ProjectedGradientOptimizer:
 					profile.record('backtrack', time.perf_counter() - _t_bt)
 					profile.add_counter('backtracks_per_iter_total', n_backtracks)
 					profile.add_counter('major_iterations', 1)
+
+				# A line search that accepts nothing is a DEAD optimizer, not a
+				# converged one, and the energy-plateau trigger cannot tell the
+				# difference: the energy is frozen either way. Measured on the
+				# soft-area arm, every level collapsed to step 9.095e-13 some
+				# 25-30 iterations before its "convergence" trigger fired, which
+				# is how a dead optimizer masqueraded as a 32x speedup. Warn
+				# once per level, loudly, and count it.
+				if accepted:
+					n_rejected_run = 0
+				else:
+					n_rejected_run += 1
+					if (n_rejected_run == _STALL_WARN_AFTER
+							and not stall_warned):
+						stall_warned = True
+						self.logger.warning(
+							f"LINE SEARCH STALLED at iteration {k}: no step "
+							f"accepted in {n_rejected_run} consecutive "
+							f"iterations (step floored at {step:.3e}, "
+							f"E={E:.10f} frozen). The iterate is pinned by a "
+							f"failed line search, NOT by convergence -- any "
+							f"refinement trigger that fires from here is "
+							f"reporting a dead optimizer. Treat the level's "
+							f"iteration count as a failure point, not a cost."
+						)
+				if profile is not None and not accepted:
+					profile.add_counter('rejected_iterations', 1)
 
 				# Recompute gradient and constraints at the accepted iterate (or current if not accepted)
 				if profile is not None:
