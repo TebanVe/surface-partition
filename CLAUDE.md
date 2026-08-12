@@ -657,11 +657,34 @@ changing cell every 500 iterations — and refinement then froze the pinched
 configuration that became its 3 disconnected cells.
 
 So it reclaims the pathology and provably does not touch the runs that already
-behave. Speedup from the per-level profile: **1.47× alone**; combined with an
-exact-projection-at-level-0 hybrid of the soft-area work, 4.41× (conservative:
-control iteration counts, A2 per-iteration cost) to 8.79× (optimistic: A2's own
-iteration counts hold — treat with suspicion, since some of A2's iteration
-reduction *is* the premature-freezing defect).
+behave.
+
+**Measured end to end at N=100** (full ladder with the trigger on, against the
+13.4 h control `run_20260709_081548`; live trigger fired at iteration 6,499 with
+"13 label flips over the last 2000 iterations, budget 19.2" — reproducing the
+offline replay exactly):
+
+| | control | + structure trigger |
+|---|---|---|
+| Phase 1 wall | 48,132 s (13.37 h) | **34,967 s (9.71 h)** — 1.38×, saves 3.66 h |
+| level 0 iterations | 30,000 (cap) | 6,500 |
+| levels 1–4 iterations | 1372 / 986 / 1197 / 1279 | 1462 / 956 / 1192 / 1284 |
+| dead / weak | 0 / 0 | 0 / 0 |
+| imbalanced (worst) | 0 (0.78%) | 0 (0.97%) |
+| fragmented | 0 | 0 |
+| readout strain | 51 moves, 0 blocked, +0.13% | 76 moves, 0 blocked, +0.22% |
+| Phase 2 perimeter | 185.2546 (20 iters) | **185.2096** (20 iters, no abort) |
+
+The downstream levels are undisturbed (iteration counts within ±7%) and the final
+partition is materially identical — Phase 2 lands 0.024% *better*, i.e. inside
+run-to-run noise. So the saving is real and free.
+
+**1.38×, not the 1.47× predicted from iteration counts.** Level 0's first 6,500
+iterations cost 0.93 s each against the 30,000-iteration average of 0.653 s: the
+projection needs more inner iterations while the field is still moving, so the
+tail this trigger removes was the *cheap* part of the level. Predicting a saving
+from iteration proportions overstates it; 27.4% of Phase 1 is the measured
+figure.
 
 ### Soft Continuous Equal-Area Constraint (`soft_area_constraint`) — experimental
 
