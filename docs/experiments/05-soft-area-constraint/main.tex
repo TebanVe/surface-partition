@@ -52,9 +52,10 @@ All numbers below are measured at \(N{=}100\) against a matched control that was
 already a validated deliverable. Both defects are measured, not inferred. The
 approach is closed: the code remains on the branch behind a default-off flag
 (\code{soft\_area\_constraint}) as the record, and should not be enabled.
-The one narrower variant (exact treatment at level~0, soft from level~1) has
-since also been measured and closed: it removes the fragmentation entirely at
-\(6.83\times\) and passes all three gates, but Phase~2 still aborts. See
+\textbf{One narrower variant survives}: exact treatment at level~0, soft from
+level~1. It removes the fragmentation entirely, passes all three gates at
+\(6.83\times\), and --- \emph{via the balanced readout, which it requires} ---
+reaches a Phase~2 perimeter \(+0.246\%\) off the control. See
 \S\ref{sec:hybrid}.
 \end{tcolorbox}
 
@@ -368,11 +369,73 @@ triple points against 14{,}641 and 200), passes all three gates, and has a
 feasibility from it. Whatever Phase~2 needs from the fine levels, the three
 Phase~1 validity gates do not measure it.
 
-\paragraph{Verdict.} A valid partition at \(6.83\times\) that Phase~2 cannot
-refine is not a usable pipeline, so the variant is closed with the rest of A2.
-What survives is the confirmation that fragmentation is a level-0 phenomenon,
-and the observation that the gates are not sufficient to certify a Phase~1
-solution as Phase-2-ready.
+\paragraph{The abort was the path, not the partition (2026-08-12).} The Phase~2
+run above was deliberately made on the \emph{raw} solution, to match how the
+control's \(185.2546\) was produced. That is the right like-for-like comparison
+and the wrong production path: every successful high-\(N\) Phase~2 on this
+project goes through the balanced readout first. Re-run through it:
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+readout strain & moves & blocked & boundary & sweeps \\
+\midrule
+control & 51 & 0 & \(+0.13\%\) & 12 \\
+\textbf{hybrid} & \textbf{426} & \(\mathbf{0}\) & \(\mathbf{+0.58\%}\) & \textbf{31} \\
+\(N{=}300\) five-level (known good) & 3{,}305 & 0 & \(+1.85\%\) & 76 \\
+A2, raw (broken) & 13{,}540 & 213 & \(+22.0\%\) & cap hit \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The hybrid's strain is squarely in the healthy band --- zero blocked moves,
+sub-\(1\%\) boundary cost --- so its geometry was never the problem. Worst-cell
+deviation falls \(1.21\%\to0.20\%\), and \textbf{Phase~2 then completes 20
+topology iterations with zero solver failures}, best perimeter \(185.7108\)
+against the control's \(185.2546\): \(+0.246\%\).
+
+\paragraph{What actually predicted the abort.} Phase~2's iteration-0 constraint
+violation is the worst-cell area deviation times the target area \(\Atgt\), and
+that relation now holds on three runs to within \(3\%\):
+
+\begin{center}
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+ & worst cell & predicted & Phase~2 reported \\
+\midrule
+control (raw) & \(0.78\%\) & \(1.85\times10^{-3}\) & \(1.85\times10^{-3}\) --- converges \\
+hybrid (raw) & \(1.21\%\) & \(2.87\times10^{-3}\) & \(2.87\times10^{-3}\) --- \textbf{aborts} \\
+hybrid (readout) & \(0.20\%\) & \(4.74\times10^{-4}\) & \(4.59\times10^{-4}\) --- converges \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A \(1.55\times\) larger starting violation was the whole difference between a
+20-iteration descent and a restoration failure in 8 seconds. This is the
+cheapest single predictor of whether Phase~2 will descend, and it is available
+from the Phase~1 solution before Phase~2 is started.
+
+\paragraph{Verdict --- viable, with a dependency.} The hybrid gives
+\(\mathbf{6.83\times}\) on Phase~1 with all three gates passing and a Phase~2
+perimeter \(+0.246\%\) off the control. That is a real quality cost, not noise
+--- ten times the \(-0.024\%\) spread the structure trigger showed --- bought
+for a \(6.83\times\) reduction in the dominant cost of the pipeline.
+
+\textbf{The honest framing is that the hybrid \emph{requires} the readout},
+not that Phase~2 was fine all along. On the raw path it fails outright. This
+promotes the balanced readout from an optional repair to a \textbf{mandatory
+stage of the fast path}, and any future use of the hybrid inherits that
+dependency.
+
+\paragraph{Two cautions on the arithmetic.} The \(6.83\times\)
+\textbf{already contains} the structure trigger (level~0 is \(6{,}099\)~s of the
+\(7{,}044\)~s because the trigger stops it at 6{,}500 iterations); the two do
+\emph{not} stack. Without the trigger the hybrid is \(2.34\times\), and the
+trigger contributes \(13{,}484\)~s of the \(41{,}088\)~s saved. And the
+\(+0.246\%\) may not hold at higher \(N\): the hybrid is fast partly because its
+fine levels collapse and do no refinement, so the perimeter cost of skipping
+that refinement should be re-measured at \(N{=}300\) before the speedup is
+relied on.
 
 \section{Conclusions}
 \label{sec:conclusions}
@@ -395,6 +458,11 @@ solution as Phase-2-ready.
     code: \emph{through what operator does the correction reach the field, and is
     that operator local?} A correction that reaches a cell uniformly, or through
     a global solve, will buy area with disconnected territory.
+  \item \textbf{Judge a pipeline on the pipeline.} The hybrid was first measured
+    on the raw Phase~2 path, chosen for a defensible reason (matching how the
+    control's number was produced), and it aborted. On the production path --- the
+    same solution through the balanced readout --- it converges. A negative result
+    from a path the project no longer uses is not a verdict on the approach.
   \item \textbf{Do not price a speedup in iterations you did not have to run.}
     Most of the \(32\times\) was an optimizer dying early. A result that looks
     like a large speedup on a hard problem should be checked for a collapsed line

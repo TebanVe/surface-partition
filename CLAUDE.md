@@ -321,7 +321,7 @@ suppresses build artifacts but tracks `main.pdf` + `fig_*.pdf`. Build with
 buggy energy) and `02-corrected-energy-highn-validation/` (its post-fix resolution:
 runt 22.5%→0.8%, Phase 2 −13.6%, random-init trap) — both pair with
 `docs/reference/winner_take_all_partition_gap.md`; and
-`05-soft-area-constraint/` (measured: the soft equal-area constraint rejected at N=100 — 32× faster and 0 dead cells, but 3–4/100 fragmented cells and a collapsed line search at every level; confirms §9b's locality criterion as a *predictive* screening test), and
+`05-soft-area-constraint/` (measured: the soft equal-area constraint rejected at N=100 — 32× faster and 0 dead cells, but 3–4/100 fragmented cells and a collapsed line search at every level; confirms §9b's locality criterion as a *predictive* screening test. Its **exact-at-level-0 hybrid survives**: 6.83× with all gates passing and Phase 2 within +0.246% of the control — but only via the balanced readout, which it requires), and
 `04-territory-aware-highn-validation/` (measured/partial: the WTA balance term drives the
 N=200 bad-seed runt from −34% to 0 imbalanced cells by level 1, `run_20260717_102306`; plus
 the no-refinement-trigger diagnosis — the trim removes the energy plateau — and the coarse-level

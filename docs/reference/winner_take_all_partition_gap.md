@@ -383,15 +383,32 @@ raising `ψ_k` in `argmax_k[log u_ik + ψ_k]` grows a cell monotonically outward
 from its core, which is why it relabels 1,840 vertices at N=300 for +1.9%
 boundary while the trim manufactured islands.
 
-**A gate-valid partition is not necessarily Phase-2-ready.** The A2 hybrid
-(exact treatment at level 0, soft above it) passes all three gates — 0 dead,
-0 imbalanced at 1.21%, **0 fragmented** — with a *better* extracted perimeter than
-the control (213.23 vs 214.34) and a Phase 2 problem of near-identical structure
-(14,623 variable points / 200 triple points vs 14,641 / 200). Phase 2 nonetheless
-aborts at iteration 1 with `EXIT: Restoration Failed!`. Whatever the fine mesh
-levels contribute that Phase 2 depends on, **the three validity gates do not
-measure it** — they are necessary, not sufficient. Unexplained as of 2026-08-12
-and worth remembering before treating a gate pass as a green light.
+**The starting constraint violation predicts whether Phase 2 will descend, and
+the readout controls it.** Phase 2's iteration-0 max constraint violation is the
+winner-take-all worst-cell area deviation times the target area `Ā`, measured to
+within 3% on every run tried:
+
+| solution | worst cell | predicted | Phase 2 reported | outcome |
+|---|---|---|---|---|
+| N=100 control, raw | 0.78% | 1.85e-3 | 1.85e-3 | 20 iterations, converges |
+| N=100 A2 hybrid, raw | 1.21% | 2.87e-3 | 2.87e-3 | **`Restoration Failed!` in 8 s** |
+| N=100 A2 hybrid, after readout | 0.20% | 4.74e-4 | 4.59e-4 | 20 iterations, converges |
+| N=300 three-level, after readout | — | — | 1.31e-3 | converges |
+| N=300 five-level, after readout | — | — | 5.09e-4 | converges |
+
+A 1.55× larger starting violation was the entire difference between a clean
+20-iteration descent and a restoration failure in eight seconds — on partitions
+that are otherwise near-identical (14,623 variable points / 200 triple points vs
+14,641 / 200, and the *better* extracted perimeter belongs to the one that
+aborted). So **passing the three gates is necessary but not sufficient**: the
+gates are pass/fail at 5%, while Phase 2 cares about the worst cell to a
+fraction of a percent. Compute `worst_rel_dev × Ā` before starting Phase 2; if it
+is not comfortably under ~2e-3 at N=100 scale, run the balanced readout first.
+
+**This makes the readout a required stage of any fast Phase 1 path, not an
+optional repair.** The A2 hybrid fails outright on the raw path and succeeds
+through the readout; it does not get to claim the speedup without the
+dependency.
 
 **A corollary worth keeping.** Both failures were also invisible in their headline
 metrics — the trim's area numbers looked excellent, and A2 was "32× faster with no
