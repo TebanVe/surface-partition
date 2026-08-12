@@ -22,9 +22,11 @@ from .projection import (
 _LOG_WINDOW_CAP = 8192
 
 # Consecutive rejected iterations before the line search is declared stalled.
-# Well above any legitimate run of hard iterations, well below the hundreds a
-# genuinely dead search racks up.
-_STALL_WARN_AFTER = 50
+# MUST sit below the gap between the step collapsing and the energy trigger
+# firing, or the warning never gets a chance to print: measured on the
+# soft-area levels that gap is only 22-29 iterations, and an initial value of
+# 50 was silent on exactly the runs it was written for.
+_STALL_WARN_AFTER = 15
 
 
 class ProjectedGradientOptimizer:
@@ -288,6 +290,29 @@ class ProjectedGradientOptimizer:
 			dev = self.v @ phi - self.target_area
 			G += (self.soft_area_mu / (self.target_area ** 2)) * np.outer(self.v, dev)
 		return g
+
+	def _warn_if_stalled(self, k, n_rejected_run, step, E) -> None:
+		"""Flag a refinement trigger that is firing on a dead line search.
+
+		The energy-plateau trigger cannot tell a frozen energy from a converged
+		one. Measured on the soft-area arm, EVERY level's line search collapsed
+		and the trigger then fired 22-29 iterations later, reporting the failure
+		as convergence -- which is how a dead optimizer masqueraded as a 32x
+		speedup for a day. Unlike the _STALL_WARN_AFTER counter, this check is
+		threshold-independent: if ANY step was rejected in the run-up to the
+		trigger, it says so at the moment the trigger fires, which is the one
+		place the message cannot be outrun.
+		"""
+		if n_rejected_run <= 0:
+			return
+		self.logger.warning(
+			f"REFINEMENT TRIGGER FIRING ON A STALLED LINE SEARCH at iteration "
+			f"{k}: the last {n_rejected_run} iteration(s) accepted no step "
+			f"(step floored at {step:.3e}, E={E:.10f}). The energy is frozen "
+			f"because the optimizer is stuck, not because it converged -- this "
+			f"level's iteration count is a failure point, not a cost. Treat any "
+			f"speedup measured against it as unearned."
+		)
 
 	def constraint_fun(self, x: np.ndarray) -> np.ndarray:
 		"""Residuals of the constraints actually ENFORCED on the feasible set.
@@ -689,6 +714,7 @@ class ProjectedGradientOptimizer:
 					stable = all(abs(de) < self.refine_delta_energy for de in recent)
 					if stable:
 						if refine_trigger_mode == 'energy':
+							self._warn_if_stalled(k, n_rejected_run, step, E)
 							self.logger.info(f"Refinement triggered at iteration {k} (energy criterion)")
 							raise RefinementTriggered()
 						else:
@@ -704,6 +730,7 @@ class ProjectedGradientOptimizer:
 								fe_plateau = all(abs(recent_f[i] - recent_f[i-1]) < refine_feas_delta for i in range(1, len(recent_f)))
 								fe_ok = fe_ok or fe_plateau
 							if gn_ok and fe_ok:
+								self._warn_if_stalled(k, n_rejected_run, step, E)
 								self.logger.info(f"Refinement triggered at iteration {k}")
 								raise RefinementTriggered()
 				if profile is not None:

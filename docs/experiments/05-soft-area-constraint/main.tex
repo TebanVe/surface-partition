@@ -52,15 +52,16 @@ All numbers below are measured at \(N{=}100\) against a matched control that was
 already a validated deliverable. Both defects are measured, not inferred. The
 approach is closed: the code remains on the branch behind a default-off flag
 (\code{soft\_area\_constraint}) as the record, and should not be enabled.
-\textbf{One narrower variant remains open} at the time of writing (exact
-treatment at level~0, soft from level~1); \S\ref{sec:hybrid} states what it does
-and does not escape.
+The one narrower variant (exact treatment at level~0, soft from level~1) has
+since also been measured and closed: it removes the fragmentation entirely at
+\(6.83\times\) and passes all three gates, but Phase~2 still aborts. See
+\S\ref{sec:hybrid}.
 \end{tcolorbox}
 
 \begin{tcolorbox}[colback=gray!4!white, colframe=gray!50!black,
                   title={Provenance}, fontupper=\small]
 \begin{tabular}{@{}l@{\hspace{1.5em}}p{0.68\linewidth}@{}}
-Date & 2026-08-10 / 2026-08-11 \\
+Date & 2026-08-10 / 2026-08-11; hybrid variant 2026-08-12 \\
 Surface & torus \(T(R{=}1.0,\, r{=}0.6)\), \(N{=}100\), \(\lambda{=}5.1\),
   seed \(84172851\), seeded init, 5 levels
   (\(100{\times}96 \to 348{\times}328\), \(V{=}114{,}144\)) \\
@@ -318,7 +319,7 @@ moving. A guard now warns when no step is accepted for 50 consecutive iterations
 (\codefile{src/optimization/pgd\_optimizer.py}), so this failure cannot again be
 mistaken for a speedup.
 
-\section{What remains open}
+\section{The hybrid variant --- also closed}
 \label{sec:hybrid}
 
 One variant is not refuted by the above: run level~0 on the \emph{exact}
@@ -330,11 +331,48 @@ treatment are gated together deliberately --- penalty \emph{and} projection ---
 since they are separate defects and swapping only one would carry the other into
 the level it was built to protect.
 
-Its prognosis is nonetheless poor, and for a reason this report already
-establishes: levels 1--4 keep the Euclidean projection and therefore defect~(2),
-so they should collapse after 150--250 iterations each and do almost no
-refinement. The measurement is cheap (\(\approx\)2~h) and is being run to convert
-that prediction into a number.
+\paragraph{Measured (2026-08-12).} The prediction held on the mechanism and the
+result is more interesting than expected.
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & control & A2 & hybrid \\
+\midrule
+Phase~1 wall & \(48{,}132\)~s & \(1{,}497\)~s & \(\mathbf{7{,}044}\)~s (\(6.83\times\)) \\
+level-0 line search & healthy & collapses @2{,}548 & \textbf{never collapses} \\
+levels 1--4 collapse at & --- & 257/182/154/232 & 425/130/150/228 \\
+dead / weak & 0 / 0 & 0 / 0 & 0 / 0 \\
+imbalanced (worst) & 0 (0.78\%) & 0 (1.47\%) & 0 (1.21\%) \\
+\textbf{fragmented} & \textbf{0} & \textbf{3} & \(\mathbf{0}\) \\
+initial perimeter & 214.34 & 216.79 & \textbf{213.23} \\
+Phase~2 & 185.2546 (20 iters) & abort @3 & \textbf{abort @1} (187.34) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Two findings. First, \textbf{it confirms \S\ref{sec:defect1} directly}: making
+level~0 exact removes the fragmentation entirely (\(0\) cells, no raw components
+at all), so the splits really are born at level~0 and inherited, and the hybrid
+passes all three validity gates at \(6.83\times\) --- better than the
+\(\approx\)3.8\(\times\) predicted, because the collapsing fine levels are
+\emph{cheap} as well as useless. Second, levels 1--4 collapsed exactly as
+predicted (after 130--425 iterations), so they contribute almost no refinement,
+and \textbf{Phase~2 still aborts} --- at iteration~1, \code{Restoration Failed!}.
+
+That last point is not explained by anything measured here and is stated as an
+open residual rather than a conclusion: the partition handed to Phase~2 is
+structurally near-identical to the control's (14{,}623 variable points and 200
+triple points against 14{,}641 and 200), passes all three gates, and has a
+\emph{better} extracted perimeter (213.23 vs 214.34) --- yet IPOPT cannot restore
+feasibility from it. Whatever Phase~2 needs from the fine levels, the three
+Phase~1 validity gates do not measure it.
+
+\paragraph{Verdict.} A valid partition at \(6.83\times\) that Phase~2 cannot
+refine is not a usable pipeline, so the variant is closed with the rest of A2.
+What survives is the confirmation that fragmentation is a level-0 phenomenon,
+and the observation that the gates are not sufficient to certify a Phase~1
+solution as Phase-2-ready.
 
 \section{Conclusions}
 \label{sec:conclusions}

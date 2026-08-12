@@ -383,6 +383,16 @@ raising `ψ_k` in `argmax_k[log u_ik + ψ_k]` grows a cell monotonically outward
 from its core, which is why it relabels 1,840 vertices at N=300 for +1.9%
 boundary while the trim manufactured islands.
 
+**A gate-valid partition is not necessarily Phase-2-ready.** The A2 hybrid
+(exact treatment at level 0, soft above it) passes all three gates — 0 dead,
+0 imbalanced at 1.21%, **0 fragmented** — with a *better* extracted perimeter than
+the control (213.23 vs 214.34) and a Phase 2 problem of near-identical structure
+(14,623 variable points / 200 triple points vs 14,641 / 200). Phase 2 nonetheless
+aborts at iteration 1 with `EXIT: Restoration Failed!`. Whatever the fine mesh
+levels contribute that Phase 2 depends on, **the three validity gates do not
+measure it** — they are necessary, not sufficient. Unexplained as of 2026-08-12
+and worth remembering before treating a gate pass as a green light.
+
 **A corollary worth keeping.** Both failures were also invisible in their headline
 metrics — the trim's area numbers looked excellent, and A2 was "32× faster with no
 dead cells". **Check connectivity first**, before speed and before area:
@@ -470,7 +480,7 @@ finer mesh did not help.
 | Lever | Effect on **dormant** | Effect on **runt** | Verdict |
 |---|---|---|---|
 | **Territory-aware machinery** (WTA balance term + discrete-area trim) | n/a | drives worst abs deviation down hard (N=200 level ends 12.7% → 8.3% → 5.4%) | **rejected and removed** ❌ — fixes area, creates splits: 14/200 fragmented, ~20-day ladder (§4b); enforces *total* area, not connectivity |
-| **Soft continuous area constraint** ("A2": quadratic penalty + closed-form simplex projection) | n/a | holds it (worst 1.47%) | **rejected and removed from use** ❌ — 32× faster and 0 dead cells, but 3–4/100 fragmented and every level died in a collapsed line search; see §4c and `docs/experiments/05-soft-area-constraint/` |
+| **Soft continuous area constraint** ("A2": quadratic penalty + closed-form simplex projection) | n/a | holds it (worst 1.47%) | **rejected** ❌ — 32× faster and 0 dead cells, but 3–4/100 fragmented and every level died in a collapsed line search. Its exact-at-level-0 hybrid fixes connectivity (0 fragmented, all gates pass, 6.83×) and Phase 2 *still* aborts. See §4c and `docs/experiments/05-soft-area-constraint/` |
 | **Balanced readout** (semi-discrete OT dual + connectivity repair, at extraction) | not measured on a dead cell (none in the test runs); the dual grows a zero-area cell in principle, but the seeded init already prevents them | **fixes it** — exact, by construction, to one-vertex granularity at any N | **the answer** ✅ — §9b; 10/300 → 0 imbalanced, 2 → 0 fragmented, +1.9% boundary, ~17 s |
 | **Energy discretization fix** (`u²(1−u)²`→`u(1−u)`) | n/a | **root cause** — the coded well was ~25× too weak, under-pricing the halo *and* leaving λ inert; correcting it is what makes the runt fixable | **the fix** ✅ |
 | λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
