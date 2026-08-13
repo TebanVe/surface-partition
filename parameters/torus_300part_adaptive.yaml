@@ -96,8 +96,9 @@ relaxation:
   pgd_step0: 1.0
   pgd_armijo_c: 0.0001
   pgd_backtrack_rho: 0.5
-  pgd_projection_max_iter: 200
-  pgd_projection_tol: 1.0e-10
+  pgd_projection_max_iter: 300     # control value; 200 is too few at N=300
+  pgd_projection_tol: 1.0e-8       # control value; 1e-10 is unreachable here and
+                                   # the entry projection raises above 10*tol
 
   enable_refinement_triggers: true
   refine_trigger_mode: full
@@ -137,3 +138,9 @@ refinement:
   lbfgs_memory: 30
   exact_hessian: true
   best_iterate: true
+  # Matches the control's Phase 2 campaign
+  # (ipopt_btol0.001_lbfgs30_hess_bestiter_partial), so the two are directly
+  # comparable. It also matters on its own terms here: without it a non-fatal
+  # optimizer status ends the refinement instead of continuing to migration,
+  # which is how the hybrid's raw-path run stopped at 3 iterations.
+  allow_partial_convergence: true
