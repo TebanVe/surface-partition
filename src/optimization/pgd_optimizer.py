@@ -58,6 +58,9 @@ class ProjectedGradientOptimizer:
 		struct_gate_window: int = 500,
 		struct_gate_rate_tol: float = 1e-5,
 		struct_sample_stride: int = 500,
+		soft_area_adaptive: bool = False,
+		soft_switch_window: int = 500,
+		soft_switch_rate_tol: float = 1e-5,
 		logger=None,
 	):
 		self.logger = logger or get_logger(__name__)
@@ -156,6 +159,32 @@ class ProjectedGradientOptimizer:
 		self.struct_gate_enabled = bool(struct_gate_enabled)
 		self.struct_gate_window = int(struct_gate_window)
 		self.struct_gate_rate_tol = float(struct_gate_rate_tol)
+		# Adaptive (within-level) switch from the exact treatment to the soft
+		# one. This is the interface that replaces a hand-set level index.
+		#
+		# Why within-level and not per-level: EVERY level starts with high label
+		# churn (the interpolation onto a finer mesh unsettles the field) and
+		# decays. Measured on the N=300 control, flips per iteration per vertex:
+		#   L2  1.4e-4 -> 1.1e-6 over 6,658 iterations
+		#   L3  6.5e-5 -> 8.8e-7 over 3,838
+		#   L4  4.3e-5 -> 4.6e-7 over 2,247
+		# so a "was the previous level settled?" test answers YES at the end of
+		# every level and would turn the whole ladder soft -- which is plain A2,
+		# which fragments. The decision has to be made inside the level.
+		#
+		# The rule: run EXACT while this level's structure is still forming,
+		# switch to SOFT once churn falls below soft_switch_rate_tol over
+		# soft_switch_window iterations, and keep soft for the rest of the
+		# level. Fixed, N-independent rule; data-driven switch point -- the same
+		# contract as the structure trigger, and the reason it can be validated
+		# at one problem size and applied at another. At 1e-5 the switch would
+		# land at L2 iter 4,500, L3 1,500, L4 1,000 on the run above.
+		self.soft_area_adaptive = bool(soft_area_adaptive)
+		self.soft_switch_window = int(soft_switch_window)
+		self.soft_switch_rate_tol = float(soft_switch_rate_tol)
+		# Set when the adaptive switch fires, for the caller's records.
+		self.soft_switch_iteration = None
+
 		# Evaluate the structure signal on this stride. Default 500 = the
 		# h5_save_stride the offline replay used, so the live rule and the
 		# validated rule are the same rule.
@@ -290,6 +319,25 @@ class ProjectedGradientOptimizer:
 			dev = self.v @ phi - self.target_area
 			G += (self.soft_area_mu / (self.target_area ** 2)) * np.outer(self.v, dev)
 		return g
+
+	def _calibrate_soft_area_mu(self, g: np.ndarray, rho: float = 0.05) -> float:
+		"""Pick mu at the switch point, from the iterate actually in hand.
+
+		Same rule as testing/calibrate_soft_area_mu.py -- the penalty force reaches
+		parity with the base energy's ||g||_inf at a relative area deviation of
+		`rho` (default 5%, the discrete-area gate threshold):
+		    mu = ||g||_inf * Abar / (v_max * rho).
+
+		Computing it here rather than in the config removes the last parameter
+		that would otherwise have to be known in advance. mu is not N-invariant
+		(it scales with vertices-per-cell) and it is not level-invariant either,
+		so a value calibrated at level 0 is the wrong scale for level 3. Taken at
+		the switch, on the current mesh and the current gradient, it is right by
+		construction at every level and every N.
+		"""
+		g_inf = float(np.abs(g).max())
+		v_max = float(np.max(self.v))
+		return g_inf * self.target_area / max(v_max * rho, np.finfo(np.float64).tiny)
 
 	def _warn_if_stalled(self, k, n_rejected_run, step, E) -> None:
 		"""Flag a refinement trigger that is firing on a dead line search.
@@ -480,6 +528,23 @@ class ProjectedGradientOptimizer:
 			# Seeded at step0 so iteration 0 is identical to the hard-reset version.
 			prev_step = float(step0)
 
+			# Consecutive iterations with no accepted step (dead line search),
+			# and one-shot warning latch for it.
+			n_rejected_run = 0
+			stall_warned = False
+
+			if self.soft_area_adaptive:
+				# Every level begins on the exact treatment; the switch below
+				# decides when this level's structure has settled enough to hand
+				# the rest of the level to the cheap one.
+				self.soft_area_constraint = False
+				self.soft_switch_iteration = None
+				self.logger.info(
+					f"Area treatment: EXACT (adaptive) -- will switch to SOFT when "
+					f"label churn falls below {self.soft_switch_rate_tol:.1e} "
+					f"flips/iter/vertex over {self.soft_switch_window} iterations"
+				)
+
 			# Structure-trigger state: previous winner-take-all label field and
 			# a rolling per-iteration flip count over the confirmation window.
 			# Structure signal, SAMPLED every struct_sample_stride iterations --
@@ -491,18 +556,21 @@ class ProjectedGradientOptimizer:
 			# to it. Sampling also makes the signal free (one argmax per stride:
 			# 17.2 ms at V=114k/N=300 against a 43.6 s iteration).
 			_track_labels = (self.struct_trigger_enabled
-			                 or self.struct_gate_enabled)
+			                 or self.struct_gate_enabled
+			                 or self.soft_area_adaptive)
 			S = max(1, int(self.struct_sample_stride))
 			# History in SAMPLES, and the effective windows those samples span.
 			n_trig = max(1, int(round(self.struct_window / S)))
 			n_gate = max(1, int(round(self.struct_gate_window / S)))
+			n_switch = max(1, int(round(self.soft_switch_window / S)))
+			eff_switch_window = n_switch * S
 			eff_trig_window = n_trig * S
 			eff_gate_window = n_gate * S
 			prev_labels = None
 			label_changes = None
 			struct_gate_open = not self.struct_gate_enabled
 			if _track_labels:
-				label_changes = deque(maxlen=max(n_trig, n_gate))
+				label_changes = deque(maxlen=max(n_trig, n_gate, n_switch))
 				prev_labels = np.argmax(x.reshape(N, n), axis=1)
 				if S != self.struct_sample_stride or eff_trig_window != self.struct_window:
 					self.logger.info(
@@ -655,6 +723,14 @@ class ProjectedGradientOptimizer:
 					self.logger.info(f"  Iteration {k}: Energy={E:.12e}")
 					self.logger.info(f"    GNORM={gnorm_post:.6e}, FEAS={feas_post:.6e}, STEP={step:.3e}")
 					areas_log = self.v @ x.reshape(N, n)
+					if _track_labels and label_changes:
+						_last = label_changes[-1]
+						self.logger.info(
+							f"    label churn: {_last} flips / {N} vertices in "
+							f"the last {S} iters (rate {_last/(S*N):.2e}); "
+							f"treatment="
+							f"{'SOFT' if self.soft_area_constraint else 'EXACT'}"
+						)
 					self.logger.info(f"    Target area per partition: {self.target_area:.6e}")
 					if self.soft_area_constraint:
 						# FEAS above covers sum-to-one only; area is soft now, so
@@ -671,6 +747,48 @@ class ProjectedGradientOptimizer:
 					_t_tc = time.perf_counter()
 				# Structure gate and stuck detector, both re-evaluated only when a
 				# new sample lands; the decision persists in between.
+				# --- adaptive exact -> soft switch (within this level) ---------
+				if (self.soft_area_adaptive
+						and not self.soft_area_constraint
+						and _track_labels and ((k + 1) % S == 0)
+						and len(label_changes) >= n_switch):
+					recent_sw = sum(list(label_changes)[-n_switch:])
+					sw_budget = (self.soft_switch_rate_tol * N
+					             * eff_switch_window)
+					sw_rate = recent_sw / max(1.0, eff_switch_window * N)
+					if recent_sw <= sw_budget:
+						if self.soft_area_mu <= 0.0:
+							self.soft_area_mu = self._calibrate_soft_area_mu(g)
+							mu_note = "auto-calibrated at the switch"
+						else:
+							mu_note = "from config"
+						self.soft_area_constraint = True
+						self.soft_switch_iteration = k
+						# The objective gains a term, so the running energy and
+						# the carried gradient are both stale. Re-baseline both
+						# before the next Armijo test, and clear the trigger's
+						# trailing windows so the step change in E is not read
+						# as a plateau (or as its opposite).
+						E = self.compute_energy(x)
+						g = self.compute_gradient(x)
+						prev_step = float(step0)
+						self.log['energy_changes'].clear()
+						self.log['gnorm'].clear()
+						self.log['feas'].clear()
+						best_E = E
+						best_x = x.copy()
+						self.logger.warning(
+							f"ADAPTIVE SWITCH -> SOFT at iteration {k}: "
+							f"{recent_sw} label flips over the last "
+							f"{eff_switch_window} iterations "
+							f"(rate {sw_rate:.2e} < {self.soft_switch_rate_tol:.1e} "
+							f"flips/iter/vertex). This level's structure has "
+							f"settled; the remainder runs on the soft area "
+							f"penalty (mu={self.soft_area_mu:.1f}, {mu_note}) "
+							f"with the closed-form simplex projection. Energy "
+							f"re-baselined to {E:.10f}."
+						)
+
 				if _track_labels and ((k + 1) % S == 0):
 					if self.struct_gate_enabled:
 						if len(label_changes) >= n_gate:

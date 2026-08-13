@@ -716,7 +716,23 @@ Three things to know before using it:
    permanently above `refine_constraint_tol` and silently change what the
    refinement trigger tests. Area drift is reported by
    `ProjectedGradientOptimizer.area_deviation()` and in each progress log line.
-3. **`μ` is calibrated per config, and is not N-invariant** (it scales with
+3. **Adaptive switching (`soft_area_adaptive`) is the interface that transfers.**
+   A hand-set `soft_area_from_level` has to be read off a *finished* run, which
+   makes it useless at the problem size you actually care about. Adaptive mode
+   starts every level EXACT and switches to SOFT inside the level once its own
+   label churn drops below `soft_switch_rate_tol` (default 1e-5) over
+   `soft_switch_window` (500) — fixed rule, data-driven switch point, the same
+   contract as the structure trigger. It **must** be within-level: every level
+   starts churning (interpolation onto a finer mesh unsettles the field) and
+   decays, so a "was the previous level settled?" test answers yes at the end of
+   every level and turns the whole ladder soft. Leave `soft_area_mu: 0` and it is
+   calibrated at the switch from the iterate in hand, since μ is neither N- nor
+   level-invariant. **In practice the soft phase collapses within ~50–70
+   iterations of the switch**, so the rule behaves as "end the level once its
+   structure has settled" and the saving comes from stopping early rather than
+   from cheap iterations. Validation config:
+   `parameters/torus_300part_adaptive_resume.yaml`.
+4. **`μ` set by hand is calibrated per config, and is not N-invariant** (it scales with
    vertices-per-cell). Use `testing/calibrate_soft_area_mu.py --config <cfg>`:
    it picks the μ at which the penalty force reaches parity with the base
    energy's `‖g‖_∞` at a 5% relative area deviation (the discrete-area gate

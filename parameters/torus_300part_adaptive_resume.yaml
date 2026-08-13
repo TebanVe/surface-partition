@@ -1,0 +1,127 @@
+# ============================================================================
+# N=300 VALIDATION OF THE ADAPTIVE AREA-TREATMENT SWITCH  (resume arm)
+#
+# WHAT THIS TESTS. Not a speedup number -- a RULE. The switch decides inside
+# each level, from label churn measured during the run, when that level's
+# winner-take-all structure has settled and the rest of it can be handed to the
+# cheap soft-area treatment. Nothing here is set from a completed run: the
+# switch point is data-driven and soft_area_mu is calibrated at the switch from
+# the iterate in hand. That is the whole point -- a rule that needs a finished
+# run to configure is useless at N=1000, which is the only run that matters.
+#
+# WHY A RESUME. This arm resumes from the SAME level-2 checkpoint the control
+# resumed from, so levels 0-2 are inherited verbatim and the comparison is
+# matched exactly rather than merely configured the same. It isolates the
+# 57.32 h half of the N=300 ladder, which is where the cost is.
+#
+#   control (exact, levels 3-4)  run_20260808_191030   206,344 s = 57.32 h
+#     level 3  3,838 iterations  108,333 s
+#     level 4  2,247 iterations   98,011 s
+#   after readout: 0 imbalanced / 0 fragmented, worst 0.64%, +1.85%, 0 blocked
+#   Phase 2: 19 iterations, perimeter 322.9622   <-- the number to beat
+#
+# WHAT THE RULE PREDICTS. On the control's own churn traces, a 1e-5 threshold
+# over a 500-iteration window lands at level 3 iteration ~1,500 (of 3,838) and
+# level 4 iteration ~1,000 (of 2,247). If the run switches near those points,
+# the rule reproduced -- unaided -- an answer we can only check because this
+# problem size happens to have a finished control.
+#
+# WHAT TO WATCH FOR (all three are pre-registered failure conditions):
+#   1. fragmented cells != 0                      -> the switch fires too early
+#   2. readout strain with blocked moves, or
+#      double-digit boundary cost                 -> geometry damaged
+#   3. Phase 2 perimeter materially above 322.9622 (decide the tolerance BEFORE
+#      you look; +0.246% was acceptable at N=100)
+#
+# HONEST NOTE ON THE MECHANISM. Measured at N=30, the soft phase does not run
+# cheaply for long -- its line search collapses within ~50-70 iterations of the
+# switch and the level then ends. So in practice this rule behaves as "stop the
+# level once its structure has settled", and the saving comes from ending each
+# level early rather than from cheap iterations. The quality question is
+# therefore whether the iterations after churn < 1e-5 were worth anything.
+# The stall guard reports the collapse explicitly so it cannot be mistaken for
+# convergence.
+#
+# HOW TO RUN (from the repo root; --resume-from only READS the other worktree):
+#
+#   CTRL=/Users/teban/Development/projects/surface-partition-territory/results/run_20260806_123326_surftorus_npart300_v1nt100-224_incr62_v2np96-212_incr58_lam11.5_seed61803399
+#   OMP_NUM_THREADS=2 python scripts/find_surface_partition.py \
+#     --config parameters/torus_300part_adaptive_resume.yaml \
+#     --resume-from $CTRL/solution/surface_part300_surftorus_v1nt100-224_incr62_v2np96-212_incr58_lam11.5_seed61803399_20260806_123326.h5 \
+#     --profile 2>&1 | tee n300_adaptive.log
+#
+# Then, in a second terminal, watch the decisions as they happen:
+#   tail -f n300_adaptive.log | grep -E "Refinement Level|Area treatment|label churn|ADAPTIVE SWITCH|STALLED|Refinement triggered|WARNING"
+# ============================================================================
+
+experiment:
+  name: torus-300-adaptive-resume
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 11.5
+  seed: 61803399
+  init_method: seeded
+  max_iter: 30000
+  refinement_levels: 5          # resume starts at level 3; levels 0-2 inherited
+
+  # --- the rule under test -------------------------------------------------
+  soft_area_constraint: true    # enables the treatment; adaptive owns the timing
+  soft_area_adaptive: true      # each level starts EXACT, switches on the signal
+  soft_switch_window: 500       # churn window for the switch decision
+  soft_switch_rate_tol: 1.0e-5  # flips per iteration per vertex
+  soft_area_mu: 0.0             # 0 = calibrate at the switch from the iterate
+  struct_sample_stride: 500     # the granularity the rule was validated at
+
+  # Structure trigger left OFF here: validated silent on every N=300 level, so
+  # it would contribute nothing and only add a variable to the comparison.
+  struct_trigger_enabled: false
+
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 100
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  checkpoint_per_level: true
+
+surface:
+  torus:
+    n_theta: 100
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true

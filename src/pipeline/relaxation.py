@@ -108,6 +108,23 @@ class RelaxationConfig:
     # projection.
     soft_area_from_level: Optional[int] = None
 
+    # ADAPTIVE within-level switch -- the interface that replaces the hand-set
+    # level index above, and the only one that transfers to a problem size you
+    # have not run yet. Each level starts EXACT and switches to SOFT once its
+    # own label churn falls below soft_switch_rate_tol over soft_switch_window
+    # iterations. Fixed rule, data-driven switch point.
+    #
+    # It must be within-level: every level starts churning (interpolation onto
+    # a finer mesh unsettles the field) and decays, so a "was the last level
+    # settled?" test says yes at the end of every level and turns the whole
+    # ladder soft. Leave soft_area_mu at 0 to have it calibrated at the switch
+    # from the iterate in hand -- mu is neither N- nor level-invariant, so a
+    # config-time value is the wrong scale everywhere except where it was
+    # measured.
+    soft_area_adaptive: bool = False
+    soft_switch_window: int = 500
+    soft_switch_rate_tol: float = 1e-5
+
     # Structure-based refinement trigger (stuck detector). Default OFF.
     # Fires when the winner-take-all label field has been frozen for
     # `struct_window` iterations, at a flip rate under `struct_rate_tol` per
@@ -577,7 +594,17 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
 
     # Soft-area treatment for THIS level (penalty + simplex projection together).
     soft_here = bool(config.soft_area_constraint)
-    _from = getattr(config, 'soft_area_from_level', None)
+    if bool(getattr(config, 'soft_area_adaptive', False)):
+        # Adaptive mode owns the decision inside the optimizer; the level gate
+        # is bypassed entirely so the two cannot disagree.
+        soft_here = True
+        logger.info(
+            f"  Level {level+1} area treatment: ADAPTIVE "
+            f"(starts EXACT, switches to SOFT on the structure signal)"
+        )
+        _from = None
+    else:
+        _from = getattr(config, 'soft_area_from_level', None)
     if soft_here and _from is not None and int(_from) >= 0:
         soft_here = level >= int(_from)
         logger.info(
@@ -604,6 +631,9 @@ def _setup_level(provider, config, level, logger, profile=None) -> dict:
         struct_gate_window=int(config.struct_gate_window),
         struct_gate_rate_tol=float(config.struct_gate_rate_tol),
         struct_sample_stride=int(config.struct_sample_stride),
+        soft_area_adaptive=bool(config.soft_area_adaptive),
+        soft_switch_window=int(config.soft_switch_window),
+        soft_switch_rate_tol=float(config.soft_switch_rate_tol),
         logger=logger,
     )
     if hasattr(optimizer, 'penalty_target_mode'):
