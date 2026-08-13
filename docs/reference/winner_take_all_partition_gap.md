@@ -355,6 +355,11 @@ same way:
 |---|---|---|
 | Discrete-area trim (§4b) | retargets the projection's per-cell area targets `d`; the **projection** (rank-one + renormalise) delivers the mass | 14/200 fragmented vs 0/200 matched control |
 | Soft area penalty, "A2" (`docs/experiments/05-soft-area-constraint/`) | adds `(μ/Ā²)·v_i·(v·u_k − Ā)` to the gradient — a **uniform per-cell field** | 3–4/100 fragmented vs 0/100 matched control; readout repair costs +22% boundary and breaks Phase 2 |
+| Adaptive switch to that penalty, N=300 | the same `np.outer(v, dev)` push, applied later in the level | imbalance 10→4 and worst dev 36%→15% — bought by shattering cell 299 into **28 components** (10 significant, 28.4% stray); 3 fragmented vs the control's 2 |
+
+**Three for three.** This is no longer a screening test to apply when convenient —
+treat it as a **hard gate**: no mechanism gets an experimental arm until it can
+state which operator carries the correction and why that operator is local.
 
 In both cases the correction is *nonlocal*: it reaches every part of a cell at
 once. A cell short on area is therefore grown wherever it already has any
@@ -420,6 +425,14 @@ healthy signature (N=300: 1,485 moves, 1 blocked, +1.85%), while blocked moves
 plus double-digit boundary cost means the relaxation handed it something broken
 (A2: 13,540 moves, 213 blocked, +22.0%, sweep cap hit).
 
+**An early warning that is cheap and was missed.** In the N=300 adaptive run the
+label churn fell to 5.22e-06, the switch fired on that, and churn then **rose
+back to 1.14e-05** — above the very threshold that had just declared the
+structure settled. That was not noise; it was cell 299 coming apart, and it was
+visible ~40 minutes before the level ended. **Post-switch churn climbing back
+above the switch threshold means the structure was not settled after all**, and
+any mechanism with a settle-detecting switch should revert or abort on it.
+
 **And a diagnostic for the optimizer itself.** A2's speedup was inflated by
 *every* level dying in a collapsed line search — no step accepted, energy frozen
 bit-identically, the energy-plateau trigger then firing on the frozen energy and
@@ -427,8 +440,17 @@ reporting convergence. Two tells distinguish a dead optimizer from a converged
 one: winner-take-all label churn that is **exactly** zero rather than small, and
 per-iteration cost that *rises* at the moment progress stops (convergence gets
 cheaper; a collapsing line search backtracks ~40 times per iteration). A guard in
-`src/optimization/pgd_optimizer.py` now warns after 50 consecutive rejected
-iterations.
+`src/optimization/pgd_optimizer.py` warns after 15 consecutive rejected
+iterations and, threshold-independently, whenever a refinement trigger fires
+with any run of rejected steps behind it.
+
+That guard also revealed the collapse is **not** unique to the cheap projection:
+at N=300 the *control's* levels 0 and 1 — pure exact treatment — stall at
+iterations 31 and 41 and end at 47 and 57 with the step floored at 9.095e-13.
+Those counts were never a convergence signal. At 32 and 83 vertices per cell
+they are far below the resolution floor, so a collapsed line search is also what
+an **under-resolved level** does. At N=100 the exact level 0 never collapsed
+across 30,000 iterations, so it is resolution-dependent, not universal.
 
 ## 5. Results analysis — where the runt comes from (Step 0)
 

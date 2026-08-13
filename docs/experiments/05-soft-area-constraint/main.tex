@@ -437,6 +437,115 @@ fine levels collapse and do no refinement, so the perimeter cost of skipping
 that refinement should be re-measured at \(N{=}300\) before the speedup is
 relied on.
 
+\section{Third attempt --- the adaptive switch, also rejected}
+\label{sec:adaptive}
+
+\(\code{soft\_area\_from\_level}\) has to be read off a \emph{finished} run,
+which makes it useless at the problem size that matters. The replacement decides
+during the run: each level starts exact and switches to soft once that level's
+own label churn falls below \(10^{-5}\) flips per iteration per vertex over 500
+iterations, with \(\mu\) calibrated at the switch from the iterate in hand. Fixed
+rule, data-driven switch point --- the same contract as the structure trigger,
+and the reason it could in principle be validated at one size and used at
+another.
+
+\paragraph{The calibration worked.} Replaying the rule offline on the control's
+churn traces predicted a level-2 switch at \(\approx\)4{,}250; the live run fired
+at \textbf{4{,}499}, before an hour of compute was spent. That answers the
+objection that in-experiment calibration is worthless: it need not be.
+
+\paragraph{The mechanism did not.} Graded at \code{checkpoint\_level03.h5}
+against the control's final solution --- same mesh (\(224\times212\)), seed and
+\(\lambda\), so like-for-like:
+
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & control & adaptive \\
+\midrule
+imbalanced (worst) & 10 (36.15\%) & \textbf{4 (15.36\%)} \\
+\textbf{fragmented} & \textbf{2} (274, 290) & \textbf{3} (274, 290, \textbf{299}) \\
+cell 299 & intact, a runt & \textbf{28 components}, 10 significant, stray 28.4\% \\
+cell 290 & 2 components, stray 4.1\% & 7 components, 5 significant, stray 23.7\% \\
+level-2 wall & 21.55~h & 15.08~h (\(1.43\times\)) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The penalty did exactly what it was built to do --- imbalance \(10\to4\), worst
+deviation \(36\%\to15\%\) --- and bought it by shattering the worst runt into 28
+pieces. \textbf{That is the wrong trade, and the asymmetry is the whole
+argument}: area imbalance is free to fix (the readout corrects it at any \(N\)
+in seconds, on three runs), while fragmentation is fixable only while the damage
+is small --- 2 fragmented cells cost 3{,}305 moves / 0 blocked / \(+1.85\%\),
+whereas A2's damage level cost 213 blocked / \(+22\%\) and Phase~2 refused to
+run. Fifteen significant stray pieces sits far nearer the second.
+
+\paragraph{Third confirmation of the locality criterion.} The offending line is
+\code{G += (mu / Abar**2) * np.outer(self.v, dev)} --- a rank-one, uniform
+per-cell field, pushing a deficient cell up at \emph{every} vertex where it has
+any presence, specks included. Three mechanisms have now failed
+\S\ref{sec:conclusions}'s test: the territory-aware trim (nonlocal via the
+projection), A2 (nonlocal via this push), and the adaptive switch (the same
+push, later). The criterion has predicted every one.
+
+\paragraph{An early warning that was visible live.} Churn fell to
+\(5.22\times10^{-6}\), the switch fired, and churn then \emph{rose back} to
+\(1.14\times10^{-5}\) --- above the very threshold that had declared the
+structure settled. That was not noise; it was cell 299 coming apart, and it was
+observable roughly 40 minutes before the level ended.
+
+\paragraph{Two things that confound the verdict, and are left open.}
+
+\emph{(1) The restart is violent, and it is my implementation, not the
+mechanism.} On the switch the code reset the line-search warm start to
+\code{step0}, which is the most aggressive available choice rather than a
+neutral one. The transient:
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+iteration & \(E\) & \(\|g\|\) & step & FEAS \\
+\midrule
+4{,}494--4{,}499 (settled, exact) & 720.09 & 31.1 & \(3.1\times10^{-2}\) & \(9\times10^{-9}\) \\
+\textbf{4{,}500} (first soft step) & \textbf{629.34} & 397.0 & \(\mathbf{1.0}\) & --- \\
+4{,}501 & 620.60 & 332.7 & \(3.9\times10^{-3}\) & --- \\
+4{,}503+ & 611.31 & 291.6 & \(2.0\times10^{-3}\) & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first post-switch step is \(32\times\) the settled step, along a gradient
+\(12.8\times\) larger, and drops the energy by \(90.75\) in one iteration --- and
+the search then backtracks to \(16\times\) \emph{smaller} than the pre-switch
+step, which is the line search itself rejecting \(1.0\) as absurd. It was
+accepted only because releasing the hard area constraint made a large energy gain
+available for nothing. Continuous area deviation goes from \(\sim\!10^{-9}\) to
+\textbf{36.98\%} in that single step, then recovers to 4.06\% within 500
+iterations and settles at 2--4\%. So the excursion is transient; the structural
+damage it causes is not, because fragmentation is a stable fixed point
+(\S\ref{sec:defect1}). \textbf{A damped first step would separate ``the penalty
+is nonlocal'' from ``the restart is violent''} --- the deficit that the nonlocal
+push then repairs destructively may be self-inflicted. One cheap test; not run.
+
+\emph{(2) A churn-revert rule was available and absent.} Reverting to exact (or
+aborting the level) when post-switch churn climbs back above the switch
+threshold would have caught this live, 40 minutes early. Also not built.
+
+\paragraph{The collapse reproduces at \(N{=}300\), and is not only a soft-phase
+defect.} The soft phase stalled at iteration 5{,}724, 1{,}225 soft iterations
+after the switch, at the same \(9.095\times10^{-13}\) floor. But the guard also
+caught something that changes how \S\ref{sec:defect2} should be read: levels 0
+and 1 --- which never switched, being too short for the window, and therefore ran
+\emph{entirely on the exact treatment} --- stalled at iterations 31 and 41 and
+ended at 47 and 57 with the same floored step. Those are the control's exact
+iteration counts. So the \(N{=}300\) control's own two coarsest levels also
+terminate on a dead line search; at 32 and 83 vertices per cell they are far
+below the resolution floor. Line-search collapse is therefore not unique to the
+Euclidean projection --- it is what an under-resolved level does --- though at
+\(N{=}100\) the exact level~0 never collapsed across 30{,}000 iterations, so it
+is resolution-dependent rather than universal.
+
 \section{Conclusions}
 \label{sec:conclusions}
 
@@ -452,10 +561,12 @@ relied on.
     disconnected cells: the territory-aware term via nonlocal area transport
     through the projection, and A2 via a uniform per-cell push. Different
     mechanisms, identical symptom.
-  \item \textbf{The locality criterion is predictive, not retrospective.} \S9b
-    stated it before A2 existed and it called A2's failure mode correctly. It
-    should be applied as a \emph{screening test} to any future candidate, before
-    code: \emph{through what operator does the correction reach the field, and is
+  \item \textbf{The locality criterion is predictive, and should now be a hard
+    gate rather than a screening test.} \S9b stated it before A2 existed and
+    called A2's failure mode correctly; it has since called the adaptive
+    switch's too (\S\ref{sec:adaptive}). Three for three. No mechanism should
+    get an arm until it can state which operator carries the correction and why
+    that operator is local: \emph{through what operator does the correction reach the field, and is
     that operator local?} A correction that reaches a cell uniformly, or through
     a global solve, will buy area with disconnected territory.
   \item \textbf{Judge a pipeline on the pipeline.} The hybrid was first measured
