@@ -1,32 +1,39 @@
 # ============================================================================
-# N=300 VALIDATION OF THE ADAPTIVE AREA-TREATMENT SWITCH  (resume arm)
+# N=300 VALIDATION OF THE ADAPTIVE AREA-TREATMENT SWITCH
 #
 # WHAT THIS TESTS. Not a speedup number -- a RULE. The switch decides inside
 # each level, from label churn measured during the run, when that level's
 # winner-take-all structure has settled and the rest of it can be handed to the
-# cheap soft-area treatment. Nothing here is set from a completed run: the
+# cheap soft-area treatment. Nothing is configured from a finished run: the
 # switch point is data-driven and soft_area_mu is calibrated at the switch from
-# the iterate in hand. That is the whole point -- a rule that needs a finished
-# run to configure is useless at N=1000, which is the only run that matters.
+# the iterate in hand. That is the entire point -- a rule that needs a completed
+# run to set up is useless at N=1000, which is the only run that matters.
 #
-# WHY A RESUME. This arm resumes from the SAME level-2 checkpoint the control
-# resumed from, so levels 0-2 are inherited verbatim and the comparison is
-# matched exactly rather than merely configured the same. It isolates the
-# 57.32 h half of the N=300 ladder, which is where the cost is.
+# RUN IT FROM SCRATCH. A resume that inherits levels 0-2 from the existing
+# control would presuppose the very thing the rule is meant not to need, and it
+# would skip level 2 -- which at N=300 is where the structure actually forms
+# (6,658 iterations, churn 1.4e-4 -> 1.1e-6) and therefore the hardest test of
+# whether the switch fires too early. From scratch the rule is graded on every
+# level, in the configuration it would actually be used in.
 #
-#   control (exact, levels 3-4)  run_20260808_191030   206,344 s = 57.32 h
-#     level 3  3,838 iterations  108,333 s
-#     level 4  2,247 iterations   98,011 s
+# THE CONTROL, same config and seed, exact treatment throughout:
+#   levels 0-2  run_20260806_123326        79,069 s = 21.96 h  (47/57/6,658 it)
+#   levels 3-4  run_20260808_191030       206,344 s = 57.32 h  (3,838/2,247 it)
+#   TOTAL Phase 1                         285,413 s = 79.30 h
 #   after readout: 0 imbalanced / 0 fragmented, worst 0.64%, +1.85%, 0 blocked
 #   Phase 2: 19 iterations, perimeter 322.9622   <-- the number to beat
 #
-# WHAT THE RULE PREDICTS. On the control's own churn traces, a 1e-5 threshold
-# over a 500-iteration window lands at level 3 iteration ~1,500 (of 3,838) and
-# level 4 iteration ~1,000 (of 2,247). If the run switches near those points,
-# the rule reproduced -- unaided -- an answer we can only check because this
-# problem size happens to have a finished control.
+# WHAT THE RULE PREDICTS, from the control's own churn traces at 1e-5 over a
+# 500-iteration window: switches near L2 iteration 4,500 (of 6,658), L3 1,500
+# (of 3,838), L4 1,000 (of 2,247). Reproducing those unaided is the test --
+# N=300 is the last size where we can grade the rule's homework, because we
+# happen to have the finished control to check it against.
 #
-# WHAT TO WATCH FOR (all three are pre-registered failure conditions):
+# ROUGH COST. If it switches near those points and the levels then end, expect
+# on the order of 35-40 h against the control's 79.3 h. Slower than a resume,
+# and the right experiment.
+#
+# WHAT TO WATCH FOR (pre-registered failure conditions):
 #   1. fragmented cells != 0                      -> the switch fires too early
 #   2. readout strain with blocked moves, or
 #      double-digit boundary cost                 -> geometry damaged
@@ -35,30 +42,28 @@
 #
 # HONEST NOTE ON THE MECHANISM. Measured at N=30, the soft phase does not run
 # cheaply for long -- its line search collapses within ~50-70 iterations of the
-# switch and the level then ends. So in practice this rule behaves as "stop the
-# level once its structure has settled", and the saving comes from ending each
-# level early rather than from cheap iterations. The quality question is
-# therefore whether the iterations after churn < 1e-5 were worth anything.
-# The stall guard reports the collapse explicitly so it cannot be mistaken for
-# convergence.
+# switch and the level then ends. So in practice this rule behaves as "end the
+# level once its structure has settled", and the saving comes from stopping
+# early rather than from cheap iterations. The quality question is therefore
+# whether the iterations after churn < 1e-5 were worth anything. The stall guard
+# reports the collapse explicitly so it cannot be mistaken for convergence.
 #
 # HOW TO RUN (from this, the main worktree / original surface-partition):
 #   nohup python scripts/find_surface_partition.py \
-#     --config parameters/torus_300part_adaptive_resume.yaml \
+#     --config parameters/torus_300part_adaptive.yaml \
 #     --profile \
-#     --resume-from results/run_20260806_123326_surftorus_npart300_v1nt100-224_incr62_v2np96-212_incr58_lam11.5_seed61803399/solution/surface_part300_surftorus_v1nt100-224_incr62_v2np96-212_incr58_lam11.5_seed61803399_20260806_123326.h5 \
 #     > n300_adaptive.out 2>&1 &
 #
-# NOTE ON THE RESUME PATH. That run was produced in the sibling
-# surface-partition-territory worktree and is 4.0 GB, so rather than copy it,
-# results/run_20260806_123326_... is a SYMLINK to it. --resume-from only reads
-# the solution file. If the sibling worktree is ever removed, re-point or
-# replace the symlink.
-#
-# WATCH IT (second terminal). The run writes its own log inside the run
-# directory, so either of these works:
+# WATCH IT (second terminal):
 #   tail -f n300_adaptive.out | grep -E "Refinement Level|Area treatment|label churn|ADAPTIVE SWITCH|STALLED|Refinement triggered"
 #   tail -f results/run_*_surftorus_npart300_*lam11.5*/logs/relaxation.log
+#
+# AFTERWARDS:
+#   python testing/check_fragmentation.py results/<run>/solution/surface_*.h5
+#   python scripts/balanced_readout.py --solution results/<run>/solution/surface_*.h5
+#   python scripts/refine_perimeter.py \
+#     --solution results/<run>/readout/*/solution_balanced.h5 \
+#     --config parameters/torus_300part_adaptive.yaml
 # ============================================================================
 
 experiment:
