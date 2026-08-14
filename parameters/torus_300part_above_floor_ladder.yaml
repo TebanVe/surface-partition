@@ -1,0 +1,132 @@
+# ============================================================================
+# STAGE 2 -- FIX THE LADDER AT N=300.  *** DO NOT RUN UNTIL STAGE 1 READS OUT ***
+#
+# Run this only if parameters/torus_100part_subfloor_ladder.yaml confirms the
+# mechanism (fragmented cells the control did not have, level 0 stalling). If
+# Stage 1 comes back clean, this config tests nothing and should not be run.
+#
+# THE HYPOTHESIS. Three of the control's five levels sit below the ~250-300
+# verts/cell floor, and the two coarsest provably do not converge:
+#
+#   level 0  100x96    32 v/c   stalls @31, ends 47        409 s
+#   level 1  162x154   83 v/c   stalls @41, ends 57      1,089 s
+#   level 2  224x212  158 v/c   6,658 iters             77,571 s
+#   level 3  286x270  257 v/c   3,838 iters            108,333 s
+#   level 4  348x328  380 v/c   2,247 iters             98,011 s
+#                                             TOTAL    285,413 s = 79.3 h
+#
+# Cells 274 and 290 are fragmented in EVERY N=300 run (3-level, 5-level,
+# adaptive) -- same two cells, same place, never healed downstream -- and 299 is
+# always the worst runt. Fragmentation is born at level 0 and inherited. This
+# config deletes the three sub-floor levels and starts where the mesh can
+# actually resolve a cell.
+#
+# THE COMPARISON. Same lambda=11.5, seed 61803399, seeded init, same FINEST mesh
+# (348x328), so the endpoint is directly comparable to the control's final
+# solution: 3 imbalanced / worst 24.81% / 2 fragmented (274, 290). The question
+# is whether those two cells survive when the coarsest level can resolve them.
+#
+# WHAT TO EXPECT (so a healthy run is distinguishable from a sick one):
+#   - Level 1 (286x270) starts COLD, not warm-started from a coarser level, so
+#     it should need FAR more than the control's 3,838 iterations there. Do not
+#     read a large iteration count as a fault; read a SMALL one as a fault.
+#   - Neither level should stall. If "LINE SEARCH STALLED" appears, the level
+#     died -- that is the failure the sub-floor levels showed, and seeing it
+#     ABOVE the floor would refute the hypothesis.
+#   - Per-iteration cost from the control: ~28 s/iter at 286x270, ~44 s/iter at
+#     348x328. Budget multi-day and watch the level checkpoints, not the clock.
+#
+# HOW TO RUN (from this, the main worktree / original surface-partition):
+#   nohup python scripts/find_surface_partition.py \
+#     --config parameters/torus_300part_above_floor_ladder.yaml \
+#     --profile \
+#     > n300_abovefloor.out 2>&1 &
+#
+#   # second terminal -- the gates on every level checkpoint as it lands:
+#   python testing/watch_level_gates.py --run results/run_<...>_npart300_<...> &
+#
+#   # second terminal -- progress:
+#   tail -f n300_abovefloor.out | grep -E "Refinement Level|Iteration |STALLED|Refinement triggered"
+# ============================================================================
+
+experiment:
+  name: torus-300-above-floor-ladder
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 11.5
+  seed: 61803399
+  init_method: seeded
+  max_iter: 30000
+  refinement_levels: 2          # 286x270 -> 348x328, both at/above the floor
+
+  # Structure trigger ON: validated harmless at N=100 (1.38x, partition
+  # materially identical) and validated SILENT on every N=300 level of the
+  # control, so it cannot change this comparison -- but the ladder here is new,
+  # and if a level does freeze early the trigger reclaims it rather than
+  # burning the cap. Soft-area machinery stays off: this is a pure ladder arm.
+  struct_trigger_enabled: true
+  soft_area_constraint: false
+  soft_area_adaptive: false
+
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300     # control value; 200 is too few at N=300
+  pgd_projection_tol: 1.0e-8       # control value; 1e-10 is unreachable here and
+                                   # the entry projection raises above 10*tol
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 100
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  checkpoint_per_level: true
+
+surface:
+  torus:
+    n_theta: 286                  # ABOVE-FLOOR base: 286x270 = 77,220 = 257 v/cell
+    n_phi: 270                    # ladder: 286x270(257) -> 348x328(380)
+                                  # control ladder for comparison:
+                                  #   100x96(32) 162x154(83) 224x212(158)
+                                  #   286x270(257) 348x328(380)
+                                  # Same finest mesh; the three sub-floor levels
+                                  # are gone, and level 0 starts cold rather than
+                                  # warm-started from a coarser level.
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  # Matches the control's Phase 2 campaign
+  # (ipopt_btol0.001_lbfgs30_hess_bestiter_partial), so the two are directly
+  # comparable. It also matters on its own terms here: without it a non-fatal
+  # optimizer status ends the refinement instead of continuing to migration,
+  # which is how the hybrid's raw-path run stopped at 3 iterations.
+  allow_partial_convergence: true

@@ -1,0 +1,129 @@
+# ============================================================================
+# STAGE 1 -- IS THE DEFECT THE LADDER, NOT THE OPTIMIZER?
+#
+# THE HYPOTHESIS. At N=300 three of five levels sit below the ~250-300
+# verts/cell floor of docs/reference/winner_take_all_partition_gap.md sec. 4b,
+# and the two coarsest provably do not converge -- they stall at iterations 31
+# and 41, end at 47 and 57, and hand unfinished work forward:
+#
+#   level 0  100x96    32 v/c   stalls @31, ends 47        409 s
+#   level 1  162x154   83 v/c   stalls @41, ends 57      1,089 s
+#   level 2  224x212  158 v/c   6,658 iters             77,571 s  (27% of ladder)
+#   level 3  286x270  257 v/c   3,838 iters            108,333 s
+#   level 4  348x328  380 v/c   2,247 iters             98,011 s
+#
+# The mesh schedule (100x96 base, +62/+58) was designed for N=100, where it
+# gives 96 v/c; reused at N=300 it gives 32. Meanwhile cells 274 and 290 are
+# fragmented in EVERY N=300 run we have -- 3-level, 5-level, adaptive -- always
+# the same two cells in the same place, never healed downstream; and 299 is
+# always the worst runt. The hybrid work established that fragmentation is born
+# at level 0 and inherited. At N=100 level 0 has 96 v/c and runs cleanly for
+# 30,000 iterations; at N=300 it has 32 and is dead by iteration 31.
+#
+# So: four arms have tried to make a broken ladder cheaper. None has tried
+# fixing the ladder.
+#
+# WHAT THIS CONFIG DOES. Reproduces N=300's level-0 condition at N=100, where
+# it is affordable and the control is known clean. Identical to
+# parameters/torus_100part_coarse_seeded.yaml -- same lambda=5.1, seed
+# 84172851, seeded init, 5 levels, same finest mesh 348x328 -- except the base
+# is dropped to 60x52 (31 v/c) so level 0 starts below the floor.
+#
+# CONTROL: run_20260709_081548 -- 0 dead, 0 weak, 0 imbalanced (worst 0.78%),
+# 0 fragmented, Phase 2 perimeter 185.2546.
+#
+# PRE-REGISTERED PREDICTION. If the mechanism is real this run produces
+# fragmented cells the control did not have, and the stall guard reports level 0
+# dying early. If it comes back with 0 fragmented, the hypothesis is WRONG and
+# N=300's fragmentation has another cause -- equally worth knowing, for one
+# N=100 run instead of four days at N=300.
+#
+# CONFOUND TO REPORT SEPARATELY. At 31 v/c the interface may be too coarse to
+# resolve at all, in which case dormant or weak cells appear. That is a
+# DISTINCT failure from fragmentation and must not be conflated with it.
+#
+# HOW TO RUN (from this, the main worktree / original surface-partition):
+#   nohup python scripts/find_surface_partition.py \
+#     --config parameters/torus_100part_subfloor_ladder.yaml \
+#     --profile \
+#     > n100_subfloor.out 2>&1 &
+#
+# Gates are checked at EVERY level checkpoint, not only at the end -- see
+# testing/watch_level_gates.py, which copies each checkpoint_level*.h5 as it
+# appears (the pipeline keeps only the newest) and runs all three gates on it.
+# ============================================================================
+
+experiment:
+  name: torus-100-subfloor-ladder
+  surface: torus
+
+relaxation:
+  n_partitions: 100
+  lambda_penalty: 5.1
+  seed: 84172851
+  init_method: seeded                 # required at high N (random init traps on the corrected energy)
+  max_iter: 30000
+  refinement_levels: 5
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-9
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  # Structure trigger ON (validated harmless at this exact config: 1.38x, all
+  # gates identical, Phase 2 185.2096 vs 185.2546). Soft-area machinery OFF --
+  # this is a pure ladder experiment on the original energy.
+  struct_trigger_enabled: true
+  soft_area_constraint: false
+  soft_area_adaptive: false
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 60                       # SUB-FLOOR base: 60x52 = 3,120 vertices = 31 verts/cell,
+    n_phi: 52                         # matching N=300 level 0's 32 v/c. Ladder:
+                                      #   60x52(31) 132x121(159) 204x190(387)
+                                      #   276x259(714) 348x328(1141)
+                                      # control ladder for comparison:
+                                      #   100x96(96) 162x154(249) 224x212(475)
+                                      #   286x270(772) 348x328(1141)
+                                      # Identical finest mesh; only the base differs.
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 72
+    n_phi_increment: 69
+
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
