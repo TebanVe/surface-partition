@@ -201,7 +201,15 @@ It fails on a third axis instead. Three cells are split. The balanced readout
 does repair them --- \(0\) imbalanced, \(0\) fragmented --- but at
 \(13{,}540\) moves against the control's \(51\), \(213\) blocked against \(0\),
 hitting the \(50\)-sweep cap, and costing \(+22.0\%\) label-boundary length
-against the control's \(+0.13\%\). Phase~2 inherits that geometry and
+against the control's \(+0.13\%\).\footnote{\textbf{Reproduction note
+(2026-08-15).} \code{BalancedReadoutConfig.max\_repair\_sweeps} was raised from
+\(50\) to \(200\) after these numbers were measured, so the readout quoted here
+no longer reproduces from a bare
+\code{scripts/balanced\_readout.py --solution …} --- it was truncated at the cap,
+and the higher ceiling lets it keep going. Reproduce it exactly with
+\code{--max-repair-sweeps 50}. The cap is a ceiling and never a schedule (the
+sweep loop breaks early once no candidate move improves), so any readout that
+converged in under 50 sweeps is unaffected.} Phase~2 inherits that geometry and
 \textbf{aborts}: IPOPT reports \code{EXIT: Restoration Failed!} at topology
 iteration 3 of 20, having exhausted \code{max\_opt\_iter} on the two before it.
 The best perimeter reached, \(197.40\), is where the solver died, not a converged

@@ -551,6 +551,17 @@ healthy signature (N=300: 1,485 moves, 1 blocked, +1.85%), while blocked moves
 plus double-digit boundary cost means the relaxation handed it something broken
 (A2: 13,540 moves, 213 blocked, +22.0%, sweep cap hit).
 
+> **Reproduction note (2026-08-15).** That A2 readout hit the **50**-sweep cap,
+> and `BalancedReadoutConfig.max_repair_sweeps` has since been raised to **200**.
+> So those figures no longer reproduce from a bare
+> `python scripts/balanced_readout.py --solution <sol.h5>` — pass
+> **`--max-repair-sweeps 50`** to reproduce them exactly. The cap is a ceiling,
+> never a schedule (the repair loop breaks as soon as no candidate move improves,
+> and every move is gated on both an area test and an articulation check), so a
+> readout that converged in under 50 sweeps is byte-identical either way, and
+> extra sweeps can only move a capped one further toward equal area. Each
+> campaign's `readout.yaml` records the `max_repair_sweeps` actually used.
+
 **An early warning that is cheap and was missed.** In the N=300 adaptive run the
 label churn fell to 5.22e-06, the switch fired on that, and churn then **rose
 back to 1.14e-05** — above the very threshold that had just declared the
