@@ -38,21 +38,33 @@ _LOG_WINDOW_CAP = 8192
 # so a level whose line search dies inside the first _STALL_EARLY_ITERS
 # iterations did not converge.
 #
-# 200 is not tuned -- it falls in an EMPTY GAP. Replayed over every summary
-# trace in results/ (130 levels, 40 runs, N=10..300): 24 levels floor at
-# iteration 18-100, 82 floor at 314-22,574, and NOTHING lands in between. Any
-# threshold from 101 to 313 gives an identical verdict on every level measured.
-# The rule is silent on all five levels of the validated control (its level 0 at
-# 96 v/c never floors at all) and fires on every level below ~90 v/c.
+# Read that table as ONSETS, not as a verts-per-cell threshold. v/cell is
+# causally implicated by exactly one CONTROLLED pair -- N=100 lambda=5.1, 31 v/c
+# dies at 30 vs 96 v/c never flooring (the subfloor experiment itself). The rows
+# above otherwise differ in lambda-window membership and straddle the
+# 2026-07-06 energy fix, so they cannot locate a boundary: run_20260629_141012
+# is 96 v/c and floors at 32, because its lambda=2.1 is below the N=100 window.
+#
+# 200 is not tuned -- it falls in an empty gap, but a NARROWER one than this
+# comment originally claimed. The replay behind it covered 130 levels / 40 runs:
+# top-level torus + ellipsoid run dirs only. results/ actually holds 350 summary
+# traces, and the 185 under the sweep directories were invisible to its glob. On
+# the FULL tree three torus_npart10 sweep levels floor at 227, 280 and 303, so
+# the real empty gap is (100, 227): the margin above 200 is 1.13x, not the 6.7x
+# once claimed here, and a threshold of 250 WOULD misfire. 200 itself is still
+# correct on all 350 levels -- nothing floors in [100, 226] -- and the rule stays
+# silent on all five levels of the validated control.
 #
 # Low resolution is the usual cause but not the only one -- a lambda_penalty off
 # its working window kills a level the same way (run_20260701_143238, N=100
 # lambda=2.1, fires at 193 and 501 v/c), and so does the soft-area treatment
 # (run_20260813_003231 level 3, 257 v/c, floor at 23).
 #
-# This rule deliberately does NOT cover the A2 soft-area pathology
-# (docs/experiments/05-soft-area-constraint/), where every level floored LATE
-# and the collapse was nonetheless real. Late collapse needs a different signal.
+# Two failure modes this rule does NOT cover. (1) The A2 soft-area pathology
+# (docs/experiments/05-soft-area-constraint/), where every level floored LATE and
+# the collapse was nonetheless real. (2) Levels that die WITHOUT ever flooring --
+# three N=30 sweep levels end at 34-36 iterations with no floored step at all, so
+# a floor-onset test cannot see them. Both need a different signal.
 _STALL_EARLY_ITERS = 200
 # Consecutive rejected iterations before a stall is confirmed (debounce), so a
 # couple of stray rejections during backtracking cannot fire the warning.

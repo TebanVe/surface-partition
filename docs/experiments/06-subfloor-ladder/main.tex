@@ -113,9 +113,19 @@ At \(N{=}300\) the Phase~1 ladder inherited from \(N{=}100\) --- base
 \textbf{32} vertices per cell, where at \(N{=}100\) the same schedule gives 96.
 Three of its five levels sit below the \(\sim\!250\text{--}300\) v/cell floor
 established in \S4b of the gap document. Meanwhile cells 274 and 290 are
-fragmented in \emph{every} \(N{=}300\) run on record --- 3-level, 5-level, and
-adaptive --- always the same two cells in the same place, never healed by any
-downstream level; and cell 299 is always the worst runt.
+fragmented across the \(\lambda\)-window \(N{=}300\) runs of the \textbf{seed
+61803399} lineage --- 3-level, 5-level, and adaptive --- in the same place, never
+healed by any downstream level.\footnote{\textbf{Correction (2026-08-15,
+adversarial review).} This sentence originally read ``fragmented in \emph{every}
+\(N{=}300\) run on record \ldots\ always the same two cells,'' and ``cell 299 is
+always the worst runt.'' Both universals are false. Recomputed from disk: the
+\(\lambda{=}13\) and \(\lambda{=}15\) runs have \textbf{zero} fragmented cells
+(they collapse to mush, so nothing is crisp enough to split); seed 27182818
+fragments \textbf{[106, 214]}, not [274, 290]; and the adaptive run's worst runt
+is \textbf{cell 195} (15.36\%), not 299. The pattern is real but narrower, and
+the corrected version is the more interesting claim: \emph{which} cells fragment
+is \textbf{seed-determined}, not a property of \(N{=}300\). That sharpens the
+open question in \S\ref{sec:refuted} rather than closing it.}
 
 Four arms (territory-aware relaxation, the soft area constraint A2, its
 exact-at-level-0 hybrid, and the adaptive within-level switch) have tried to make
@@ -338,18 +348,21 @@ reaches the floor inside the first \code{\_STALL\_EARLY\_ITERS} (200) iterations
 of a level, and is silent otherwise, because flooding later is convergence. A
 ratio of the level's own length would not work --- a starved level floors early
 \emph{and} terminates early, so 31 of 60 iterations is \(51.7\%\), not a small
-fraction --- so the test is against an absolute iteration count. The earliest
-healthy floor on record is control level~1 at iteration 1{,}343, leaving a
-\(6.7\times\) margin. The message is renamed from \code{LINE SEARCH STALLED} to
-\code{UNDER-RESOLVED LEVEL} and now says what to do about it.
+fraction --- so the test is against an absolute iteration count. The margin above
+200 is \(\mathbf{1.13\times}\): the earliest floor among levels the rule leaves
+silent is iteration \textbf{227}. This paragraph originally claimed
+\(6.7\times\), computed from the control's own level~1 at 1{,}343 --- a figure
+that contradicted this report's own table two paragraphs below (314) even before
+the corpus was corrected. See the correction after the replay table. The message
+is renamed from \code{LINE SEARCH STALLED} to \code{UNDER-RESOLVED LEVEL} and now
+says what to do about it.
 
 \subsubsection*{Replay validation}
 
-The rule was replayed offline over the STEP column of \emph{every} PGD summary
-trace in \code{results/} --- 130 levels across 40 runs, \(N{=}10\) to
-\(N{=}300\). Of these, 24 fire and 106 are silent (24 of the silent never floored
-at all). The threshold is not a tuned parameter: \textbf{it falls in an empty
-gap.}
+The rule was replayed offline over the STEP column of 130 PGD summary traces
+across 40 runs, \(N{=}10\) to \(N{=}300\). Of these, 24 fire and 106 are silent
+(24 of the silent never floored at all). The threshold is not a tuned parameter:
+it falls in an empty gap --- \emph{narrower} than this section first reported.
 
 \begin{center}
 \small
@@ -358,21 +371,48 @@ gap.}
  & levels & first floored iteration \\
 \midrule
 fires (onset \(<200\))        & 24  & 18 -- \textbf{100} \\
-\emph{(no level anywhere in} \code{results/} \emph{lands here)} & 0 & 101 -- 313 \\
+\emph{(replayed subset: none; full tree: 3)} & 0 & 101 -- 313 \\
 silent, floored later         & 82  & \textbf{314} -- 22{,}574 \\
 silent, never floored         & 24  & --- \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-A level's line search either dies within its first 100 iterations or survives
-past 314; nothing in three months of runs sits between. Anything from 101 to 313
-would give the same verdict on every level measured.
+\begin{tcolorbox}[colback=red!4!white,colframe=red!55!black,
+  title={Correction (2026-08-15, adversarial review): the replay corpus was a
+  subset, and the gap is narrower}]
+This section originally described the corpus as \emph{``every PGD summary trace
+in} \code{results/}\emph{''}. It is not. \code{results/} holds \textbf{350}
+summary traces; the replay's glob (\code{results/run\_*/traces/}) could only ever
+reach the top-level run directories, leaving \textbf{185} traces in the sweep
+directories structurally invisible, plus \(\sim\!35\) double-torus / Banchoff runs
+whose \code{v1ngx}-style filenames the parsing regex could not read. The 130/40
+figures describe torus \(+\) ellipsoid top-level runs only.
+
+On the full tree, three \code{torus\_npart10} sweep levels floor at \textbf{227,
+280 and 303} --- inside the range this section called empty. Therefore:
+
+\begin{itemize}\itemsep2pt
+  \item the real empty gap is \((100,\,227)\), not \((100,\,314)\);
+  \item ``anything from 101 to 313 would give the same verdict'' is
+    \textbf{false} --- a threshold of \textbf{250 would misfire};
+  \item the margin above 200 is \(\mathbf{1.13\times}\), not \(6.7\times\).
+\end{itemize}
+
+\textbf{The guard's verdicts are unaffected}: nothing in \code{results/} floors in
+\([100,\,226]\), so \code{\_STALL\_EARLY\_ITERS} \(=200\) classifies all 350
+levels exactly as intended. What was wrong is the advertised robustness --- and
+the error is the same class this report warns about elsewhere: a corpus whose
+construction guaranteed the pattern it was then cited to prove.
+\end{tcolorbox}
 
 All five levels of the validated control are silent, including its level~0 at
-96 v/cell. Every level below \(\sim\!90\) v/cell that floors at all fires:
-\(N{=}300\)'s levels 0 and 1, \(N{=}200\)'s level 0 (48 v/cell, floor at 21--27),
-\(N{=}150\)'s level 0 (64 v/cell, floor at 47), and this arm's level 0.
+96 v/cell. The levels that fire are \(N{=}300\)'s levels 0 and 1, \(N{=}200\)'s
+level 0 (48 v/cell, floor at 21--27), \(N{=}150\)'s level 0 (64 v/cell, floor at
+47), and this arm's level 0 --- but see the boundary correction in
+\S\ref{sec:scaling}: this list is \emph{not} evidence that ``every level below
+\(\sim\!90\) v/cell fires'', since \code{run\_20260629\_141012} fires at 96
+v/cell.
 
 Two things the replay shows that the resolution framing alone does not.
 \textbf{Low resolution is the usual cause but not the only one}: the known-bad
@@ -414,14 +454,44 @@ v/cell & iterations before the step floors & \\
 \end{tabular}
 \end{center}
 
-The boundary sits between 83 and 92 v/cell, an order of magnitude below the gate
-floor. The mechanism is then not ``a coarse level does bad work'' but ``a coarse
-level does \emph{no} work'': it dies in tens of iterations, the cheap
-equalization phase never happens there, and the first level that does run starts
-from a badly imbalanced field instead of from a nearly balanced one. That is
-exactly the arm measured here --- the control's level~0 at 96 v/cell runs 30{,}000
-iterations and equalizes from the seeded init; the arm's at 31 v/cell dies at
-iteration~31.
+The mechanism is not ``a coarse level does bad work'' but ``a coarse level does
+\emph{no} work'': it dies in tens of iterations, the cheap equalization phase
+never happens there, and the first level that does run starts from a badly
+imbalanced field instead of from a nearly balanced one. That is exactly the arm
+measured here --- the control's level~0 at 96 v/cell runs 30{,}000 iterations and
+equalizes from the seeded init; the arm's at 31 v/cell dies at iteration~31.
+
+\begin{tcolorbox}[colback=red!4!white,colframe=red!55!black,
+  title={Correction (2026-08-15, adversarial review): the boundary's
+  \emph{location} is not established}]
+This subsection originally concluded ``the boundary sits between 83 and 92
+v/cell.'' That is \textbf{refuted as stated}, and the table above must be read as
+a list of onsets rather than as a threshold.
+
+\begin{itemize}\itemsep2pt
+  \item The row ``92, 96 \(\to\) runs'' is false. \code{run\_20260629\_141012} is
+    \textbf{96 v/cell and floors at onset 32} --- and it was present, unremarked,
+    in this very replay's own fire-list. Its \(\lambda{=}2.1\) is below the
+    \(N{=}100\) working window. Also observed but omitted: 96 v/cell flooring at
+    2{,}202 and 92 v/cell at 5{,}247.
+  \item Verts-per-cell is causally implicated by exactly \textbf{one controlled
+    pair} --- the sub-floor arm of this report (\(N{=}100\), \(\lambda{=}5.1\):
+    31 dies at 30, 96 never floors). Everything else pooled into ``83--92''
+    varies in \(\lambda\)-window membership and straddles the 2026-07-06 energy
+    fix, and the dies-set silently drops \(\lambda\)/arm pathologies at
+    158/193/237/249/257/501 v/cell.
+  \item Cold-vs-warm start was suspected as the confound and is \textbf{refuted}
+    (the dies-set contains warm 83 v/cell levels; the runs-set at 92/96 is cold).
+    Separated by start type the brackets are cold \((64, 92)\) and warm
+    \((83, 124)\) --- wide and overlapping.
+\end{itemize}
+
+What survives is the \emph{mechanism} (a level can die doing no work, and the
+damage is inherited) and the one controlled pair. The \emph{number} does not, so
+the \(N{=}1000\) mesh-budget arithmetic in \S\ref{sec:scaling} and the dismissal
+of \codefile{parameters/torus\_300part\_rebased\_ladder.yaml} at 51 v/cell both
+inherit this uncertainty.
+\end{tcolorbox}
 
 \subsection{Cross-check at \texorpdfstring{\(N{=}300\)}{N=300}}
 
@@ -431,26 +501,55 @@ store \code{x}; rebuild each level's mesh and run the gates):
 
 \begin{center}
 \small
-\begin{tabular}{@{}lrrrr@{}}
+\begin{tabular}{@{}lrrrrl@{}}
 \toprule
-stage & mesh & v/cell & imbalanced & worst \% \\
+stage & mesh & v/cell & imbalanced & worst \% & estimator \\
 \midrule
-seeded init & --- & --- & 230 & 44.02 \\
-after L0 & 100\(\times\)96  & 32  & 234 & 45.57 \\
-after L1 & 162\(\times\)154 & 83  & 234 & 49.26 \\
-after L2 & 224\(\times\)212 & 158 & 10  & 36.15 \\
-after L3 & 286\(\times\)270 & 257 & 4   & 27.04 \\
-after L4 & 348\(\times\)328 & 380 & 3   & 24.81 \\
+seeded init & --- & --- & 230 & 44.02 & exact \\
+after L0 & 100\(\times\)96  & 32  & 234 & 45.57 & L1 \code{iter\_0} proxy \\
+after L1 & 162\(\times\)154 & 83  & 234 & 49.26 & L2 \code{iter\_0} proxy \\
+after L2 & 224\(\times\)212 & 158 & 10  & 36.15 & true final \\
+after L3 & 286\(\times\)270 & 257 & 4   & 27.04 & same-level iter\_3500 \\
+after L4 & 348\(\times\)328 & 380 & 3   & 24.81 & true final \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Both of \(N{=}300\)'s coarse levels are below the boundary and both die,
-handing forward what the init gave them (230 \(\to\) 234). The equalization
-therefore happens at level~2 (158 v/cell), which \emph{converges} there --- worst
-\% flat at 36.15 over its last 1{,}000 iterations --- and levels 3--4 then improve
-with decelerating returns (\(-9.11\), \(-2.23\) points). So the same mechanism
+Both of \(N{=}300\)'s coarse levels die, handing forward what the init gave them
+(230 \(\to\) 234). The equalization therefore happens at level~2 (158 v/cell),
+and levels 3--4 then improve with decelerating returns. So the same mechanism
 this report measures at \(N{=}100\) is visibly present at \(N{=}300\).
+
+\begin{tcolorbox}[colback=red!4!white,colframe=red!55!black,
+  title={Correction (2026-08-15, adversarial review): mixed estimators, and
+  level~2 did not demonstrably converge}]
+\begin{enumerate}[leftmargin=*,itemsep=3pt]
+  \item \textbf{The \code{estimator} column is new, and the table needs it.} Three
+    different meanings of ``after level L'' were pooled undisclosed. At the one
+    junction where both sides exist (end-L2 \(\to\) L3 \code{iter\_0}), mesh
+    resampling \textbf{triples} the imbalanced count, \(10 \to 31\), and changes
+    the worst cell's identity (299 \(\to\) 290); worst \% is robust
+    (36.15 \(\to\) 35.69). L4's actual \code{iter\_0} is \textbf{6 cells /
+    25.94\%}, not the 4 / 27.04 tabled.
+  \item \textbf{The coarse rows are unharmed, and stronger than written.}
+    Interpolating and projecting the seeded init reproduces L1's \code{iter\_0}
+    labels \textbf{100.000\%} (0 of 24{,}948 differ) --- so L0's 47 iterations
+    flipped \emph{zero} argmax labels, and the \(+4\) is pure resampling.
+  \item \textbf{``Converges there'' is withdrawn.} The flatness is real and exact
+    (36.149069\% to six decimals at iters 6000/6500/final), but the flat window is
+    \(\sim\!658\) iterations, not 1{,}000 (iter 5500 = 36.47\%), and the
+    termination shows the opposite of convergence: the line search
+    \textbf{floored at 6{,}628 with the energy still falling} (\(-0.667\) over the
+    last 1{,}000 pre-floor) and \(\|g\| = 31.11\). By this report's own
+    \S\ref{sec:stall}, flooring certifies nothing in either direction --- and that
+    cuts against ``converged'' exactly as it cut against ``failed''.
+  \item \textbf{The gains are partly resampling.} L4's \(-2.23\) pts is
+    \(-1.13\) optimization \(+\) \(-1.10\) resampling; L3's \(-9.11\) is
+    \(-8.65 + -0.46\).
+\end{enumerate}
+Conclusions in \S\ref{sec:conclusions} survive, but any claim that \(N{=}300\) is
+\emph{energy-limited} rather than descent-limited is unsupported by these data.
+\end{tcolorbox}
 
 \subsection{What does not follow}
 

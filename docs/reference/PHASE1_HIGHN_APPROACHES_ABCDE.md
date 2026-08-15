@@ -62,24 +62,43 @@ corroborate that low ranking:
 
 - **D(iii) does not fix N=300.** The λ=11.5 control's coarse levels (32 and
   83 verts/cell) die in under 60 iterations and change nothing (230 → 234
-  imbalanced); level 2 does all the work and *converges* at 36.15% worst; levels
-  3–4 give decelerating returns to 24.81%. See §4b of
+  imbalanced — in fact L0 flips *zero* argmax labels); level 2 does all the work,
+  reaching 36.15% worst; levels 3–4 give decelerating returns to 24.81%. Note
+  level 2 is **not** shown to have converged — its line search floored at 6,628
+  with the energy still falling and ‖g‖ = 31.11 — so "N=300 is energy-limited" is
+  consistent with these data, not established by them. See §4b of
   [`winner_take_all_partition_gap.md`](winner_take_all_partition_gap.md).
-- **The floor is real but narrower than proposed.** D(iii) proposed a floor of
-  ~150–300 verts/cell. The measured boundary is where a level stops running at
-  all — between **83 and 92** verts/cell — and a level below it is not merely
-  noisy, it does *no* work. Report 06 measures the cost at N=100: a permanent
-  15.92% runt against a control's 0.78%.
+- **The floor is real; its location is not established.** D(iii) proposed a floor
+  of ~150–300 verts/cell. What is measured is a *lower* and different boundary —
+  where a level stops running at all, doing *no* work rather than noisy work — and
+  report 06 measures the cost at N=100: a permanent 15.92% runt against a
+  control's 0.78%. **But the "83–92 verts/cell" figure previously stated here is
+  refuted** (2026-08-15 adversarial review): `run_20260629_141012` is 96 v/cell and
+  dies at onset 32, its λ=2.1 being out of window. Verts-per-cell is causally
+  implicated by exactly one controlled pair (report 06's own arm); everything else
+  pooled into that range varies in λ and straddles the 2026-07-06 energy fix.
+  Treat it as a rough prior, never a design constant.
 
-**One direct contradiction, unresolved.** D(iii) asserts *"your §4b data show
-splits are born at level 0 (8 → 6 → 3 → 3 across levels)."* The 2026-08-14
-reconstruction of the N=300 λ=11.5 control finds the opposite: 0 fragmented after
-levels 0 and 1, with the two splits appearing **mid-level-2**, at iterations 2,500
-and 4,500, while the imbalanced count falls 234 → 10. Report 06 agrees from the
-other direction — a deliberately starved level 0 at N=100 produced **0**
-fragmented at every level. Either the earlier reading was of a different run, or
-one of the two measurements is wrong. This is flagged for adversarial review and
-should be settled before D(iii) is cited again.
+**The apparent contradiction in D(iii) is RESOLVED (2026-08-15, adversarial
+review) — both measurements are correct, and they are different runs.** D(iii)
+asserts *"your §4b data show splits are born at level 0 (8 → 6 → 3 → 3 across
+levels)."* The 2026-08-14 reconstruction of the N=300 λ=11.5 control finds 0
+fragmented after levels 0 and 1, with the two splits appearing **mid-level-2** (at
+iterations 2,500 and 4,500) while the imbalanced count falls 234 → 10. Both
+recompute exactly:
+
+- **8 → 6 → 3 → 3** is **N=200 `run_20260722_121925`**, which had the
+  **territory-aware machinery active** (its levels 0 and 1 ran the 30,000-iteration
+  cap and never floored). Its level-0 splits are therefore evidence about **the
+  discrete-area trim**, not about resolution.
+- The N=300 λ=11.5 figures are the **plain energy**, a different run entirely.
+
+So D(iii)'s *citation* was accurate for the §4b of its time; its **attribution of
+those splits to resolution** was not, and report 06's refutation of that
+attribution stands. There was never a measurement conflict to settle — the
+resolution was sitting in §4b's own first paragraph ("Where it was first seen:
+N=200, `run_20260722_121925`"). Cheap cross-checks between our own documents are
+the lesson here, not more measurement.
 
 **And it sharpens §4's most pointed claim.** The proposal's framing point 5 —
 *"at high N you may not need the Γ-relaxation at all… run the C-vs-relaxation

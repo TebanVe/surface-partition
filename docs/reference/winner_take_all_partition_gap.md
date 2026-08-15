@@ -341,16 +341,36 @@ fragmentation** — 0 fragmented at every level, not even sub-threshold speckle.
 pre-registered hypothesis that N=300's persistently split cells 274/290 are born on
 its 32-verts/cell level 0 is therefore **refuted**, and their origin is open (see §4b
 above; the prepared N=300 above-floor config was gated on this result and not run).
-**(c) The binding threshold is ~90 verts/cell, not the ~250–300 gate floor.** The
-two must not be conflated. The gate floor is where a level can itself drive the worst
-cell under 5%. What the sub-floor arm crossed is far lower and far sharper — whether
-the level *runs at all*. Across every trace in `results/`, levels at 31/32/48/64/83
-verts/cell reach the backtracking floor at iteration **18–47** and stop; levels at
-92/96 reach it at 1,141 or never in 30,000. So the mechanism is not "a coarse level
-does bad work" but "a coarse level does **no** work": it dies in tens of iterations,
-the cheap equalization never happens there, and the first level that runs starts from
-a badly imbalanced field. At N=1000 a ~90 v/cell coarsest level is V ≈ 90k — a third
-of what the gate floor would demand, and unremarkable beside meshes already run.
+**(c) The binding threshold is far below the ~250–300 gate floor, and it is a
+different *kind* of threshold.** The two must not be conflated. The gate floor is
+where a level can itself drive the worst cell under 5%. What the sub-floor arm
+crossed is far lower — whether the level *runs at all*. The mechanism is well
+supported: a level at 31/32/48/64/83 verts/cell reaches the backtracking floor at
+iteration **18–47** and stops, so it is not "a coarse level does bad work" but "a
+coarse level does **no** work" — the cheap equalization never happens there, and the
+first level that runs starts from a badly imbalanced field.
+
+> **⚠ Correction (2026-08-15, adversarial review).** This subsection previously
+> located that threshold at **~90 verts/cell** on the strength of "every trace in
+> `results/`". That number is **not established**, and the sentence "levels at 92/96
+> reach it at 1,141 or never in 30,000" is **false**: `run_20260629_141012` is
+> **96 v/cell and floors at onset 32** — and it sat unremarked in the same replay's
+> own fire-list. Its λ=2.1 is below the N=100 working window, which is the point:
+> verts-per-cell is causally implicated by exactly **one controlled pair** (N=100
+> λ=5.1, 31 dies at 30 vs 96 never floors — the sub-floor arm itself). Every other
+> point pooled into "~90" varies in λ-window membership and straddles the 2026-07-06
+> energy fix. Separated by start type the brackets are cold **(64, 92)** and warm
+> **(83, 124)** — wide and overlapping, and no cold N=300 point above 83 v/cell
+> exists on disk. Three N=30 levels also ended at 34–36 iterations *without ever
+> flooring*, a died-no-work mode the floor diagnostic cannot see at all.
+>
+> Consequently the "at N=1000 a ~90 v/cell coarsest level is V ≈ 90k" budget below
+> is a **rough prior, not a design constant**, and so is the dismissal of
+> `parameters/torus_300part_rebased_ladder.yaml` at 51 v/cell.
+
+At N=1000 a ~90 v/cell coarsest level would be V ≈ 90k — a third of what the gate
+floor would demand, and unremarkable beside meshes already run; read that as an
+order-of-magnitude sizing, subject to the correction above.
 
 **Caveat that stops this being a rule.** A dying level 0 is *not* by itself fatal:
 N=200 reaches 0 imbalanced (worst 1.65%) with a level 0 at 48 v/cell that dies at
@@ -365,19 +385,49 @@ begin.* N=100 gets one at level 0, N=200 at level 1, N=300's first is level 2 at
 costs no compute — rebuild each level's mesh with `TorusMeshProvider`, take the
 argmax, run the gates:
 
-| stage | mesh | verts/cell | imbalanced | worst % | fragmented |
-|---|---|---|---|---|---|
-| seeded init | — | — | 230 | 44.02 | 0 |
-| after L0 | 100×96 | 32 | 234 | 45.57 | 0 |
-| after L1 | 162×154 | 83 | 234 | 49.26 | 0 |
-| after L2 | 224×212 | 158 | **10** | **36.15** | 2 |
-| after L3 | 286×270 | 257 | 4 | 27.04 | 2 |
-| after L4 | 348×328 | 380 | 3 | 24.81 | 2 |
+| stage | mesh | verts/cell | imbalanced | worst % | fragmented | estimator |
+|---|---|---|---|---|---|---|
+| seeded init | — | — | 230 | 44.02 | 0 | exact |
+| after L0 | 100×96 | 32 | 234 | 45.57 | 0 | L1 `iter_0` proxy |
+| after L1 | 162×154 | 83 | 234 | 49.26 | 0 | L2 `iter_0` proxy |
+| after L2 | 224×212 | 158 | **10** | **36.15** | 2 | true final |
+| after L3 | 286×270 | 257 | 4 | 27.04 | 2 | same-level iter_3500 ⚠ |
+| after L4 | 348×328 | 380 | 3 | 24.81 | 2 | true final |
 
-Both coarse levels die and change nothing (230 → 234). Level 2 does all the work and
-**converges** — worst % flat at 36.15 over its last 1,000 iterations, so it did *not*
-stop early — and levels 3–4 improve with decelerating returns (−9.11, −2.23 points).
-Neither more iterations nor more levels reaches the gate.
+Both coarse levels die and change nothing (230 → 234), and level 2 does all the work.
+
+> **⚠ Correction (2026-08-15, adversarial review).** Three things this table and the
+> paragraph that followed it got wrong or hid.
+>
+> **1. It mixes three estimators for "after level L"** — the `estimator` column above
+> is new. L0/L1 rows are the *next* level's `iter_0` (the only iterate those traces
+> hold), the "after L3" row is the **same** level's iter_3500 of a 3,838-iteration
+> level, and L2/L4 are true finals. This is not cosmetic: at the one junction where
+> both sides exist (end-L2 → L3 `iter_0`), mesh resampling **triples** the imbalanced
+> count, 10 → 31, and changes the worst cell's identity (299 → 290); worst % is robust
+> (36.15 → 35.69). L4's actual `iter_0` is **6 cells / 25.94%**, not the 4 / 27.04%
+> tabled. The coarse rows are unharmed — interp+project of the seeded init reproduces
+> L1's `iter_0` labels **100.000%** (0 of 24,948 differ), which makes "both coarse
+> levels change nothing" *stronger* than written: L0's 47 iterations flipped **zero**
+> argmax labels, and the +4 is pure resampling.
+>
+> **2. Level 2 did not demonstrably converge.** The claim was "worst % flat at 36.15
+> over its last 1,000 iterations, so it did *not* stop early". The flatness is real
+> and exact (36.149069% identical to 6 decimals at iters 6000/6500/final) but the flat
+> window is **~658 iterations, not 1,000** (iter 5500 = 36.47%), and the termination
+> says the opposite of convergence: the line search **floored at 6,628 with the energy
+> still falling** (−0.667 over the last 1,000 pre-floor) and ‖g‖ = **31.11**. That is
+> a 40-deep Armijo backtracking failure mid-descent — an optimizer limit, not a
+> demonstrated stationary point. Per Result 3 of report 06, flooring certifies nothing
+> in *either* direction.
+>
+> **3. The per-level gains are partly resampling, not optimization.** L4's −2.23 pts
+> decomposes as −1.13 optimization + −1.10 mesh resampling; L3's −9.11 as −8.65 +
+> −0.46.
+>
+> So **"neither more iterations nor more levels reaches the gate" is unsupported** —
+> it extrapolates two levels, and no stationarity or KKT measure exists anywhere in
+> these traces. The honest reading is decelerating returns from an unknown ceiling.
 
 **Fragmentation is born mid-level-2**, at iterations 2,500 and 4,500, while the
 imbalanced count falls 234 → 10. Balance is bought with disconnection on the **plain**
