@@ -1,0 +1,197 @@
+# ============================================================================
+# *** DO NOT RUN -- REFUTED BEFORE DISPATCH, 2026-08-14 ***
+#
+# This config was written to test the hypothesis below. Before dispatching it,
+# the per-level gate history of the existing lambda=11.5 control was
+# reconstructed for free from its saved trace iterates (the `x` in
+# traces/*_internal_data.hdf5). That measurement refutes the premise:
+#
+#   level  mesh      v/c   imbalanced      worst%    fragmented
+#   seed init                230/300        44.02        0
+#   L0     100x96     32     234            45.57        0      <- INERT
+#   L1     162x154    83     234            49.26        0      <- INERT
+#   L2     224x212   158     234 -> 10      49.26 -> 36.15   0 -> 2
+#   L3     286x270   257       4            27.04        2
+#   L4     348x328   380       3            24.81        2
+#
+# WHY THIS CONFIG SPECIFICALLY IS DEAD -- and the reason matters, because a
+# first version of this note gave the wrong one ("levels 0-1 are inert, not
+# damaging, so there is nothing to prevent"). That distinction does not hold:
+# an inert coarse level IS the damage. docs/experiments/06-subfloor-ladder/
+# measured exactly that at N=100 -- the control's level 0 at 96 v/cell runs
+# 30,000 iterations and equalizes from the seeded init; the sub-floor arm's at
+# 31 v/cell dies at iteration 31, that equalization never happens, and the
+# partition is permanently worse (15.92% vs 0.78%) on an identical finest mesh.
+#
+# The real defect is that THIS LADDER IS UNDER-CORRECTED. The boundary between
+# a level that runs and one that dies is sharp and sits between 83 and 92
+# verts/cell: across every trace in results/, levels at 31/32/48/64/83 v/cell
+# reach the backtracking floor at iteration 18-47, while 92/96 reach it at
+# 1,141 or never in 30,000. This config puts level 0 at 51 v/cell -- still
+# inside the dying regime -- so it would very probably have changed nothing.
+# Lifting N=300's level 0 above the boundary needs ~92 v/cell, i.e. V0 ~ 27,600
+# (base ~176x164), not 15,360.
+#
+# What IS established: level 2 does all the work and CONVERGED (worst% flat at
+# 36.15 over its last 1,000 iterations), so more iterations are dead; and
+# levels 3-4 improve with decelerating returns (-9.11, -2.23 points), so more
+# levels are dead. What is NOT established is whether an early level that
+# actually runs would move the converged point. Report 06 shows that point is
+# start-dependent, so the question is open -- this config just does not test it.
+#
+# Note also: fragmentation appears at level 2 iterations 2,500 and 4,500, while
+# the imbalanced count is falling 234 -> 10. Balance is bought with
+# disconnection on the PLAIN energy too -- the same mechanism report 05 measured
+# for A2, milder. See docs/reference/PHASE1_HIGHN_APPROACHES_ABCDE.md.
+#
+# ----------------------------------------------------------------------------
+# ORIGINAL (REFUTED) RATIONALE FOLLOWS
+# ----------------------------------------------------------------------------
+# N=300 -- LIFT THE COARSE LEVELS ABOVE THE DAMAGE FLOOR
+#
+# THE HYPOTHESIS. There are TWO distinct resolution thresholds, and the project
+# has been conflating them:
+#
+#   - the GATE floor (~250-300 verts/cell, winner_take_all_partition_gap.md
+#     sec. 4b): the resolution at which a level can itself drive the worst cell
+#     under the 5% equal-area gate;
+#   - the DAMAGE floor (much lower): the resolution below which a level
+#     manufactures a defect that NO later level can undo.
+#
+# Only the second one binds at the coarse end of a ladder. A coarse level does
+# not have to solve the problem; it only has to not break it.
+#
+# Evidence that the damage floor sits between ~32 and ~48 verts/cell -- the
+# final imbalance of every run with metadata, at its best lambda:
+#
+#   N      L0 v/c   imbalanced   worst%
+#   30       92         0          0.68
+#   100      96         0          0.78     <- the validated deliverable
+#   100      31         1         15.92     <- docs/experiments/06-subfloor-ladder
+#   150      64         0          1.24
+#   200      48         0          1.65
+#   300      32         9         34.95     <- never reaches 0 at ANY lambda
+#
+# N=200 succeeds at 48 v/cell. N=100 fails at 31 with a known-good lambda=5.1.
+# N=300 is the ONLY production config below the threshold, and it is also the
+# only one that has never produced a valid partition. That is the hypothesis.
+#
+# WHAT THIS CONFIG DOES. Re-bases the ladder so no level starts under-resolved,
+# keeping EVERYTHING else identical to the lambda=11.5 control -- same lambda,
+# same seed, same init, same 5 levels, same FINEST mesh 348x328 -- so the
+# endpoint is directly comparable:
+#
+#   level      this config          the control
+#   0        128x120   51 v/c     100x96    32 v/c
+#   1        183x172  105 v/c     162x154   83 v/c
+#   2        238x224  178 v/c     224x212  158 v/c
+#   3        293x276  270 v/c     286x270  257 v/c
+#   4        348x328  380 v/c     348x328  380 v/c    <- identical
+#
+# COST. Essentially free. On the control's ladder levels 0 and 1 cost 409 s and
+# 1,089 s of a 285,413 s (79 h) total -- 0.5%. This config grows them ~1.6x and
+# ~1.3x, so expect ~+900 s. The saving, if the hypothesis holds, is that levels
+# 2-4 no longer spend 78 h refining an already-damaged partition.
+#
+# CONTROL: the lambda=11.5 5-level N=300 run -- 10 imbalanced, worst 36.15%,
+# 2 fragmented (cells 274 and 290), repaired only by the balanced readout.
+#
+# PRE-REGISTERED PREDICTION.
+#   - CONFIRMS if n_imbalanced drops sharply (target 0-2, worst < 5%) with NO
+#     change to lambda or seed. That is the anti-lottery property N>=400 needs.
+#   - REFUTES if the imbalance is unchanged (~9-10 cells over the gate). Then
+#     coarse-level resolution is not the N=300 mechanism either, and the runt
+#     has a cause none of the six arms so far has touched.
+#   - WATCH SEPARATELY: the 2 fragmented cells. docs/experiments/06 showed a
+#     sub-floor level 0 does NOT cause fragmentation, so the prediction here is
+#     that 274/290 SURVIVE. If they vanish, that refutes report 06's finding at
+#     N=300 and is the more important result of the two.
+#
+# ONE VARIABLE. struct_trigger_enabled is left FALSE deliberately, even though
+# it is validated and free at N=100, because the control did not have it. The
+# mesh ladder is the only thing that changes.
+#
+# HOW TO RUN (from the repo root):
+#   nohup python scripts/find_surface_partition.py \
+#     --config parameters/torus_300part_rebased_ladder.yaml \
+#     --profile \
+#     > n300_rebased.out 2>&1 &
+#
+#   # second terminal -- gates on every level checkpoint as it lands (the
+#   # pipeline keeps only the newest and deletes them all at the end):
+#   python testing/watch_level_gates.py \
+#     --run results/run_<timestamp>_surftorus_npart300_v1nt128-348_incr55_v2np120-328_incr52_lam11.5_seed61803399 &
+#
+# WHAT A HEALTHY LOG LOOKS LIKE. No "UNDER-RESOLVED LEVEL" warning on any
+# level: on the control, levels 0 and 1 floor the line search at iterations
+# 18-20 and 27-29 and die there. If those warnings still appear, this config
+# did not lift the levels far enough and the ladder should go coarser-still
+# before anything else is concluded.
+# ============================================================================
+
+experiment:
+  name: torus-300-rebased-ladder
+  surface: torus
+
+relaxation:
+  n_partitions: 300
+  lambda_penalty: 11.5                 # control value -- NOT a variable here
+  seed: 61803399                       # control value -- NOT a variable here
+  init_method: seeded                  # mandatory at high N
+  max_iter: 30000
+  refinement_levels: 5                 # 128x120 -> 348x328 (114,144 verts)
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 300
+  pgd_projection_tol: 1.0e-8           # 1e-9 sits below the iterative-projection floor at N=300
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  struct_trigger_enabled: false        # see "ONE VARIABLE" above
+  soft_area_constraint: false
+  soft_area_adaptive: false
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 500
+  h5_save_stride: 500
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+  checkpoint_per_level: true           # survivability: this is a multi-day run
+  profile: true
+
+refinement:
+  method: ipopt
+  max_iterations: 19
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true                # mandatory at N=300: the plateau workflow
+  distance_preservation: preserve
+
+surface:
+  torus:
+    n_theta: 128                       # levels: 128x120, 183x172, 238x224, 293x276, 348x328
+    n_phi: 120                         # v/cell:     51,     105,     178,     270,     380
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 55              # 128 + 4*55 = 348  (lands exactly on the control's finest)
+    n_phi_increment: 52                # 120 + 4*52 = 328

@@ -21,12 +21,42 @@ from .projection import (
 # patiences are O(10), so this is ~250x margin while keeping the logs O(1).
 _LOG_WINDOW_CAP = 8192
 
-# Consecutive rejected iterations before the line search is declared stalled.
-# MUST sit below the gap between the step collapsing and the energy trigger
-# firing, or the warning never gets a chance to print: measured on the
-# soft-area levels that gap is only 22-29 iterations, and an initial value of
-# 50 was silent on exactly the runs it was written for.
-_STALL_WARN_AFTER = 15
+# A floored line search is NORMAL termination, not a failure. Measured on the
+# validated N=100 deliverable run_20260709_081548, four of its five levels end
+# with the step at step0*rho^40 = 9.095e-13 and the energy frozen for exactly
+# refine_patience (30) iterations before the plateau trigger fires -- that IS
+# how a healthy level converges. An earlier version of this guard warned on any
+# floored step and therefore fired on every healthy level termination; two
+# commits then reasoned from it. See docs/experiments/06-subfloor-ladder/.
+#
+# What is diagnostic is WHEN the floor is reached (first floored iteration):
+#      31 v/c (sub-floor level 0)       -> 31        died early
+#      32 v/c (N=300 level 0)           -> 18-20     died early
+#      83 v/c (N=300 level 1)           -> 27-29     died early
+#      96 v/c (control level 0)         -> never floors in 30,000
+#   >= 388 v/c (warm levels, both runs) -> 953-1,343 healthy convergence
+# so a level whose line search dies inside the first _STALL_EARLY_ITERS
+# iterations did not converge.
+#
+# 200 is not tuned -- it falls in an EMPTY GAP. Replayed over every summary
+# trace in results/ (130 levels, 40 runs, N=10..300): 24 levels floor at
+# iteration 18-100, 82 floor at 314-22,574, and NOTHING lands in between. Any
+# threshold from 101 to 313 gives an identical verdict on every level measured.
+# The rule is silent on all five levels of the validated control (its level 0 at
+# 96 v/c never floors at all) and fires on every level below ~90 v/c.
+#
+# Low resolution is the usual cause but not the only one -- a lambda_penalty off
+# its working window kills a level the same way (run_20260701_143238, N=100
+# lambda=2.1, fires at 193 and 501 v/c), and so does the soft-area treatment
+# (run_20260813_003231 level 3, 257 v/c, floor at 23).
+#
+# This rule deliberately does NOT cover the A2 soft-area pathology
+# (docs/experiments/05-soft-area-constraint/), where every level floored LATE
+# and the collapse was nonetheless real. Late collapse needs a different signal.
+_STALL_EARLY_ITERS = 200
+# Consecutive rejected iterations before a stall is confirmed (debounce), so a
+# couple of stray rejections during backtracking cannot fire the warning.
+_STALL_CONFIRM = 15
 
 
 class ProjectedGradientOptimizer:
@@ -340,26 +370,27 @@ class ProjectedGradientOptimizer:
 		return g_inf * self.target_area / max(v_max * rho, np.finfo(np.float64).tiny)
 
 	def _warn_if_stalled(self, k, n_rejected_run, step, E) -> None:
-		"""Flag a refinement trigger that is firing on a dead line search.
+		"""Flag a refinement trigger firing on a level that died under-resolved.
 
-		The energy-plateau trigger cannot tell a frozen energy from a converged
-		one. Measured on the soft-area arm, EVERY level's line search collapsed
-		and the trigger then fired 22-29 iterations later, reporting the failure
-		as convergence -- which is how a dead optimizer masqueraded as a 32x
-		speedup for a day. Unlike the _STALL_WARN_AFTER counter, this check is
-		threshold-independent: if ANY step was rejected in the run-up to the
-		trigger, it says so at the moment the trigger fires, which is the one
-		place the message cannot be outrun.
+		Silent when the line search floored at a normal point: the plateau
+		trigger's patience window is `refine_patience` rejected iterations BY
+		CONSTRUCTION, so "some steps were rejected before the trigger" is true
+		of every healthy level and cannot discriminate. This reports only the
+		case the timing evidence supports -- a floor reached inside the first
+		_STALL_EARLY_ITERS iterations, which on every run measured so far means
+		the level had too few vertices per cell to resolve its interfaces.
 		"""
-		if n_rejected_run <= 0:
+		onset = k - n_rejected_run + 1
+		if n_rejected_run <= 0 or onset >= _STALL_EARLY_ITERS:
 			return
 		self.logger.warning(
-			f"REFINEMENT TRIGGER FIRING ON A STALLED LINE SEARCH at iteration "
-			f"{k}: the last {n_rejected_run} iteration(s) accepted no step "
-			f"(step floored at {step:.3e}, E={E:.10f}). The energy is frozen "
-			f"because the optimizer is stuck, not because it converged -- this "
-			f"level's iteration count is a failure point, not a cost. Treat any "
-			f"speedup measured against it as unearned."
+			f"UNDER-RESOLVED LEVEL at iteration {k}: the line search reached "
+			f"the backtracking floor at iteration {onset} (< "
+			f"{_STALL_EARLY_ITERS}) and has accepted no step since (step "
+			f"{step:.3e}, E={E:.10f} frozen). A level that dies this early did "
+			f"not converge, and the partition it hands to the next level is "
+			f"unfinished. Usual cause: too few vertices per cell; also check "
+			f"lambda_penalty. Do not read its iteration count as a cost saving."
 		)
 
 	def constraint_fun(self, x: np.ndarray) -> np.ndarray:
@@ -634,29 +665,31 @@ class ProjectedGradientOptimizer:
 					profile.add_counter('backtracks_per_iter_total', n_backtracks)
 					profile.add_counter('major_iterations', 1)
 
-				# A line search that accepts nothing is a DEAD optimizer, not a
-				# converged one, and the energy-plateau trigger cannot tell the
-				# difference: the energy is frozen either way. Measured on the
-				# soft-area arm, every level collapsed to step 9.095e-13 some
-				# 25-30 iterations before its "convergence" trigger fired, which
-				# is how a dead optimizer masqueraded as a 32x speedup. Warn
-				# once per level, loudly, and count it.
+				# A floored line search is how a healthy level ends (see the
+				# _STALL_EARLY_ITERS comment at module scope), so warn only when
+				# the floor is reached EARLY -- the signature of a level with too
+				# few vertices per cell, which then hands unfinished work to the
+				# next level. Warn once per level.
 				if accepted:
 					n_rejected_run = 0
 				else:
 					n_rejected_run += 1
-					if (n_rejected_run == _STALL_WARN_AFTER
+					onset = k - n_rejected_run + 1
+					if (n_rejected_run == _STALL_CONFIRM
+							and onset < _STALL_EARLY_ITERS
 							and not stall_warned):
 						stall_warned = True
 						self.logger.warning(
-							f"LINE SEARCH STALLED at iteration {k}: no step "
-							f"accepted in {n_rejected_run} consecutive "
-							f"iterations (step floored at {step:.3e}, "
-							f"E={E:.10f} frozen). The iterate is pinned by a "
-							f"failed line search, NOT by convergence -- any "
-							f"refinement trigger that fires from here is "
-							f"reporting a dead optimizer. Treat the level's "
-							f"iteration count as a failure point, not a cost."
+							f"UNDER-RESOLVED LEVEL at iteration {k}: the line "
+							f"search reached the backtracking floor at "
+							f"iteration {onset} (< {_STALL_EARLY_ITERS}) and "
+							f"has accepted no step in the {n_rejected_run} "
+							f"iterations since (step {step:.3e}, E={E:.10f} "
+							f"frozen). This level did not converge -- it will "
+							f"hand an unfinished partition to the next level. "
+							f"Usual cause: too few vertices per cell; also "
+							f"check lambda_penalty is inside its working "
+							f"window."
 						)
 				if profile is not None and not accepted:
 					profile.add_counter('rejected_iterations', 1)

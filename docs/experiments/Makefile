@@ -9,7 +9,7 @@
 #
 # Read README.md before adding a report.
 
-DOCS = 01-winner-take-all-partition-gap 02-corrected-energy-highn-validation 03-dual-projection-verification 04-territory-aware-highn-validation 05-soft-area-constraint
+DOCS = 01-winner-take-all-partition-gap 02-corrected-energy-highn-validation 03-dual-projection-verification 04-territory-aware-highn-validation 05-soft-area-constraint 06-subfloor-ladder
 
 all: $(DOCS)
 

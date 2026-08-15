@@ -315,6 +315,82 @@ plain E₀ on every level, the worst-cell deviation shrank monotonically with re
 (−10.6% at 2 levels → −5.84% at 3 → −1.24% at 5). Refining an already-balanced
 structure with the cheap energy improves balance; it does not break it.
 
+**Direct measurement of what the floor costs (2026-08-14, N=100, controlled).**
+Findings (1) and (2) were by-products of diagnosing something else. They have since
+been tested head-on, changing exactly one variable against the validated N=100
+deliverable: the coarsest level dropped from 100×96 (96 verts/cell) to 60×52
+(**31** verts/cell, matching N=300's 32), with the increments re-chosen so the ladder
+still ends at the *same* finest mesh 348×328. Results
+(`docs/experiments/06-subfloor-ladder/`, runs `run_20260814_002405` +
+`run_20260814_091130`):
+
+| after level | V | verts/cell | imbalanced (worst) | fragmented |
+|---|---|---|---|---|
+| 1 | 3,120 | 31 | 74 (46.80%) | 0 |
+| 2 | 15,972 | 160 | 1 (18.78%) | 0 |
+| 3 | 38,760 | 388 | 1 (18.13%) | 0 |
+| 4 | 71,484 | 715 | 1 (16.59%) | 0 |
+| 5 (final) | 114,144 | 1,141 | **1 (15.92%)** | **0** |
+| *control, final* | 114,144 | 1,141 | *0 (0.78%)* | *0* |
+
+Three things follow. **(a) Damage at the coarsest level is inherited, not healed** —
+37× more vertices, ending on the control's own finest mesh, moves the worst cell only
+46.80% → 15.92%, still 3× over the gate. This is the strongest evidence yet for the
+floor, and it is on the *imbalance* axis. **(b) A sub-floor level does NOT cause
+fragmentation** — 0 fragmented at every level, not even sub-threshold speckle. The
+pre-registered hypothesis that N=300's persistently split cells 274/290 are born on
+its 32-verts/cell level 0 is therefore **refuted**, and their origin is open (see §4b
+above; the prepared N=300 above-floor config was gated on this result and not run).
+**(c) The binding threshold is ~90 verts/cell, not the ~250–300 gate floor.** The
+two must not be conflated. The gate floor is where a level can itself drive the worst
+cell under 5%. What the sub-floor arm crossed is far lower and far sharper — whether
+the level *runs at all*. Across every trace in `results/`, levels at 31/32/48/64/83
+verts/cell reach the backtracking floor at iteration **18–47** and stop; levels at
+92/96 reach it at 1,141 or never in 30,000. So the mechanism is not "a coarse level
+does bad work" but "a coarse level does **no** work": it dies in tens of iterations,
+the cheap equalization never happens there, and the first level that runs starts from
+a badly imbalanced field. At N=1000 a ~90 v/cell coarsest level is V ≈ 90k — a third
+of what the gate floor would demand, and unremarkable beside meshes already run.
+
+**Caveat that stops this being a rule.** A dying level 0 is *not* by itself fatal:
+N=200 reaches 0 imbalanced (worst 1.65%) with a level 0 at 48 v/cell that dies at
+iteration 21, because its **level 1** at 124 v/cell then runs 12,155 iterations and
+equalizes there. The statement consistent with every run measured is weaker: *some
+early, cheap level must run long enough to equalize before the expensive levels
+begin.* N=100 gets one at level 0, N=200 at level 1, N=300's first is level 2 at
+158 v/cell running 6,658 iterations — later, and less than half as long.
+
+**The N=300 ladder, reconstructed for free.** Trace files store `x`
+(`traces/*_internal_data.hdf5`), so the per-level gate history of the λ=11.5 control
+costs no compute — rebuild each level's mesh with `TorusMeshProvider`, take the
+argmax, run the gates:
+
+| stage | mesh | verts/cell | imbalanced | worst % | fragmented |
+|---|---|---|---|---|---|
+| seeded init | — | — | 230 | 44.02 | 0 |
+| after L0 | 100×96 | 32 | 234 | 45.57 | 0 |
+| after L1 | 162×154 | 83 | 234 | 49.26 | 0 |
+| after L2 | 224×212 | 158 | **10** | **36.15** | 2 |
+| after L3 | 286×270 | 257 | 4 | 27.04 | 2 |
+| after L4 | 348×328 | 380 | 3 | 24.81 | 2 |
+
+Both coarse levels die and change nothing (230 → 234). Level 2 does all the work and
+**converges** — worst % flat at 36.15 over its last 1,000 iterations, so it did *not*
+stop early — and levels 3–4 improve with decelerating returns (−9.11, −2.23 points).
+Neither more iterations nor more levels reaches the gate.
+
+**Fragmentation is born mid-level-2**, at iterations 2,500 and 4,500, while the
+imbalanced count falls 234 → 10. Balance is bought with disconnection on the **plain**
+energy too — the same mechanism §4c's locality criterion identifies and that report 05
+measured for A2, milder here. It is not an A2-specific defect.
+
+Whether giving N=300 an earlier, longer-running equalization level moves its converged
+answer is **untested**. The N=100 measurement above shows the converged point is
+start-dependent (identical finest mesh, 0.78% vs 15.92%), which makes it worth asking,
+not answered. The naive test is not the one to run:
+`parameters/torus_300part_rebased_ladder.yaml` lifts level 0 only to 51 verts/cell,
+still inside the dying regime.
+
 **The code is gone; the result is not (2026-08-10).** The territory-aware machinery —
 the WTA balance term, the discrete-area trim, the P2 reduced-gradient step/acceptance/
 trigger fix, and the adaptive `wta_schedule` — was **removed from `main`**, since a
@@ -525,6 +601,7 @@ finer mesh did not help.
 | λ tuning (crispness penalty) | no fix on the buggy well (swept 1–10) | **on the corrected well, moderate `λ=5.1` fixes it** (worst-cell 22.5% → 0.8%); *inert* on the buggy well — which is why the earlier 1–10 sweep saw nothing | **fixes it, with the energy fix** ✅ |
 | Seeded init (equal-mass Voronoi) | **fixes it** ✅ | necessary complement — avoids the corrected-energy symmetric trap (§3) and gives every cell a start, but not sufficient *alone* (seeded-λ2.1 still runts) | required, not sufficient |
 | More / finer mesh | weak, non-monotonic | **counterproductive** (finer = deeper runt, under the buggy well) | wrong lever |
+| **Coarsest-level resolution** (verts/cell at level 0) | not isolated | **causal and irreversible** — 31 v/cell instead of 96 leaves a permanent 15.92% runt vs the control's 0.78%, unhealed by 37× refinement onto the identical finest mesh | **real, and unaffordable at scale** ⚠ — the fix (V ∝ N at every level, P3) puts N=1000's *coarsest* level at V ≈ 250–300k. Does **not** cause fragmentation. `docs/experiments/06-subfloor-ladder/` |
 | Detection gate | `detect_dormant_cells()` ✅ | `detect_area_imbalance()` ✅ | both catch |
 | Hard discrete-territory / crispness **constraint** | n/a | **not needed** — once the well is correct, the *soft* λ penalty suffices; the hard-floor idea is superseded | superseded |
 
