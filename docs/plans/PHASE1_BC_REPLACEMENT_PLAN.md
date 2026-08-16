@@ -1,239 +1,307 @@
-# Replacing Phase 1 at High N — Shared Harness, then C, then B
+# Replacing Phase 1 at High N — Shared Harness, then B, then C
 
 **Status:** Not Started
+**Revision:** v2 (2026-08-15) — v1 was rewritten after adversarial review; see
+[Correction history](#correction-history).
 
 ## Background
 
 Phase 1 (Γ-convergence relaxation by PGD) produces a *continuous* density field
 whose winner-take-all readout is not a valid partition at high N: cells are area
-imbalanced, and occasionally disconnected. Four attempts to make the N=300 ladder
-cheaper have failed (territory-aware relaxation; A2 soft area constraint; A2's
-exact-at-level-0 hybrid; A2's adaptive within-level switch), and one attempt to
-show the ladder itself was the defect (`docs/experiments/06-subfloor-ladder/`)
-refuted its own hypothesis.
+imbalanced, and sometimes disconnected. The standing taxonomy is
+[`../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md`](../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md),
+with the source proposal verbatim at
+[`../reference/phase1_highn_proposal_ABCDE_original.md`](../reference/phase1_highn_proposal_ABCDE_original.md).
+**A** (balanced readout by semi-discrete OT dual shifts) and **E** (connectivity
+repair) shipped as `src/partition/balanced_readout.py`. **A2** was rejected in
+its pure and adaptive forms. The gate on **B** and **C** was met 2026-08-12.
 
-The standing taxonomy of high-N approaches is
-[`../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md`](../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md)
-(source proposal archived verbatim beside it). **A** (balanced readout by
-semi-discrete OT dual shifts) and **E** (connectivity repair) shipped, as
-`src/partition/balanced_readout.py`. **A2** was rejected. The gate on **B** and
-**C** was met on 2026-08-12.
+Prior attempts on the N=300 ladder, stated accurately:
 
-**The motivating argument is about scaling, not about PGD's ceiling.** The
-balanced readout repairs a broken partition at extraction in ~17 s, which is
-excellent as a repair tool and is not a path forward: it requires first spending
-days of compute producing an invalid partition. That cost grows with N, so a
-method whose output needs repair does not reach N=400, N=500, or N=1000. B and C
-both **abolish the category** — every iterate is already a hard partition with
-exactly equal discrete areas, so there is never a continuous field whose readout
-can diverge, and nothing to repair.
+| Attempt | Outcome |
+|---|---|
+| Territory-aware relaxation | Rejected — fixed N=200 *validity*, manufactured 14/200 disconnected cells; never an N=300 cost fix |
+| A2, pure soft area constraint | Rejected — 32× faster, but 3–4/100 fragmented and a collapsed line search |
+| A2, adaptive within-level switch | Rejected — same failure |
+| A2, exact-at-level-0 hybrid | **Viable, with a dependency** — 6.83×, all gates pass, Phase 2 within +0.246%; requires the balanced readout. Measured at N=100; never run at N=300 |
 
-### What this plan deliberately does not assume
+### The motivating argument is cost, and only cost
 
-An adversarial review on 2026-08-15 withdrew three claims that would otherwise
-motivate this work, and this plan must not lean on them:
+PGD costs **26–80 h per N=300 solution** (measured `total_wall_s`: 48,132 s for
+the N=100 deliverable; 92,751 s and 130,588 s for the two λ=12 N=300 runs). B and
+C are estimated at minutes. That gap is what does not survive scaling to N=400,
+N=500, N=1000.
 
-- **"N=300 is energy-limited, not descent-limited"** is *unsupported*. Level 2 of
-  the λ=11.5 run floored its line search at iteration 6,628 with the energy still
-  falling (−0.667 over the last 1,000) and ‖g‖ = 31.11. Whether a better ladder
-  could reach the gate is **unknown**.
-- **The "~90 verts/cell runs-or-dies boundary"** is not established; v/cell is
-  isolated by exactly one controlled pair.
-- **"Neither more iterations nor more levels reaches the gate"** extrapolates two
+**This plan does not claim PGD produces invalid partitions inherently.** An
+adversarial review on 2026-08-15 (commit `c16fcc3`) withdrew three claims, and
+none of them may be relied on here:
+
+- "N=300 is energy-limited, not descent-limited" — **unsupported**; level 2
+  floored its line search mid-descent with ‖g‖ = 31.11.
+- The "~90 verts/cell runs-or-dies boundary" — **not established**.
+- "Neither more iterations nor more levels reaches the gate" — extrapolates two
   levels.
 
-So this plan is *not* justified by "PGD is exhausted." It is justified by the
-scaling argument above, which is independent of PGD's ceiling.
+Whether a better ladder could reach the gate is **unknown**. The case for B and C
+rests on cost alone, which is independent of that question.
 
-## Verified state of the evidence base (checked 2026-08-15)
+## Verified state of the evidence base
 
-This section exists because the falsifiers below depend on baselines that were
-assumed to exist. Four of them do not.
+**Corpus enumerated (2026-08-15):** both working directories of this repository —
+`/Users/teban/Development/projects/surface-partition/results/` (7 `*npart300*`
+runs) **and** the sibling worktree
+`/Users/teban/Development/projects/surface-partition-territory/results/`
+(2 `*npart300*` runs). `results/` is untracked, so **each worktree has its own**;
+enumerating only one is how v1 of this plan went wrong.
+
+### N=300 Phase 2 baselines — these exist
+
+| Run | Location | Mesh | Phase 2 best perimeter | Iters |
+|---|---|---|---|---|
+| `run_20260806_123326` λ=11.5 seed 61803399 | territory worktree | **V = 47,488** | **323.319247087254** | 19 |
+| `run_20260808_191030` λ=11.5 seed 61803399 | territory worktree | **V = 114,144** | **322.96218780465847** | 19 |
+
+Both via `readout/dualshift_gate0.05_repair/refinement/…`, plain energy
+(`wta_*` flags all False), with `partition/` exports. `run_20260806_123326` is
+also the control cited by this repo's own committed report 05.
+
+**Cross-mesh scatter between them: 0.11%** — a usable nuisance-variance datum.
+
+### Other anchors
 
 | Fact | Status |
 |---|---|
-| **No N=300 run has ever had Phase 2 run on it** — no `refinement/` directory exists under any `results/*npart300*` | ❌ blocking |
-| **No N=300 readout campaign exists on disk** | ❌ |
-| `run_20260806_123326`, cited in CLAUDE.md as the N=300 readout measurement | ❌ not on disk |
-| **Neither λ=11.5 run completed** — `run_20260813_000958` has no solution file; `run_20260813_003231` stops at `checkpoint_level03.h5` | ❌ |
-| Usable N=300 PGD solution: **λ=12, `run_20260714_224821`, seed 61803399** — 9/300 imbalanced, worst 34.95%, 0 dead, 0 weak, **V = 47,488** (224×212) | ✅ |
-| Second λ=12 solution: `run_20260716_152451`, seed 27182818 — 10/300 imbalanced, worst 40.62% | ✅ |
-| **N=100 deliverable `run_20260709_081548`** — Phase 2 best perimeter **185.2546144718457** (campaign `ipopt_btol0.001_lbfgs30_hess_bestiter_partial`, iteration 020), all gates clean, worst cell 0.78% | ✅ verified |
+| N=100 deliverable `run_20260709_081548`: Phase 2 best **185.2546144718457** (iteration 020, minimum over 20), worst cell 0.7786%, 0 dead / 0 weak | ✅ re-verified |
+| ⚠ That run's `metadata.yaml` has **no `disconnected_cells` block** — it predates the gate. "All gates clean" rests on CLAUDE.md, not run metadata | ❗ recompute in Phase 0d |
+| λ=12 `run_20260714_224821` (seed 61803399), V=47,488: 9/300 imbalanced, worst 34.95% | ✅ |
+| λ=12 `run_20260716_152451` (seed 27182818), V=47,488: 10/300 imbalanced, worst 40.62% | ✅ |
+| ⚠ **Both λ=12 runs also fail the connectivity gate: 2/300 fragmented each** — recomputed with `testing/check_fragmentation.py`; absent from their metadata, which predates the gate. Seed 27182818's worst stray is **41.77% of target**, beyond anything the repair has been shown to fix | ❗ new |
+| Neither λ=11.5 run *in this checkout* completed — `run_20260813_000958` crashed in the entry projection ~1 min in; `run_20260813_003231` stops at `checkpoint_level03.h5` | ✅ (irrelevant now — the worktree runs supersede them) |
+| Control Phase 2 campaign settings: `method: ipopt`, `boundary_tol: 0.001`, `max_iterations: 20` | ✅ |
 
-Two consequences:
-
-1. **The primary falsifier must anchor at N=100**, where a complete, validated,
-   independently re-verified Phase 2 baseline exists. This also matches the source
-   proposal's framing point 5: *"run the C-vs-relaxation comparison at N=100
-   before investing further in relaxation-side machinery."*
-2. **N=300 is the scaling test, and it needs a baseline built first.** The λ=12
-   solution at V=47,488 is exactly the mesh B's falsifier already names, so the
-   ladder cost is already paid — but readout + Phase 2 on it has never been run.
-   That is Phase 0's deliverable, not B's.
-
-## Phase 0 — shared balanced-assignment solver + evaluation harness
+## Phase 0 — shared solver, harness, and baseline
 
 **Status:** Not Started
 
-Everything in Phases 1 and 2 depends on this, and **nothing downstream may modify
-it.** Freezing the shared pieces first is what makes C's and B's numbers
-comparable. It is also where an error is most expensive: today's corrections all
-traced to a measurement harness quietly shaping its own conclusion.
+Nothing downstream may modify any of this. Freezing it is what makes the arms
+comparable, and it is where an error is most expensive.
 
-### 0a — Extract the balanced-assignment solver
+### 0a — Generalize the balanced-assignment solver
 
-`solve_dual_offsets(log_densities, lumped_mass, target, config)` in
-`src/partition/balanced_readout.py:143` is already generic in everything but its
-parameter name: its only use of the score matrix is
-`np.argmax(log_densities + psi, axis=1)`. A, B and C all need exactly this —
-*balanced assignment given arbitrary per-vertex scores*:
+`solve_dual_offsets(log_densities, lumped_mass, target, config)`
+(`src/partition/balanced_readout.py:143`, sole caller at `:446`) uses the score
+matrix only through `np.argmax(scores + psi, axis=1)`, so it is **correct** for
+any additive score matrix. A calls it on `log u`; B will call it on diffused
+indicators `y`; C on `−d²`.
 
-- **A** calls it on `log u` (densities) — shipped.
-- **B** calls it on `y`, the diffused indicators.
-- **C** calls it on `−d²`, negative squared geodesic distance.
+**But it is not generic in convergence, and this is a real trap.** The
+subgradient schedule (`dual_eta0 = 0.5`, `dual_decay = 0.02`, `dual_iters = 400`,
+`balanced_readout.py:57-59`) is calibrated to log-density scale, where the N=300
+readout needed ψ ∈ [−0.75, +3.46]. For C's `−d²` on this torus (R=1, r=0.6), cell
+radius ≈ 0.27 at N=100 gives per-edge score granularity ≈ 0.008 and needed
+offsets O(0.02) — while the first step is ≈ 0.15–0.5, a 10–25× overshoot decaying
+only to 0.056 by iteration 400. Worse, the function **returns its best iterate**,
+so non-convergence is silent. Even on its home scale the dual stage reached only
+worst-dev 2.12% at V=47,488/N=300 before repair.
 
-**Do this as an in-place generalization, not a new module.** The readout is
-production code that produced the valid N=300 partition; a function it already
-exercises is better tested than a new one. Rename the parameter to `scores`,
-document that any additive score matrix is valid, and leave the call site in
-`apply_balanced_readout` unchanged.
+**Required:** score normalization (or scale-aware η) so any arm's scores land in
+a comparable range.
 
-**Acceptance:** the balanced readout is byte-identical before and after on a
-fixed input. This is a refactor with a hard equivalence gate, not a behavior
-change.
+**Acceptance — two gates, both required:**
+1. The balanced readout is **byte-identical** before and after on a fixed input
+   (protects the shipped A path).
+2. **Convergence on foreign scales:** synthetic `−d²` and `y` score matrices
+   reach worst-dev ≤ 1% within the iteration budget. Gate 1 alone cannot detect
+   the scale trap — it only exercises A.
 
 ### 0b — Build the evaluation harness
 
-One harness, used unchanged by every arm. Given a set of labels on a mesh it
-must report:
+One harness, used unchanged by every arm and by the control. Given labels on a
+mesh it reports: all three validity gates; perimeter after Phase 2 under
+**pinned** settings (`ipopt`, `boundary_tol 0.001`, `max_iterations 20`); and
+wall time.
 
-- all three validity gates (`detect_dormant_cells`, `detect_area_imbalance`,
-  `detect_disconnected_cells`);
-- perimeter **before** Phase 2 (from `ContourAnalyzer`);
-- perimeter **after** Phase 2, same campaign settings as the control;
-- wall time, taken from `timing_profile.yaml`'s `total_wall_s` — **never**
-  `metadata.yaml`'s `run_time_seconds`, which is the last level's time only and
-  under-reports by 3.6× on the N=100 deliverable.
+**Pinned decisions** (v1 left all of these open):
 
-Any arm's output is one-hot densities in the Phase 1 solution schema, so
-`ContourAnalyzer`, `refine_perimeter.py` and `check_fragmentation.py` consume it
-unchanged with no new flags.
+- **Arm mesh:** the control's finest, **V = 114,144** at N=100; **V = 47,488** at
+  N=300.
+- **Wall-time protocol:** PGD uses `timing_profile.yaml`'s `total_wall_s` (never
+  `run_time_seconds`, which under-reports 3.6×). Arms produce no such file, so
+  arm wall time is process wall-clock from a single-purpose driver, reported per
+  level. **This asymmetry is disclosed, not hidden.**
+- **Perimeter *before* Phase 2 is recorded but never used as a criterion.**
+  Midpoint VP extraction inflates it ~13.3% (control: 214.34 → 185.85 after the
+  first optimize), which swamps any difference between arms.
+- **`max_iterations: 20` is the control's budget and may disadvantage an arm**
+  whose boundaries need more migrations. If an arm is still improving at
+  iteration 20, that is **reported as a censored result**, not scored as a loss.
 
-### 0c — Build the missing N=300 baseline
+### 0c — N=300 baseline: adopt, do not rebuild
 
-Run the balanced readout, then Phase 2, on **λ=12 `run_20260714_224821`**
-(V=47,488). This produces the PGD-side number that B's pre-registered falsifier
-compares against, and it does not exist today. Record its perimeter, gates and
-wall time through the harness from 0b.
+v1 called this "build the missing baseline… a real compute cost on the critical
+path." That was wrong — the baselines exist (above). Options, in order:
 
-**This is a real compute cost and it is on the critical path.** It must be paid
-whether or not B and C ever run, because without it there is no N=300 comparison
-at all.
+1. **Adopt** `run_20260808_191030` (V=114,144) and `run_20260806_123326`
+   (V=47,488). Cost: **zero compute**. Requires copying/archiving them into a
+   location this repo enumerates.
+2. If a λ=12 baseline is wanted for seed diversity, re-running readout + Phase 2
+   on the existing λ=12 solutions costs **≈ 17 s + ~40 min** at V=47,488 (from
+   the worktree campaign's timestamps) — roughly an hour, not days.
 
-## Phase 1 — C: capacity-constrained geodesic Lloyd
+### 0d — Shake down the harness on the control, before any arm exists
 
-**Status:** Not Started
+Push the **control's own labels** through the entire harness and confirm it
+reproduces **185.2546144718457**. Also recompute the control's connectivity gate,
+which its metadata never recorded.
 
-Runs **first**, for three reasons: it is the cheaper candidate in its own right;
-it is simpler, so it shakes down the harness with less machinery around it; and
-having the baseline recorded *before* the candidate's number exists is what stops
-"good" being defined after the fact.
+If the harness cannot reproduce a known answer, no arm result from it means
+anything. This replaces "use C as the shakedown."
 
-Drop the density field entirely. N sites; geodesic distance from each site
-(multi-source Dijkstra on the mesh edge graph via `scipy.sparse.csgraph`, or the
-heat method); assignment by the 0a solver with cost `d²` — making it a geodesic
-power diagram with prescribed capacities; Lloyd step moves each site to its
-cell's `v`-weighted centroid, snapped back to the nearest mesh vertex; ~30
-iterations; labels straight to Phase 2. Start from the existing farthest-point
-seeds in `src/optimization/initialization.py`.
-
-Exact discrete balance holds by construction and is tail-immune, so it scales to
-N=1000 trivially.
-
-**Known limitation, stated up front:** C minimizes a *quantization* energy
-(`Σ_k ∫ d²`), not perimeter. It produces equal-area round cells, which on a flat
-domain tend to hexagons — and by the honeycomb theorem hexagons are
-perimeter-optimal, so C should land *near* the right answer. The torus is curved,
-so geodesic Voronoi ≠ minimal perimeter, and C is expected to be systematically
-off by an amount nobody has measured. Measuring it is the point.
-
-## Phase 2 — B: auction-dynamics MBO
+## Phase 1 — B: auction-dynamics MBO
 
 **Status:** Not Started
 
-Threshold dynamics (Esedoğlu–Otto), with volume constraints by balanced
-assignment (Jacobs–Kim–Léger, JCP 2018 — published for this problem class).
-Unlike C, B descends *the project's actual objective*: the thresholding energy
-Γ-converges to perimeter.
+Threshold dynamics (Esedoğlu–Otto) with volume constraints by balanced assignment
+(Jacobs–Kim–Léger, JCP 2018). **B descends the project's actual objective** — the
+thresholding energy Γ-converges to perimeter — which is why the taxonomy ranks it
+2, above C at 4.
 
 Iterate: (1) diffuse each indicator for time τ by solving `(M + τK) y_k = M χ_k`,
-one prefactorized sparse Cholesky per level, reusing `TriMesh`'s existing FEM
-matrices; (2) reassign every vertex by balanced thresholding,
-`ω(i) = argmax_k [y_ik + ψ_k]`, via the 0a solver. Stray islands shrink to
-extinction under mean-curvature flow — the opposite dynamic to the rejected trim.
+one prefactorized sparse solve per level (`scipy.sparse.linalg.factorized`;
+`sksparse` is not installed and is not needed); (2) reassign by balanced
+thresholding `ω(i) = argmax_k [y_ik + ψ_k]` via 0a. Seeded init, the mesh ladder,
+M/K/v, HDF5 formats and Phase 2 carry over unchanged.
 
-Seeded init, the mesh ladder, M/K/v, the HDF5 formats and Phase 2 all carry over
-unchanged.
+**Pinned:** τ = (c·h)² with **c = 2** by default, h the mean edge length at the
+level. Pinning occurs when the diffusion length falls to the mesh scale, so
+**√τ/h must be reported per level and must exceed 1**; c is a calibration item
+with that acceptance check, not a free parameter to tune against the result.
 
-**Named risk:** mesh pinning when `√τ ≲ h`. Set `τ ~ h²` and report the ratio
-`√τ / h` for every level, so pinning is visible rather than inferred from a bad
-result.
+## Phase 2 — C: capacity-constrained geodesic Lloyd
+
+**Status:** Not Started
+
+N sites (from the existing farthest-point seeds in
+`src/optimization/initialization.py`); geodesic distance by multi-source Dijkstra
+on the mesh edge graph (`scipy.sparse.csgraph`); assignment by the 0a solver with
+cost `d²`; Lloyd step to the `v`-weighted centroid, snapped to the nearest
+vertex; labels straight to Phase 2.
+
+C runs **after** B, as the control that makes B's number interpretable — if C
+matches B, B's diffusion machinery bought nothing.
+
+**Two limitations stated up front.** (i) C minimizes a *quantization* energy, not
+perimeter. The honeycomb argument for it landing near-optimal needs *both* halves
+— Hales (hexagons minimize perimeter) and Fejes Tóth/Gersho (hexagons minimize
+quantization error) — and both are **flat-2D** results. This torus has Gaussian
+curvature of both signs and hexagonal commensurability is the untested D(ii), so
+neither theorem transfers. How far off C lands is exactly what this measures.
+(ii) **Graph-Dijkstra is not the geodesic metric** — on a structured torus mesh,
+edge-path distances are anisotropically inflated by several percent depending on
+direction, which distorts C's cells directly and could alone consume the +1%
+budget. Report this as a named confound; the heat-method alternative needs
+gradient/divergence operators the repo does not have.
 
 ## Pre-registration
 
-Written before any code exists. Report 06 pre-registered and honored its refute
-branch, and that was the one thing the adversarial review praised without
-qualification.
+Written before any code exists.
 
-### Primary (N=100, baseline exists)
+### Primary — N=100, against `run_20260709_081548`
 
-Control: `run_20260709_081548`, Phase 2 perimeter **185.2546144718457**, all
-gates clean.
+Control Phase 2 perimeter **185.2546144718457**, V = 114,144.
 
-| Outcome | Verdict |
+**Threshold calibration** (v1 asserted +1% with no basis): same-partition Phase 2
+scatter is **0.024%** (structure-trigger A/B); cross-mesh N=300 scatter is
+**0.11%**. So +1% is ≈ 10× the largest measured nuisance variation, and +5% is
+the proposal's own refutation bound — **the "3–5%" range is resolved to 5%** here.
+
+| Perimeter outcome | Verdict |
 |---|---|
-| Arm passes all three gates **and** Phase 2 perimeter within **+1%** (≤ 187.11) | **Success** — viable replacement |
-| Within **+1% to +5%** (≤ 194.52) | **Partial** — viable only if wall-time gain is large; report, do not ship |
-| Worse than **+5%**, or fails any gate | **Refuted** for that arm |
+| ≤ 187.11 (+1%) | **Success** |
+| 187.11 – 194.52 (+1% to +5%) | **Partial** |
+| > 194.52 (+5%) | **Refuted on perimeter** |
 
-### Secondary (N=300, scaling — baseline built in Phase 0c)
+⚠ The Partial lane auto-triggers on wall time if "large gain" is undefined, since
+every arm is ~100× faster by construction. **"Large" is therefore not a
+criterion**: Partial results are reported with both numbers and escalated to a
+decision, never auto-promoted.
 
-Control: λ=12 `run_20260714_224821` at V=47,488, after readout + Phase 2. Same
-thresholds. B's original falsifier stands: a ~150-line prototype at that mesh, 50
-iterations, refuted if perimeter is >3–5% worse after Phase 2.
+### Validity grading — corrected
+
+v1's rule ("the readout is withheld because both arms are connected by
+construction") rested on a **false premise**. The source proposal says the
+opposite: for B, *"Connectivity is not per-step guaranteed"* (line 35); for C,
+*"connected in practice; residual violations go to the repair stage (E)"*
+(line 47). Refuting an arm for a stray island would discard it for a failure mode
+the proposal predicted and **E was built to absorb**.
+
+Also note **two of the three gates are vacuous for any balanced-assignment arm**:
+dormant cannot fire on one-hot labels where every cell owns ≥ 480 vertices, and
+area passes whenever the internal solver converges (vertex granularity ≈ 0.09% at
+V=114k/N=100, against a 5% gate). **"All three gates pass" has content only on
+connectivity.**
+
+| Connectivity outcome | Verdict |
+|---|---|
+| 0 fragmented raw | **Clean** |
+| Fragmented, but E repairs to 0 with strain comparable to the control's | **Viable, composed with E** — report island count, stray mass, repair moves/blocked |
+| E cannot repair, or repair strain is extreme | **Refuted on validity** |
+
+Area and dormant gates are still run and reported, and their vacuity is stated
+alongside.
+
+### Secondary — N=300 scaling
+
+Against the adopted baselines: **322.96218780465847** at V=114,144 and
+**323.319247087254** at V=47,488. Same thresholds. Report **both λ=12 seeds**
+(61803399, 27182818) where seed sensitivity is at issue — fragmentation location
+is seed-determined, so one seed is not a result.
 
 ### Rules that protect the comparison
 
-These exist to close the routes by which an arm could look good without working.
-
-1. **The balanced readout is NOT applied to B's or C's output.** Both claim to
-   produce balanced, connected partitions *by construction*. Repairing them would
-   conceal exactly the failure this tests. The readout is applied only to the PGD
-   control, which needs it.
-2. **Gates are evaluated on the arm's raw labels**, before any Phase 2.
-3. **Both N=300 λ=12 seeds** (61803399 and 27182818) are reported, not the better
-   one. Fragmentation location is seed-determined, so a single seed is not a
-   result.
-4. **Wall time comes from `timing_profile.yaml` `total_wall_s`.**
-5. **C's number is recorded and committed before B is run.**
-6. No claim of the form "every / always / never" without naming the corpus it was
-   computed over and how that corpus was enumerated.
+1. Validity is graded on the lanes above, not pass/fail; the readout is applied
+   to arms **only** in the "composed with E" lane, and that composition is
+   disclosed in the result.
+2. Gates are evaluated on the arm's **raw** labels first, always.
+3. Wall time per the 0b protocol, with the PGD/arm asymmetry disclosed.
+4. C's number is recorded before it is compared to B's.
+5. No claim of the form "every / always / never" without naming the corpus **and
+   how it was enumerated** — including which working directories were searched.
+6. Censored results (arm still improving at `max_iterations: 20`) are reported as
+   censored.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Phase 0c's N=300 baseline is expensive and on the critical path | Price it before starting; N=100 primary falsifier does not depend on it |
-| B's mesh pinning silently degrades results | Report `√τ / h` per level as a first-class output |
-| C is good enough, making B unnecessary | This is a **success**, not a waste — C is simpler and scales better |
-| Both arms lose to PGD on perimeter | Still decisive: it would mean the relaxation is doing something necessary, and would refute framing point 5 |
-| Harness error invalidates both arms | Adversarial review of *this plan* before implementation; C first as the cheap shakedown |
+| 0a's scale trap silently degrades an arm | 0a acceptance gate 2 on foreign score scales |
+| Harness itself is wrong | 0d reproduces a known answer before any arm exists |
+| Graph-Dijkstra anisotropy consumes C's error budget | Named confound; quantify against an analytic torus geodesic on a test case |
+| B's mesh pinning | Report √τ/h per level; must exceed 1 |
+| `max_iterations: 20` truncates an arm | Censored-result rule |
+| Stopping after C looks acceptable, never building B | B runs **first**; C is the control |
+| Both arms lose to PGD | Still decisive — would refute framing point 5 |
+
+## Correction history
+
+**v1 → v2 (2026-08-15), after adversarial review.** v1's baseline audit claimed
+no N=300 Phase 2 baseline, no readout campaign, and no `run_20260806_123326`
+existed. **All three were wrong**: they exist in the sibling worktree, whose
+`results/` is a separate untracked directory. v1 enumerated one working directory
+and stated a universal — the exact corpus-enumeration error corrected in
+`c16fcc3` the day before, and a violation of v1's own rule 6. Consequences: Phase
+0c collapsed from "expensive, critical path" to "adopt, zero compute"; rule 1's
+connectivity premise was refuted against the source proposal; the λ=12 runs'
+fragmentation (2/300 each) was missing; the arm ordering was reverted to B-first
+after the "C is cheaper" claim failed to survive scrutiny (C is plausibly
+*slower* at runtime — N Dijkstras × ~30 Lloyd iterations — and implementation
+sizes are comparable); and the "four attempts failed" background mischaracterized
+two of its four items.
 
 ## Related documents
 
 - Taxonomy: [`../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md`](../reference/PHASE1_HIGHN_APPROACHES_ABCDE.md)
-- Source proposal, verbatim: [`../reference/phase1_highn_proposal_ABCDE_original.md`](../reference/phase1_highn_proposal_ABCDE_original.md)
-- The gap this closes: [`../reference/winner_take_all_partition_gap.md`](../reference/winner_take_all_partition_gap.md) §4b, §4c, §9b
-- Why A2 was rejected: `docs/experiments/05-soft-area-constraint/`
-- Why the ladder is not the defect: `docs/experiments/06-subfloor-ladder/`
-- Code: `src/partition/balanced_readout.py`, `src/optimization/initialization.py`, `src/mesh/tri_mesh.py`
+- Source proposal: [`../reference/phase1_highn_proposal_ABCDE_original.md`](../reference/phase1_highn_proposal_ABCDE_original.md)
+- The gap: [`../reference/winner_take_all_partition_gap.md`](../reference/winner_take_all_partition_gap.md) §4b, §4c, §9b
+- `docs/experiments/05-soft-area-constraint/`, `docs/experiments/06-subfloor-ladder/`
+- Code: `src/partition/balanced_readout.py`, `src/optimization/initialization.py`, `src/mesh/tri_mesh.py`, `src/partition/find_contours.py`
