@@ -139,14 +139,31 @@ wall time.
 ### 0c — N=300 baseline: adopt, do not rebuild
 
 v1 called this "build the missing baseline… a real compute cost on the critical
-path." That was wrong — the baselines exist (above). Options, in order:
+path." That was wrong — the baselines exist (above).
 
-1. **Adopt** `run_20260808_191030` (V=114,144) and `run_20260806_123326`
-   (V=47,488). Cost: **zero compute**. Requires copying/archiving them into a
-   location this repo enumerates.
-2. If a λ=12 baseline is wanted for seed diversity, re-running readout + Phase 2
-   on the existing λ=12 solutions costs **≈ 17 s + ~40 min** at V=47,488 (from
-   the worktree campaign's timestamps) — roughly an hour, not days.
+**✅ DONE (2026-08-15). Both runs are now in this checkout's `results/`**, copied
+from the territory worktree (12.6 GB; sizes, file counts and both Phase 2
+perimeters verified identical). Re-verified after the copy:
+
+| Run | Mesh | Gates | Worst cell | Phase 2 |
+|---|---|---|---|---|
+| `run_20260808_191030` | V = 114,144 | **all three pass** | 0.64% | 322.96218780465847 |
+| `run_20260806_123326` | V = 47,488 | **all three pass** | 1.63% | 323.319247087254 |
+
+Zero compute spent. If a λ=12 baseline is later wanted for seed diversity,
+readout + Phase 2 on the existing λ=12 solutions costs **≈ 17 s + ~40 min** at
+V=47,488 — about an hour, not days.
+
+⚠ **Two caveats on this data.** (i) `results/` is gitignored, so these 12.6 GB are
+**not in version control** and now exist only as two copies on one disk — a
+machine that hard-reset three times in the week of 2026-08-07..15. The
+irreplaceable part is small: the two `partition/*.h5` exports total **20 MB**.
+(ii) The older export
+`torus_partition_run_20260806_123326_...h5` records
+`source_run_id = "dualshift_gate0.05_repair"` — a campaign name, the exact bug
+fixed by `05f0eb1` (cherry-picked as `ac7e79c`). It predates the fix; the
+`run_20260808_191030` export, made after it, is correct. Re-export the older one
+before citing its provenance.
 
 ### 0d — Shake down the harness on the control, before any arm exists
 
