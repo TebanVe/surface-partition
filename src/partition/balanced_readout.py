@@ -64,6 +64,18 @@ class BalancedReadoutConfig:
     # that it finished.
     max_repair_sweeps: int = 200
     fragment_rel_threshold: float = DISCONNECTED_FRAGMENT_REL_THRESHOLD
+    # Score normalization for FOREIGN score scales (approaches B and C).
+    # Default OFF, so the shipped readout (approach A, log densities) is
+    # byte-for-byte unchanged. dual_eta0/dual_decay were calibrated on the
+    # log-density scale, where the N=300 readout needed psi in [-0.75, +3.46];
+    # C's -d^2 scores need offsets O(0.02) while the first step is ~0.15-0.5,
+    # a 10-25x overshoot that decays only to 0.056 by iteration 400. Because
+    # solve_dual_offsets returns its BEST iterate, that non-convergence is
+    # silent. With this on, scores are divided by a robust assignment-margin
+    # scale before the ascent and psi is rescaled back on exit, so the tuned
+    # step schedule means the same thing on any score scale.
+    normalize_scores: bool = False
+    score_margin_percentile: float = 50.0
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +86,8 @@ class BalancedReadoutConfig:
             "repair_enabled": bool(self.repair_enabled),
             "max_repair_sweeps": int(self.max_repair_sweeps),
             "fragment_rel_threshold": float(self.fragment_rel_threshold),
+            "normalize_scores": bool(self.normalize_scores),
+            "score_margin_percentile": float(self.score_margin_percentile),
         }
 
 
@@ -140,8 +154,25 @@ def label_boundary_length(
     return total
 
 
+def assignment_margin_scale(scores: np.ndarray, percentile: float = 50.0) -> float:
+    """Robust scale on which an additive offset changes an assignment.
+
+    The dual ascent moves ``psi`` until areas balance, so the magnitude it needs
+    is set by how far apart the top-two scores are at a vertex -- the margin an
+    offset must cover to flip that vertex. Returns a percentile of the top1-top2
+    gap, which is scale-equivariant: multiply the scores by c and this scales by
+    c too. Falls back to 1.0 for a degenerate (all-ties) input.
+    """
+    if scores.shape[1] < 2:
+        return 1.0
+    top2 = np.partition(scores, -2, axis=1)[:, -2:]
+    gaps = top2[:, 1] - top2[:, 0]
+    scale = float(np.percentile(gaps, percentile))
+    return scale if np.isfinite(scale) and scale > 0.0 else 1.0
+
+
 def solve_dual_offsets(
-    log_densities: np.ndarray,
+    scores: np.ndarray,
     lumped_mass: np.ndarray,
     target: float,
     config: BalancedReadoutConfig,
@@ -152,15 +183,30 @@ def solve_dual_offsets(
     ``psi_k -= eta * (T_k - target)/target``, with a decaying step. Vertices are
     indivisible, so exact equality is unattainable; the granularity floor is one
     vertex mass (max_i v_i / target). Returns the best iterate visited.
+
+    ``scores`` is ANY additive per-vertex score matrix (V, N) -- the routine
+    touches it only through ``argmax(scores + psi)``. Approach A passes
+    ``log u``; B passes diffused indicators ``y``; C passes ``-d^2``.
+
+    Correctness is scale-free, but CONVERGENCE is not: dual_eta0/dual_decay are
+    calibrated to the log-density scale. Set ``config.normalize_scores`` for any
+    foreign scale -- it divides by the assignment-margin scale, runs the tuned
+    schedule there, and rescales psi back, so the returned psi is always in the
+    caller's own units. Default off keeps approach A byte-for-byte identical.
     """
-    N = log_densities.shape[1]
+    N = scores.shape[1]
+    scale = 1.0
+    if config.normalize_scores:
+        scale = assignment_margin_scale(scores, config.score_margin_percentile)
+        if scale != 1.0:
+            scores = scores / scale
     psi = np.zeros(N)
     best_worst = np.inf
     best_psi = psi.copy()
-    best_labels = np.argmax(log_densities, axis=1)
+    best_labels = np.argmax(scores, axis=1)
 
     for it in range(config.dual_iters):
-        labels = np.argmax(log_densities + psi, axis=1)
+        labels = np.argmax(scores + psi, axis=1)
         areas = np.zeros(N)
         np.add.at(areas, labels, lumped_mass)
         rel = (areas - target) / target
@@ -176,6 +222,10 @@ def solve_dual_offsets(
             )
         psi -= (config.dual_eta0 / (1.0 + config.dual_decay * it)) * rel
 
+    # Return psi in the CALLER's units. Guarded so the un-normalized path
+    # returns the identical array object it built (approach A stays bitwise).
+    if scale != 1.0:
+        best_psi = best_psi * scale
     return best_psi, best_labels, best_worst
 
 

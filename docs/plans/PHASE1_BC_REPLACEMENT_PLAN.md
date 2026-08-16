@@ -127,6 +127,52 @@ silent.
 
 Gate 1 alone exercises only the A path and structurally cannot detect the trap.
 
+#### 0a status (2026-08-16): gate 1 PASSES, gate 2 FAILS — and the failure matters
+
+Implemented as `normalize_scores` (default **off**, so A is untouched) plus
+`assignment_margin_scale`. Harness: `testing/test_balanced_assignment_solver.py`.
+
+**Gate 1 — PASS.** The shipped readout reproduces its recorded reference exactly
+on `run_20260716_152451`: 0 imbalanced, worst 1.80%, 0 fragmented, 2,469 moves,
+54 sweeps.
+
+**Gate 2 — FAIL**, at both pinned meshes, for both arms:
+
+| Scores | Mesh | bar | norm OFF | norm ON |
+|---|---|---|---|---|
+| C: `−d²` | V=47,488 / N=300 | 2.02% | 57.31% | **3.65%** |
+| C: `−d²` | V=114,144 / N=100 | 1.00% | 0.23% | 0.34% (passes) |
+| B: diffused | V=47,488 / N=300 | 2.02% | 45.35% | 45.35% |
+| B: diffused | V=114,144 / N=100 | 1.00% | 28.59% | 35.40% |
+
+Normalization is **directionally right and insufficient**. It buys C an order of
+magnitude at N=300 (57.31% → 3.65%) and helps B once τ is large enough
+(c=32: 188% → 12.83%), but neither arm reaches its bar. Two knobs were measured
+and eliminated:
+
+- **Margin percentile.** Swept p1/p5/p10/p25/p50. Higher is better for C
+  (p50 best); B is bad at every percentile. Not a tuning problem.
+- **Iteration budget.** Each dual iteration is an O(V·N) argmax — 14.2 M
+  operations at V=47,488/N=300 — so the 10× budget that might close the gap
+  costs ~20 min per solve. Not a practical fix.
+
+**The conclusion is structural, and it revises a premise this plan inherited.**
+The taxonomy's "A, B and C share one solver" is true of the *interface* — balanced
+assignment given per-vertex scores — but not of the *algorithm*. `solve_dual_offsets`
+is subgradient dual ascent, tuned for A's job: a small correction from an
+already-nearly-balanced argmax. B and C ask it to rebalance **30–45% of the area
+from an unbalanced start**, which it does not do at these sizes. Note the source
+proposal names B *"auction dynamics"* — Bertsekas auction, not subgradient ascent —
+so the mismatch is with our shipped approximation, not with B.
+
+**Therefore 0a is not complete.** It needs a solver that converges from far away:
+an auction algorithm or an entropic/Sinkhorn solve for the assignment, kept behind
+the same interface so A's path stays byte-identical. That is the next task, and it
+is larger than the rename this step was scoped as. **B must not be built until
+gate 2 passes** — a non-converging assignment step would surface as an area-gate
+failure attributed to B rather than to the harness, exactly the confusion the
+area-gate lane was created to prevent.
+
 ### 0b — Build the evaluation harness
 
 One harness, used unchanged by every arm and by the control.
