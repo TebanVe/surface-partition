@@ -60,26 +60,27 @@ FIXTURES = [
     (348, 328, 100, 4, (0, 1)),
     (348, 328, 300, 4, (0, 1)),
 ]
-STRONG_ITERS = 1500          # "what is achievable on this score matrix"
-STRONG_SLACK = 1.25          # default config must land within 25% of it
+STRONG_ITERS = 1500          # reported for context ONLY -- never used as a bar
 
-# Approach A's OWN dual-stage stall, by configuration, read from the adopted
-# baselines' readout metadata (`dual_worst_rel_dev`):
-#   V=47,488/N=300   run_20260806_123326  ->  2.1215%   (granularity 1.0108%)
-#   V=114,144/N=300  run_20260808_191030  ->  2.0218%   (granularity 0.4205%)
+# The fixtures' own internal assignments use a PINNED reference config, never
+# the solver under test. Without this the fixture trajectory degenerates along
+# with a broken solver (cells die), so a broken solver is graded on the easy
+# problem it created for itself -- measured: a psi=0 solver reached 80.15% on B
+# and still passed, because the fixture had collapsed around it.
+REFERENCE_CFG = dict(normalize_scores=True)
+
+# Incumbent-parity floor, imported from the harness so ONE number governs both
+# this gate and the harness's own area lane (they disagreed before: 2 x
+# granularity there vs A's stall here, which at the production pin meant the
+# fault flag fired at 0.841% while this gate declared 0a done at 2.022%).
 #
-# This is the floor the round-2 review specified and the first version of this
-# gate omitted: a bar that the SHIPPED solver fails on its home scores cannot be
-# evidence about a foreign one. Note it is not a granularity multiple -- the
-# stall is ~2% at both meshes while granularity more than halves between them,
-# which is exactly why "2 x granularity" was the wrong variable to track.
-#
-# Recorded honestly: this floor was added AFTER the production pin failed at
-# 0.919% against a 0.841% bar. It is the review's own prescription rather than a
-# post-hoc loosening, and it does not rescue a weak result -- C at 0.919% and B
-# at 0.686% are 2-3x BETTER than the 2.0218% A achieves at that same
-# configuration. Configurations with no measured entry get no floor.
-A_HOME_STALL = {(47488, 300): 0.021215, (114144, 300): 0.020218}
+# Superseded values, kept as a warning: the first floor used A's stall as
+# RECORDED in the shipped runs -- 2.1215% / 2.0218%. Those are A running
+# UN-normalized. The same solver on the same log densities with
+# normalize_scores ON and the same 400-iteration budget reaches 0.9072% and
+# 1.8384%, so the recorded figures are a configuration artifact, and importing
+# them let an arm clear a bar the incumbent only fails because of a setting.
+from src.partition.arm_harness import assignment_quality_bar  # noqa: E402
 
 
 def build(n_theta, n_phi):
@@ -114,7 +115,11 @@ def mean_edge_length(mesh):
 
 
 def _assign(scores, v, target):
-    cfg = BalancedReadoutConfig(normalize_scores=True)
+    """Fixture-internal assignment -- ALWAYS the pinned reference config.
+
+    Deliberately not the solver under test: see REFERENCE_CFG.
+    """
+    cfg = BalancedReadoutConfig(**REFERENCE_CFG)
     _, labels, worst = solve_dual_offsets(scores, v, target, cfg)
     return labels, worst
 
@@ -199,18 +204,23 @@ def run_gate2(quick=False):
                         settled.append(worst)
                     last_scores = scores
 
-                # Per-fixture reference: what a long, tuned run achieves here.
+                # Context only. NEVER a bar term: it is computed with the solver
+                # under test, so a broken solver would inflate its own bar in
+                # proportion to how broken it is. Measured: six deliberately
+                # crippled solvers, including one returning psi=0 with no
+                # iterations at all, passed the previous self-referential bar.
                 strong_cfg = BalancedReadoutConfig(
                     normalize_scores=True, dual_iters=STRONG_ITERS)
                 _, _, strong = solve_dual_offsets(
                     last_scores, v, target, strong_cfg)
-                bar = max(
-                    2.0 * gran,
-                    STRONG_SLACK * strong,
-                    A_HOME_STALL.get((len(v), n_cells), 0.0),
-                )
+                bar = assignment_quality_bar(v, n_cells)
 
-                got = min(settled) if settled else float("inf")
+                # MEDIAN, not min. min ratchets monotonically with sampling:
+                # measured on the production pin, C seed 0 over 8 outer
+                # iterations gives min 0.799% but median 0.919% with no
+                # convergence trend, and the min alone moved 0.919 -> 0.888 ->
+                # 0.799 purely by sampling more.
+                got = float(np.median(settled)) if settled else float("inf")
                 passed = got <= bar
                 ok &= passed
                 sig = assignment_margin_scale(last_scores)

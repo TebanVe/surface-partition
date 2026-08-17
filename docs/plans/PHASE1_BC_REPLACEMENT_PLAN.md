@@ -279,10 +279,55 @@ after it failed, and only one of them mattered:
   seed spread, but seed 0 remains above the old granularity bar.
 
 So the fairness of this result rests entirely on whether the floor is the right
-bar, not on more samples. It is: at this exact configuration **approach A's own
-dual stalls at 2.0218%**, while the arms reach **0.63–0.89%**. The arms are
-**2–3× better than the incumbent solver** on the production mesh, which is the
-substantive claim and is independent of where the bar is drawn.
+bar, not on more samples.
+
+#### ⚠ Third review (2026-08-17): the floor was wrong, and the gate was theatre
+
+**Two withdrawals.**
+
+**1. The "2–3× better than the incumbent" headline is withdrawn.** The floor used
+A's stall *as recorded in the shipped runs* — 2.0218% / 2.1215% — which is A
+running with `normalize_scores` **off**. The same solver, same log densities,
+normalized, same 400-iteration budget, reaches **0.9072%** and **1.8384%**. The
+recorded figures are a configuration artifact, so the floor let an arm clear a
+bar the incumbent only fails because of a setting.
+
+| Config | old bar | **corrected bar** |
+|---|---|---|
+| V=47,488/N=300 | 2.122% | 2.022% (2 × granularity binds) |
+| V=114,144/N=100 | 0.280% | 0.280% |
+| **V=114,144/N=300** | 2.022% | **0.907%** |
+
+Honest restatement: **B ≈ 1.4× better than incumbent parity; C at parity; both
+beat A end-to-end after repair** (C + repair 0.349% vs A post-repair 0.645% at
+the same mesh). The substantive conclusion — the assignment step will not be the
+bottleneck — survives every consistent choice of bar. The headline did not.
+
+*Incidental, and free:* **approach A would halve its own dual stall by enabling
+`normalize_scores`** — a real improvement to shipped production code, found while
+testing something else.
+
+**2. Gate 2's PASS/FAIL machinery was theatre.** Its bar included
+`1.25 × strong-reference`, and the strong reference was computed **with the
+solver under test** — so a broken solver inflated its own bar in proportion to
+how broken it was. Six deliberately crippled solvers all passed. The weakest:
+**one that returns ψ ≡ 0 and does no iterations at all**, scoring 45.4% (C) and
+80.2% (B) against self-scaled bars of 57.2% and 124.3%.
+
+Fixed: the strong reference is now reported as context and **never enters the
+bar**; fixture-internal assignments use a **pinned reference config** so the
+trajectory cannot degenerate along with a broken solver; and settled quality is
+scored by **median, not min** — min ratchets monotonically with sampling (the
+production pin's C seed 0 moved 0.919 → 0.888 → 0.799% purely by sampling more,
+with a median of 0.919% and no convergence trend). One consequence to record: the
+plan's earlier claim *"extra sampling did not rescue it"* is **false at 8
+iterations**, where the min reaches 0.799%.
+
+Also reconciled: the harness's own `suspect_solver_failure` fired at 2 ×
+granularity (0.841% at the pin) while this gate declared 0a complete at 2.022% —
+so in a real arm evaluation the fault flag would have fired about half the time
+while the gate said the solver was fine. Both now read one number,
+`assignment_quality_bar` in `arm_harness.py`.
 
 ### 0b — Build the evaluation harness
 
@@ -401,8 +446,19 @@ prefactorized solve per level (`scipy.sparse.linalg.factorized`; `sksparse` is
 absent and unnecessary); (2) reassign by balanced thresholding
 `ω(i) = argmax_k [y_ik + ψ_k]` via 0a.
 
-**τ — a two-sided window, not a floor.** Start at τ = (c·h)² with **c = 2**, and
-report per level:
+**B's initialization is a HARD REQUIREMENT, not a convenience.** B must start
+from **one balanced C-scores assignment**. Measured 2026-08-17: a
+proposal-faithful cold start (seeded-Voronoi labels, unbalanced) leaves the
+assignment at **68.16%** on the first diffused scores, against **1.97%** from a
+pre-balanced start. Gate 2's PASS for B is *conditional* on this init — building
+B without it invalidates the evidence behind it.
+
+**τ — a two-sided window, not a floor.** Start at τ = (c·h)² with **c = 4** — not
+c = 2, which this section's own non-freeze criterion below (c ≳ √(R_cell/h) ≈ 4.0
+at N=100, 2.4 at N=300) excludes, and which gate 2's fixture work showed to be
+the regime where balance is unrepresentable as `argmax(y + ψ)` by *any* method.
+The earlier "c = 2" here contradicted the criterion two bullets under it. Report
+per level:
 
 - **√τ / h_max**, not `h_mean`. This mesh's edge lengths are anisotropic by
   **1.81×** (mean 0.0171 / max 0.0311 at V=114k; 0.0266 / 0.0483 at V=47,488), so

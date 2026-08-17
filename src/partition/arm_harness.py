@@ -42,7 +42,32 @@ from .find_contours import (
     detect_dormant_cells,
 )
 
+#: Assignment quality an arm must reach before its perimeter is worth scoring.
+#: ONE number, used both by the area-gate lane here and by 0a's gate 2 -- they
+#: disagreed before (2 x granularity here vs A's stall there), which at the
+#: production pin meant the fault flag fired at 0.841% while gate 2 declared 0a
+#: done at 2.022%, deadlocking any real evaluation.
+#:
+#: The anchor is incumbent parity measured AT EQUAL FOOTING: approach A's own
+#: dual stage on its own log densities, with normalize_scores ON and the same
+#: 400-iteration budget. Measured 2026-08-17: 0.9072% at V=114,144/N=300 and
+#: 1.8384% at V=47,488/N=300. The shipped run's 2.02%/2.12% figures are NOT used
+#: -- those are A running un-normalized, i.e. a configuration artifact, and
+#: importing them would have let an arm clear a bar the incumbent only fails
+#: because of a setting.
+A_PARITY_NORMALIZED = {(47488, 300): 0.018384, (114144, 300): 0.009072}
+
+
+def assignment_quality_bar(lumped_mass, n_partitions: int) -> float:
+    """The single bar for "is this assignment good enough to score"."""
+    gran = vertex_granularity(lumped_mass, n_partitions)
+    key = (len(lumped_mass), n_partitions)
+    return max(2.0 * gran, A_PARITY_NORMALIZED.get(key, 0.0))
+
+
 __all__ = [
+    "A_PARITY_NORMALIZED",
+    "assignment_quality_bar",
     "GateReport",
     "Phase2Report",
     "labels_to_one_hot",
@@ -67,6 +92,7 @@ class GateReport:
     fragmented: List[int]
     worst_stray_rel: float
     vertex_granularity_rel: float
+    quality_bar: float
 
     def to_dict(self) -> dict:
         return {
@@ -83,13 +109,12 @@ class GateReport:
                 "worst_rel_dev": float(self.worst_rel_dev),
                 "vertex_granularity_rel": float(self.vertex_granularity_rel),
                 # NOT vacuous: it is the assignment-solver failure detector.
-                # worst_rel_dev >> granularity means the arm's balanced
+                # worst_rel_dev above the quality bar means the arm's balanced
                 # assignment did not converge -- a harness fault to fix before
-                # the arm is scored, not evidence against the arm.
-                "harness_fault_threshold": float(2.0 * self.vertex_granularity_rel),
-                "suspect_solver_failure": bool(
-                    self.worst_rel_dev > 2.0 * self.vertex_granularity_rel
-                ),
+                # the arm is scored, not evidence against the arm. Same bar 0a's
+                # gate 2 uses; see A_PARITY_NORMALIZED.
+                "harness_fault_threshold": float(self.quality_bar),
+                "suspect_solver_failure": bool(self.worst_rel_dev > self.quality_bar),
             },
             "connectivity": {
                 "n_fragmented": int(self.n_fragmented),
@@ -205,6 +230,7 @@ def run_gates(densities: np.ndarray, mesh: TriMesh, n_partitions: int) -> GateRe
         fragmented=list(disc.get("fragmented", [])),
         worst_stray_rel=float(disc.get("worst_stray_rel", 0.0) or 0.0),
         vertex_granularity_rel=vertex_granularity(mesh.v, n_partitions),
+        quality_bar=assignment_quality_bar(mesh.v, n_partitions),
     )
 
 
@@ -227,9 +253,12 @@ def scan_campaign(campaign_dir: str) -> Phase2Report:
             it = int(f.attrs["iteration_number"])
             traj.append((it, float(f.attrs["final_perimeter"])))
             if initial is None and "optimization_info" in f:
+                # initial_perimeter is an ATTRIBUTE of the group, not a dataset.
+                # `"name" in group` tests members, so the dataset form silently
+                # left this None on every campaign ever scanned.
                 grp = f["optimization_info"]
-                if "initial_perimeter" in grp:
-                    initial = float(np.array(grp["initial_perimeter"]).ravel()[0])
+                if "initial_perimeter" in grp.attrs:
+                    initial = float(grp.attrs["initial_perimeter"])
     traj.sort()
     best_it, best_p = min(traj, key=lambda r: r[1])
     return Phase2Report(
