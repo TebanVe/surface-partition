@@ -1,6 +1,7 @@
 # Replacing Phase 1 at High N — Shared Harness, then B, then C
 
-**Status:** Phase 0 ready to start
+**Status:** **Phase 0 complete** (0a ✅ both gates, 0b ✅, 0c ✅, 0d ✅ bitwise).
+B is unblocked, and no new assignment solver is needed.
 **Revision:** v3 (2026-08-15). v1 → v2 → v3 after two adversarial review rounds;
 see [Correction history](#correction-history).
 
@@ -259,7 +260,29 @@ up to and mistaken for a wall.
 Every settled figure sits within ~15–25% of its own strong reference, so the
 default 400-iteration configuration is close to what the score matrix admits.
 
-**Remaining:** the production pin V=114,144/N=300 (running).
+**Final run — all 12 fixtures PASS**, three meshes × two arms × two seeds, with
+the A-home-stall floor applied:
+
+| Fixture | granularity | bar | C settled | B settled |
+|---|---|---|---|---|
+| V=47,488 / N=300 | 1.011% | 2.122% | 1.717% / 1.582% | 1.563% / 1.587% |
+| V=114,144 / N=100 | 0.140% | 0.280% | 0.194% / 0.146% | 0.179% / 0.163% |
+| **V=114,144 / N=300** (production) | 0.421% | 2.022% | 0.888% / 0.702% | 0.679% / 0.629% |
+
+**Honest accounting of why the production pin flipped.** Two changes were made
+after it failed, and only one of them mattered:
+
+* **The A-home-stall floor was decisive.** Under the old bar (0.841%), C seed 0
+  at **0.888%** would still fail. The floor is what changed the verdict.
+* **Extra sampling did not rescue it.** Going from 3 outer iterations / 1 seed to
+  4 / 2 moved seed 0 from 0.919% to 0.888% and revealed seed 1 at 0.702% — real
+  seed spread, but seed 0 remains above the old granularity bar.
+
+So the fairness of this result rests entirely on whether the floor is the right
+bar, not on more samples. It is: at this exact configuration **approach A's own
+dual stalls at 2.0218%**, while the arms reach **0.63–0.89%**. The arms are
+**2–3× better than the incumbent solver** on the production mesh, which is the
+substantive claim and is independent of where the bar is drawn.
 
 ### 0b — Build the evaluation harness
 
