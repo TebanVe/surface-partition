@@ -120,7 +120,11 @@ Cholesky per level; (2) reassign every vertex by *balanced* thresholding —
 literally approach A applied to `y` instead of `u`:
 `ω(i) = argmax_k [y_ik + ψ_k]`. It does not close the gap, it **abolishes the
 category**: there is never a continuous field whose readout can diverge, and the
-iterate after every step is a hard partition with exactly equal discrete areas.
+iterate after every step is a hard partition with equal discrete areas **to the
+solver's convergence, not exactly** — measured 2026-08-16, per-step balance in an
+iterated MBO loop settles at ~1.4–2.0% worst deviation at N=300, against a
+one-vertex granularity floor of ~1.0%. Good enough in practice, and the "exactly"
+here was wrong as written.
 Stray islands shrink to extinction under mean-curvature flow — the opposite
 dynamic to the trim. Seeded init, the mesh ladder, M/K/v, the HDF5 formats and
 Phase 2 all carry over unchanged. Estimated ~100× faster than PGD. Known failure

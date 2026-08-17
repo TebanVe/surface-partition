@@ -156,22 +156,79 @@ and eliminated:
   operations at V=47,488/N=300 — so the 10× budget that might close the gap
   costs ~20 min per solve. Not a practical fix.
 
-**The conclusion is structural, and it revises a premise this plan inherited.**
-The taxonomy's "A, B and C share one solver" is true of the *interface* — balanced
-assignment given per-vertex scores — but not of the *algorithm*. `solve_dual_offsets`
-is subgradient dual ascent, tuned for A's job: a small correction from an
-already-nearly-balanced argmax. B and C ask it to rebalance **30–45% of the area
-from an unbalanced start**, which it does not do at these sizes. Note the source
-proposal names B *"auction dynamics"* — Bertsekas auction, not subgradient ascent —
-so the mismatch is with our shipped approximation, not with B.
+#### ⚠ That conclusion was REFUTED by review (2026-08-16). Gate 2 was the wrong test.
 
-**Therefore 0a is not complete.** It needs a solver that converges from far away:
-an auction algorithm or an entropic/Sinkhorn solve for the assignment, kept behind
-the same interface so A's path stays byte-identical. That is the next task, and it
-is larger than the rename this step was scoped as. **B must not be built until
-gate 2 passes** — a non-converging assignment step would surface as an area-gate
-failure attributed to B rather than to the harness, exactly the confusion the
-area-gate lane was created to prevent.
+The reading above — "the solver is structurally wrong; build an auction or
+Sinkhorn" — is **withdrawn**. Three independent errors, all verified here:
+
+**1. The fixtures modelled a state the arms occupy for one iteration.** Gate 2
+posed a *cold start*: rebalance a raw geometric guess in one shot with ψ=0. B and
+C are iterative, so from outer-iteration 1 onward each assignment starts from an
+already-balanced partition. Measured on a minimal iterated C (Lloyd, 25 outer
+iterations, existing solver, cold each time):
+
+| | it 0 | it 1 | it 2 | its 3–24 |
+|---|---|---|---|---|
+| V=47,488/N=300 | 3.654% | 2.166% | **1.351%** | **1.35–1.63% — 23 consecutive iterations under the bar** |
+| V=114,144/N=100 | 0.339% | 0.157% | 0.146% | 0.13–0.17% |
+
+Iterated B likewise self-corrects *inside its own loop* with no solver change:
+45.35 → 8.44 (it 7) → 2.02 (it 18) → 1.72% (it 19).
+
+**2. Two knobs were declared dead without being swept.** Both pass, re-verified:
+
+| Knob | Result at V=47,488/N=300 (bar 2.022%) |
+|---|---|
+| `dual_iters` 400 → 4000 | **1.996% — PASS**, in 135 s |
+| `dual_eta0` 0.5 → **2.0** (400 iters) | **1.672% — PASS** |
+
+The "10× budget costs ~20 min" figure was **operations counted, not time
+measured**: the real cost is 33.9 ms/iteration, so 4,000 iterations is **2.3
+minutes**. And the percentile sweep had been rising monotonically to its p50
+endpoint — a boundary optimum read as "not a tuning problem" instead of as an
+arrow pointing past the range swept.
+
+**3. The bar is indefensible: approach A fails it on its own home scores.** From
+readout metadata in this checkout, the shipped dual stage stalls at
+`dual_worst_rel_dev` **2.1215%** (`run_20260806_123326`) against the 2.022% bar
+this gate sets at that very mesh, and **2.0218%** (`run_20260808_191030`) where
+the formula demands 1%. Gate 2 required foreign scales to beat the home scale —
+while excluding the repair stage that produces A's actual 1.80% / 0-imbalanced
+result. The formula also tracks the wrong variable: the stall is ~1.7–2.1% at
+both V=47,488 and V=114,144 while granularity halves between them.
+
+**4. The one-shot B fixture is unsolvable by any ψ-family method, including the
+ones proposed to fix it.** At c=2 it sits in the freeze regime by this plan's own
+τ criterion, and one diffusion step from a Euclidean-nearest init gives a
+near-binary field (p50 margin 0.499 on a range ≤ 1), so too little mass sits in
+flippable margins for `argmax(y + ψ)` to represent balance. Verified by
+exhaustion: dual-400 = dual-4000 = 45.353%; η₀ swept 0.25–16 at two decays, all
+≥ 38.4%; annealed **Sinkhorn 40.8%**. It never tested the solver.
+
+**5. No new solver is needed.** Sinkhorn, implemented and measured, **loses to the
+incumbent on 5 of 6 score matrices** (C@300 3.318 vs 1.996; C@100 0.563 vs 0.149).
+Auction could in principle beat the ψ-family floor on the one-shot fixture, but
+that is compiled-code project work built solely to pass a fixture modelling a
+state B recovers from by itself.
+
+**Corrected 0a remedy**, cheapest first:
+
+1. **Fix the harness, not the solver** — score matrices from outer iterations ≥ 1,
+   cold start reported separately as informational; bar calibrated per fixture
+   against a strong-reference run and floored at A's measured home-scale stall;
+   add the production pin **V=114,144/N=300** (never tested); more than one seed.
+2. **Default a higher effective step when `normalize_scores` is on** (η₀ ≈ 2, or
+   normalize by ~p10–p25 of the margin). Cold C then passes at 1.672%.
+3. Early-stop at the bar, and `np.bincount` for `np.add.at` in the hot loop
+   (1.28× free).
+4. Expose `psi0` for in-loop callers **with a best-of-{ψ₀, 0} guard** — warm start
+   is worth 60–100× per assignment once a trajectory settles, but is *harmful*
+   early on B (measured 87–110% blowups from a stale ψ).
+5. If B is built, initialize it from one balanced C-scores assignment: its first
+   MBO assignment then starts at 2.9–3.6% instead of 45%.
+
+**"B must not be built until gate 2 passes" is inverted:** gate 2 as posed must be
+rewritten before it is allowed to block anything.
 
 ### 0b — Build the evaluation harness
 
