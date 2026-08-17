@@ -76,6 +76,13 @@ class BalancedReadoutConfig:
     # step schedule means the same thing on any score scale.
     normalize_scores: bool = False
     score_margin_percentile: float = 50.0
+    # Step size used INSTEAD of dual_eta0 when normalize_scores is on. Measured
+    # 2026-08-17 at V=47,488/N=300 on C's -d^2 scores, 400 iterations:
+    #   eta0 0.5 -> 3.654%   1.0 -> 2.209%   2.0 -> 1.672%   4.0 -> 2.248%
+    # so 0.5 (tuned for log densities) is ~4x too small once scores are
+    # normalized, and 2.0 sits at the measured optimum. dual_eta0 itself is left
+    # at 0.5 so the un-normalized approach-A path stays byte-for-byte identical.
+    normalized_eta0: float = 2.0
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +95,7 @@ class BalancedReadoutConfig:
             "fragment_rel_threshold": float(self.fragment_rel_threshold),
             "normalize_scores": bool(self.normalize_scores),
             "score_margin_percentile": float(self.score_margin_percentile),
+            "normalized_eta0": float(self.normalized_eta0),
         }
 
 
@@ -196,10 +204,14 @@ def solve_dual_offsets(
     """
     N = scores.shape[1]
     scale = 1.0
+    eta0 = config.dual_eta0
     if config.normalize_scores:
         scale = assignment_margin_scale(scores, config.score_margin_percentile)
         if scale != 1.0:
             scores = scores / scale
+        # dual_eta0 was tuned for the log-density scale and is ~4x too small on
+        # normalized scores; see the normalized_eta0 comment on the config.
+        eta0 = config.normalized_eta0
     psi = np.zeros(N)
     best_worst = np.inf
     best_psi = psi.copy()
@@ -220,7 +232,7 @@ def solve_dual_offsets(
                 worst * 100,
                 int((np.abs(rel) > config.gate_threshold).sum()),
             )
-        psi -= (config.dual_eta0 / (1.0 + config.dual_decay * it)) * rel
+        psi -= (eta0 / (1.0 + config.dual_decay * it)) * rel
 
     # Return psi in the CALLER's units. Guarded so the un-normalized path
     # returns the identical array object it built (approach A stays bitwise).
