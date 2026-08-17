@@ -203,6 +203,28 @@ One harness, used unchanged by every arm and by the control.
   arm is not scored against a threshold; a censored *baseline* is flagged as a
   bound (`≤ x`), not a value.
 
+#### 0b status (2026-08-16): library and acceptance PASS
+
+`src/partition/arm_harness.py` + `testing/test_arm_harness.py` (5/5 pass). The
+harness writes an arm's labels in the **Phase 1 solution schema**, so
+`refine_perimeter.py`, `check_fragmentation.py`, the viewers and
+`export_partition.py` all consume arm output with no new flags; runs Phase 2 as a
+**subprocess** against a campaign's whole `refinement.yaml`, so an arm travels the
+exact code path the control travelled rather than a reimplementation; and reports
+gates, best-iterate perimeter, trajectory, censoring and wall time.
+
+**The apples-to-apples assumption is now measured, not assumed.** On the real
+N=300 λ=12 solution, hardening the continuous field to one-hot leaves both
+scored gates *identical* — area 9 cells / 34.95% either way, connectivity
+`[290, 274]` either way. So representing an arm's output as hard labels costs it
+nothing relative to PGD's continuous field. The dormant gate goes to peak density
+1.0 exactly, confirming its vacuity for arms in code rather than in prose. The
+vertex-granularity floor also reproduces the shipped readout's recorded value to
+9 decimals (0.010108 at V=47,488/N=300).
+
+Remaining for 0b: a thin CLI wrapper. **0d (the end-to-end shakedown against
+185.2546144718457) is the real remaining gate** and has not been run.
+
 ### 0c — N=300 baseline: ✅ DONE
 
 Both runs are in this checkout, verified. **Zero compute spent.** If a λ=12
@@ -330,9 +352,13 @@ violations go to the repair stage (E)"* (line 47).
    composed-with-E lane, and that composition is disclosed.
 2. Gates evaluated on the arm's **raw** labels first, always.
 3. Wall time per 0b, with the PGD/arm asymmetry and any resume chaining disclosed.
-4. **Pre-commitment:** thresholds are committed before either arm runs, and **B's
-   raw result is committed before C is run.** (v2 weakened this to a tautology
-   when the order flipped; restored.)
+4. **Pre-commitment**, stated as what it is *for* rather than as an order:
+   thresholds are committed before **either** arm runs, and **each arm's raw
+   result is committed before the other's is examined.** This protects under
+   either running order — which matters, because B is currently blocked on 0a
+   while C already passes 0a's gate at N=100, so C may well run first. (v1 tied
+   the rule to C-then-B; v2 flipped the order and left the wording, making it a
+   tautology; this version is order-independent.)
 5. No "every / always / never" without naming the corpus **and how it was
    enumerated**, including which working directories were searched.
 6. Censored results reported as censored, for arms *and* baselines.
