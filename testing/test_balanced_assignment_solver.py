@@ -233,6 +233,47 @@ def run_gate2(quick=False):
     return ok
 
 
+def run_gate_selftest():
+    """Gate 3 -- does gate 2 actually CATCH a broken solver?
+
+    A gate nobody can fail is not evidence. The first version of gate 2 passed
+    six deliberately crippled solvers, the weakest of which returned psi = 0 and
+    did no iterations at all (45.4% on C, 80.2% on B, against self-scaled bars of
+    57.2% and 124.3%). Two defects caused it: the bar included
+    1.25 x strong-reference computed WITH THE SOLVER UNDER TEST, and the fixture
+    trajectory degenerated along with the broken solver.
+
+    This keeps the gate honest by asserting the null solver fails it. If this
+    ever passes, gate 2's verdicts are worthless regardless of what they say.
+    """
+    print("=" * 76)
+    print("GATE 3 -- gate 2 rejects a do-nothing solver (anti-theatre check)")
+    print("=" * 76)
+    n_theta, n_phi, n_cells = FIXTURES[0][:3]
+    mesh = build(n_theta, n_phi)
+    v = mesh.v
+    target = float(v.sum()) / n_cells
+    bar = assignment_quality_bar(v, n_cells)
+    print(f"  V={len(v)} N={n_cells}  bar {bar*100:.3f}%")
+
+    ok = True
+    for arm, gen in (("C", fixtures_C), ("B", fixtures_B)):
+        devs = []
+        for it, scores in gen(mesh, n_cells, 4, 0):
+            if it == 0:
+                continue
+            labels = np.argmax(scores, axis=1)          # psi = 0, no iterations
+            areas = np.zeros(n_cells)
+            np.add.at(areas, labels, v)
+            devs.append(float(np.abs((areas - target) / target).max()))
+        med = float(np.median(devs))
+        caught = med > bar
+        ok &= caught
+        print(f"  {arm}: psi_zero settled(median) {med*100:7.3f}%  "
+              f"[{'PASS -- correctly rejected' if caught else 'FAIL -- GATE IS THEATRE'}]")
+    return ok
+
+
 def run_gate1():
     """A is undisturbed: reproduce a recorded readout reference exactly."""
     print("=" * 76)
@@ -279,13 +320,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gate1", action="store_true")
     ap.add_argument("--gate2", action="store_true")
+    ap.add_argument("--selftest", action="store_true",
+                    help="gate 3 only: check gate 2 rejects a null solver")
     ap.add_argument("--quick", action="store_true",
                     help="skip the V=114,144/N=300 production pin")
     a = ap.parse_args()
-    both = not (a.gate1 or a.gate2)
+    both = not (a.gate1 or a.gate2 or a.selftest)
     results = []
     if both or a.gate1:
         results.append(run_gate1())
+    if both or a.selftest:
+        results.append(run_gate_selftest())
     if both or a.gate2:
         results.append(run_gate2(quick=a.quick))
     hard = [r for r in results if r is not None]
