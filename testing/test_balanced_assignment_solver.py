@@ -55,10 +55,13 @@ from src.surfaces.torus import TorusMeshProvider  # noqa: E402
 
 # (n_theta, n_phi, N, outer_iterations, seeds). The third entry is the
 # production configuration the first version of this gate never tested.
+# Three seeds, not two. Reviews 3 and 4 both flagged n=2 as thin for a marginal
+# verdict, and the production pin's own seed spread (0.888 vs 0.702 under the old
+# protocol) was several times the margin it was being judged by.
 FIXTURES = [
-    (224, 212, 300, 4, (0, 1)),
-    (348, 328, 100, 4, (0, 1)),
-    (348, 328, 300, 4, (0, 1)),
+    (224, 212, 300, 4, (0, 1, 2)),
+    (348, 328, 100, 4, (0, 1, 2)),
+    (348, 328, 300, 4, (0, 1, 2)),
 ]
 STRONG_ITERS = 1500          # reported for context ONLY -- never used as a bar
 
@@ -285,6 +288,76 @@ def run_gate_selftest():
     return ok
 
 
+def run_gate_production_earlystop():
+    """Gate 4 -- early stopping is safe INSIDE an iterated loop (B's real use).
+
+    `dual_early_stop_rel` exists for production: B calls the assignment solver on
+    every MBO step and should not burn its whole budget once converged. But that
+    path had NO test. The failure it could hide is quiet and compounding -- if
+    early stopping halts on a lucky iterate, every outer step starts from a
+    slightly worse partition and the damage accumulates over the trajectory,
+    while each individual assignment still looks "good enough".
+
+    Method: run the same iterated C loop twice, with early stopping on and off
+    INSIDE the loop, then grade BOTH final states with the same full-budget,
+    no-early-stop solve. That isolates "did the trajectory degrade" from "did the
+    last measurement stop early", which is precisely the confusion that made the
+    first v4 gate run report numbers hugging the bar.
+    """
+    print("=" * 76)
+    print("GATE 4 -- early stopping does not degrade an iterated trajectory")
+    print("=" * 76)
+    import time
+    n_theta, n_phi, n_cells = FIXTURES[0][:3]
+    mesh = build(n_theta, n_phi)
+    v = mesh.v
+    target = float(v.sum()) / n_cells
+    bar = assignment_quality_bar(v, n_cells)
+    graph = edge_graph(mesh)
+    n_outer = 5
+    print(f"  V={len(v)} N={n_cells}  bar {bar*100:.3f}%  {n_outer} outer iterations")
+
+    def lloyd(cfg_kwargs):
+        sites = farthest_point_seeds(mesh.vertices, n_cells, 0)
+        t0 = time.perf_counter()
+        for _ in range(n_outer):
+            scores = -(dijkstra(graph, indices=sites, directed=False).T ** 2)
+            cfg = BalancedReadoutConfig(normalize_scores=True, **cfg_kwargs)
+            _, labels, _ = solve_dual_offsets(scores, v, target, cfg)
+            new_sites = []
+            for k in range(n_cells):
+                m = labels == k
+                if not m.any():
+                    new_sites.append(sites[k])
+                    continue
+                c = (mesh.vertices[m] * v[m, None]).sum(0) / v[m].sum()
+                new_sites.append(int(np.argmin(
+                    np.linalg.norm(mesh.vertices - c, axis=1))))
+            sites = np.array(new_sites)
+        wall = time.perf_counter() - t0
+        # Grade the FINAL state identically for both arms: full budget, no stop.
+        final = -(dijkstra(graph, indices=sites, directed=False).T ** 2)
+        _, _, worst = solve_dual_offsets(
+            final, v, target, BalancedReadoutConfig(normalize_scores=True))
+        return worst, wall
+
+    off, off_t = lloyd({})
+    on, on_t = lloyd({"dual_early_stop_rel": bar})
+    print(f"  early stop OFF: final quality {off*100:6.3f}%   loop {off_t:6.1f}s")
+    print(f"  early stop ON : final quality {on*100:6.3f}%   loop {on_t:6.1f}s"
+          f"   ({off_t/max(on_t,1e-9):.1f}x faster)")
+
+    # Degradation must be small relative to the bar, and it must be faster --
+    # if it is not faster there is no reason to accept ANY degradation.
+    degraded = on - off
+    ok_quality = on <= bar and degraded <= 0.25 * bar
+    ok_speed = on_t < off_t
+    print(f"  degradation {degraded*100:+.3f} pts (allowed +{0.25*bar*100:.3f}) "
+          f"[{'ok' if ok_quality else 'FAIL'}]   "
+          f"speedup [{'ok' if ok_speed else 'FAIL'}]")
+    return bool(ok_quality and ok_speed)
+
+
 def run_gate1():
     """A is undisturbed: reproduce a recorded readout reference exactly."""
     print("=" * 76)
@@ -333,15 +406,19 @@ def main():
     ap.add_argument("--gate2", action="store_true")
     ap.add_argument("--selftest", action="store_true",
                     help="gate 3 only: check gate 2 rejects a null solver")
+    ap.add_argument("--production", action="store_true",
+                    help="gate 4 only: early stopping is safe in an iterated loop")
     ap.add_argument("--quick", action="store_true",
                     help="skip the V=114,144/N=300 production pin")
     a = ap.parse_args()
-    both = not (a.gate1 or a.gate2 or a.selftest)
+    both = not (a.gate1 or a.gate2 or a.selftest or a.production)
     results = []
     if both or a.gate1:
         results.append(run_gate1())
     if both or a.selftest:
         results.append(run_gate_selftest())
+    if both or a.production:
+        results.append(run_gate_production_earlystop())
     if both or a.gate2:
         results.append(run_gate2(quick=a.quick))
     hard = [r for r in results if r is not None]
