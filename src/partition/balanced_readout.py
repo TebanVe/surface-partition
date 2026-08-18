@@ -83,6 +83,18 @@ class BalancedReadoutConfig:
     # normalized, and 2.0 sits at the measured optimum. dual_eta0 itself is left
     # at 0.5 so the un-normalized approach-A path stays byte-for-byte identical.
     normalized_eta0: float = 2.0
+    # Budget used INSTEAD of dual_iters when normalize_scores is on. The 400 that
+    # A uses is not enough at the production configuration: measured
+    # 2026-08-17, C's -d^2 scores at V=114,144/N=300 settle at 0.919% after 400
+    # iterations but 0.685% by 1500. dual_iters itself is untouched, so A's path
+    # is unchanged.
+    normalized_dual_iters: int = 2000
+    # Stop as soon as worst |area deviation| reaches this (relative). None = run
+    # the whole budget, which is A's behaviour and keeps A byte-identical. In an
+    # iterated arm (B calls this every MBO step) most assignments converge in a
+    # small fraction of the budget, so this is a speedup, not a loosening: the
+    # loop can only exit by ACHIEVING the target, never by giving up on it.
+    dual_early_stop_rel: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +108,11 @@ class BalancedReadoutConfig:
             "normalize_scores": bool(self.normalize_scores),
             "score_margin_percentile": float(self.score_margin_percentile),
             "normalized_eta0": float(self.normalized_eta0),
+            "normalized_dual_iters": int(self.normalized_dual_iters),
+            "dual_early_stop_rel": (
+                None if self.dual_early_stop_rel is None
+                else float(self.dual_early_stop_rel)
+            ),
         }
 
 
@@ -205,6 +222,7 @@ def solve_dual_offsets(
     N = scores.shape[1]
     scale = 1.0
     eta0 = config.dual_eta0
+    n_iters = config.dual_iters
     if config.normalize_scores:
         scale = assignment_margin_scale(scores, config.score_margin_percentile)
         if scale != 1.0:
@@ -212,12 +230,13 @@ def solve_dual_offsets(
         # dual_eta0 was tuned for the log-density scale and is ~4x too small on
         # normalized scores; see the normalized_eta0 comment on the config.
         eta0 = config.normalized_eta0
+        n_iters = config.normalized_dual_iters
     psi = np.zeros(N)
     best_worst = np.inf
     best_psi = psi.copy()
     best_labels = np.argmax(scores, axis=1)
 
-    for it in range(config.dual_iters):
+    for it in range(n_iters):
         labels = np.argmax(scores + psi, axis=1)
         areas = np.zeros(N)
         np.add.at(areas, labels, lumped_mass)
@@ -225,6 +244,12 @@ def solve_dual_offsets(
         worst = float(np.abs(rel).max())
         if worst < best_worst:
             best_worst, best_psi, best_labels = worst, psi.copy(), labels.copy()
+        if (config.dual_early_stop_rel is not None
+                and best_worst <= config.dual_early_stop_rel):
+            logger.debug(
+                "dual early stop at iter %d: worst %.4f%% <= target %.4f%%",
+                it, best_worst * 100, config.dual_early_stop_rel * 100)
+            break
         if it % 50 == 0:
             logger.debug(
                 "dual iter %4d: worst |dev| = %.3f%%, n over gate = %d",

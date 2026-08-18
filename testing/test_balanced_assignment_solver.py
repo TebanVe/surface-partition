@@ -67,7 +67,7 @@ STRONG_ITERS = 1500          # reported for context ONLY -- never used as a bar
 # with a broken solver (cells die), so a broken solver is graded on the easy
 # problem it created for itself -- measured: a psi=0 solver reached 80.15% on B
 # and still passed, because the fixture had collapsed around it.
-REFERENCE_CFG = dict(normalize_scores=True)
+REFERENCE_CFG = dict(normalize_scores=True, normalized_dual_iters=400)
 
 # Incumbent-parity floor, imported from the harness so ONE number governs both
 # this gate and the harness's own area lane (they disagreed before: 2 x
@@ -195,8 +195,14 @@ def run_gate2(quick=False):
                 cold = None
                 settled = []
                 last_scores = None
+                bar = assignment_quality_bar(v, n_cells)
                 for it, scores in gen(mesh, n_cells, n_outer, seed):
-                    cfg = BalancedReadoutConfig(normalize_scores=True)
+                    # Early stop AT the bar. This cannot manufacture a pass: the
+                    # loop exits only by ACHIEVING the target, never by giving up
+                    # on it, and a solver that cannot reach it still burns the
+                    # whole budget and still fails.
+                    cfg = BalancedReadoutConfig(
+                        normalize_scores=True, dual_early_stop_rel=bar)
                     _, _, worst = solve_dual_offsets(scores, v, target, cfg)
                     if it == 0:
                         cold = worst
@@ -213,7 +219,6 @@ def run_gate2(quick=False):
                     normalize_scores=True, dual_iters=STRONG_ITERS)
                 _, _, strong = solve_dual_offsets(
                     last_scores, v, target, strong_cfg)
-                bar = assignment_quality_bar(v, n_cells)
 
                 # MEDIAN, not min. min ratchets monotonically with sampling:
                 # measured on the production pin, C seed 0 over 8 outer
