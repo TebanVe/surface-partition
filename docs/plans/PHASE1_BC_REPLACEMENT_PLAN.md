@@ -1,9 +1,11 @@
 # Replacing Phase 1 at High N — Shared Harness, then B, then C
 
-**Status:** Phase 0 nearly complete — 0b ✅, 0c ✅, 0d ✅ bitwise, 0a gate 1 ✅ / gate 3 ✅ / gate 2 **11/12** (C fails at the production pin on budget, not algorithm). B is unblocked; C is not yet scoreable.
-B is unblocked, and no new assignment solver is needed.
-**Revision:** v3 (2026-08-15). v1 → v2 → v3 after two adversarial review rounds;
-see [Correction history](#correction-history).
+**Status:** Phase 0 nearly complete — 0b ✅, 0c ✅, 0d ✅ bitwise; 0a gate 1 ✅ /
+gate 3 ✅ / gate 2 **11 of 12** (C misses at the production pin on *budget*, not
+algorithm). **B is unblocked; C is not yet scoreable.** No new assignment solver
+is needed.
+**Revision:** v4 (2026-08-17), after three adversarial review rounds; see
+[Correction history](#correction-history).
 
 ## Background
 
@@ -101,7 +103,7 @@ the anchor rule below.
 
 ## Phase 0 — shared solver, harness, baseline
 
-**Status:** Ready to start
+**Status:** 0b / 0c / 0d complete; 0a complete except the production configuration (see the corrected gate 2 result below)
 
 ### 0a — Generalize the balanced-assignment solver
 
