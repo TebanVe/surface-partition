@@ -50,12 +50,16 @@ from .find_contours import (
 #:
 #: The anchor is incumbent parity measured AT EQUAL FOOTING: approach A's own
 #: dual stage on its own log densities, with normalize_scores ON and the same
-#: 400-iteration budget. Measured 2026-08-17: 0.9072% at V=114,144/N=300 and
-#: 1.8384% at V=47,488/N=300. The shipped run's 2.02%/2.12% figures are NOT used
-#: -- those are A running un-normalized, i.e. a configuration artifact, and
-#: importing them would have let an arm clear a bar the incumbent only fails
-#: because of a setting.
-A_PARITY_NORMALIZED = {(47488, 300): 0.018384, (114144, 300): 0.009072}
+#: budget the ARMS are measured at. Re-anchored 2026-08-18 after review 4: the
+#: previous values (1.8384% / 0.9072%) were A at 400 iterations while the arms had
+#: moved to 2000, so "equal footing" was false and the arms' margin was inflated
+#: by the budget difference alone. A at 2000, self-measured:
+#:   V=47,488/N=300  -> 1.3517%      V=114,144/N=300 -> 0.5991%
+#:
+#: The shipped runs' 2.02% / 2.12% figures are NOT used: those are A running
+#: un-normalized, a configuration artifact, and importing them would have let an
+#: arm clear a bar the incumbent only fails because of a setting.
+A_PARITY_NORMALIZED = {(47488, 300): 0.013517, (114144, 300): 0.005991}
 
 
 def assignment_quality_bar(lumped_mass, n_partitions: int) -> float:

@@ -63,14 +63,30 @@ FIXTURES = [
     (348, 328, 100, 4, (0, 1, 2)),
     (348, 328, 300, 4, (0, 1, 2)),
 ]
-STRONG_ITERS = 1500          # reported for context ONLY -- never used as a bar
+# Genuine long reference. MUST exceed the shipped budget and MUST be set through
+# normalized_dual_iters: setting dual_iters here was DEAD from 6bb78cb onward,
+# because the normalized path reads normalized_dual_iters, so the "strong
+# reference" silently became the identical config under test -- which is why
+# settled equalled strong-ref to three decimals and made the plan's
+# "settled ~= strong-ref => converging" claim circular.
+STRONG_ITERS = 4000
 
 # The fixtures' own internal assignments use a PINNED reference config, never
 # the solver under test. Without this the fixture trajectory degenerates along
 # with a broken solver (cells die), so a broken solver is graded on the easy
 # problem it created for itself -- measured: a psi=0 solver reached 80.15% on B
 # and still passed, because the fixture had collapsed around it.
-REFERENCE_CFG = dict(normalize_scores=True, normalized_dual_iters=400)
+# ALL five knobs the normalized path reads are pinned. Pinning only two left the
+# fixtures free to change silently if a default moved (normalized_eta0,
+# dual_decay, score_margin_percentile), which would regenerate different fixtures
+# for the next comparison without anyone noticing.
+REFERENCE_CFG = dict(
+    normalize_scores=True,
+    normalized_dual_iters=400,
+    normalized_eta0=2.0,
+    dual_decay=0.02,
+    score_margin_percentile=50.0,
+)
 
 # Incumbent-parity floor, imported from the harness so ONE number governs both
 # this gate and the harness's own area lane (they disagreed before: 2 x
@@ -212,7 +228,14 @@ def run_gate2(quick=False):
                     # this gate with early stop on reported numbers that were
                     # artefacts of the stopping rule, not of the solver.
                     cfg = BalancedReadoutConfig(normalize_scores=True)
-                    _, _, worst = solve_dual_offsets(scores, v, target, cfg)
+                    # Grade from the RETURNED LABELS, not the solver's own
+                    # best_worst. The measurement must not run through the code
+                    # under test -- that is the pattern three reviews kept
+                    # finding. (Gate 3 already did this.)
+                    _, labels, _ = solve_dual_offsets(scores, v, target, cfg)
+                    areas = np.zeros(n_cells)
+                    np.add.at(areas, labels, v)
+                    worst = float(np.abs((areas - target) / target).max())
                     if it == 0:
                         cold = worst
                     else:
@@ -225,7 +248,7 @@ def run_gate2(quick=False):
                 # crippled solvers, including one returning psi=0 with no
                 # iterations at all, passed the previous self-referential bar.
                 strong_cfg = BalancedReadoutConfig(
-                    normalize_scores=True, dual_iters=STRONG_ITERS)
+                    normalize_scores=True, normalized_dual_iters=STRONG_ITERS)
                 _, _, strong = solve_dual_offsets(
                     last_scores, v, target, strong_cfg)
 

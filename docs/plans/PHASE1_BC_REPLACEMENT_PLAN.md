@@ -297,9 +297,16 @@ bar the incumbent only fails because of a setting.
 | V=114,144/N=100 | 0.280% | 0.280% |
 | **V=114,144/N=300** | 2.022% | **0.907%** |
 
-Honest restatement: **B ≈ 1.4× better than incumbent parity; C at parity; both
-beat A end-to-end after repair** (C + repair 0.349% vs A post-repair 0.645% at
-the same mesh). The substantive conclusion — the assignment step will not be the
+Honest restatement, **corrected again on 2026-08-18**: the arms and the incumbent
+are at **parity, ±10%**. Measured at genuinely equal footing — A's own dual on its
+own log densities, normalized, at the *same 2000-iteration budget the arms are
+scored with* — A reaches **0.5991%** at the production pin, against C
+**0.624 / 0.573%** and B **0.537 / 0.573%**. So C seed 0 is *worse* than the
+incumbent and B is ~10% better. The earlier "clear of parity" reading came from
+comparing arms at 2000 iterations against A at 400: a budget difference, not a
+method difference. (A repaired-C figure of 0.349% appears earlier in this
+document; it was measured by a review subagent and never self-reproduced — an
+independent reproduction gives 0.298%. Treat it as indicative.) The substantive conclusion — the assignment step will not be the
 bottleneck — survives every consistent choice of bar. The headline did not.
 
 *Incidental, and free:* **approach A would halve its own dual stall by enabling
@@ -387,7 +394,7 @@ that case C is not scoreable on perimeter and the plan says so.
 disappear, wall time would rise. Early-stop is supposed to make the common case
 *cheaper*; that is why the change is B's infrastructure and not C's excuse.
 
-#### ✅ RESULT vs the pre-registered prediction (2026-08-18) — 6 of 7 hit
+#### ✅ RESULT vs the pre-registered prediction (2026-08-18) — 2 substantive hits, 4 guards held, 1 substantive miss
 
 Early stop + raised budget, gate measuring at full budget. **12/12 PASS.**
 
@@ -400,17 +407,24 @@ Early stop + raised budget, gate measuring at full budget. **12/12 PASS.**
 | # | Predicted | Actual | |
 |---|---|---|---|
 | P1 | C prod s0 ≤ 0.78% | **0.624%** | ✅ |
-| P2 | C prod s1 ≤ 0.78% | **0.573%** | ✅ |
-| P3 | B prod ≤ 0.70% both | **0.537% / 0.573%** | ✅ |
+| P2 | C prod s1 ≤ 0.78% | **0.573%** | ✅ *(guard: status quo was already 0.773%)* |
+| P3 | B prod ≤ 0.70% both | **0.537% / 0.573%** | ✅ *(guard: status quo was already 0.686/0.667%)* |
 | P4 | C @47,488 ≤ 1.75% | **1.472% / 1.392%** | ✅ |
 | P5 | gate 3 rejects null solver | 19.030% / 6.680%, rejected | ✅ |
 | P6 | gate 1 byte-identical | exact | ✅ |
 | P7 | wall time does not increase | **93 min vs ~41** | ❌ |
 
 **The budget hypothesis is confirmed.** C at the production pin went 0.919% →
-**0.624%**, clearing the 0.907% bar on merit, and `settled ≈ strong-ref` on
-almost every row — the 2000-iteration budget now reaches what a long reference
-run achieves, i.e. the solver is converging rather than being cut off.
+**0.624%**, clearing its bar on merit.
+
+⚠ The original wording added *"and `settled ≈ strong-ref` on almost every row,
+i.e. the solver is converging rather than being cut off."* **That was circular** —
+`strong_cfg` set `dual_iters`, but since `6bb78cb` the normalized path reads
+`normalized_dual_iters`, so the "strong reference" was the *identical config
+under test*. The underlying fact survives on genuine long runs (production C at
+4000 iterations → 0.619% vs 0.624% at 2000; B at 8000 → 0.532% vs 0.537%), but
+the committed evidence for it was not evidence. `STRONG_ITERS` is now 4000 and set
+through the field the normalized path actually reads.
 
 **P7 failed, and the failure is instructive.** It was the one prediction whose
 *mechanism* was wrong, and the first (early-stop-in-the-gate) run is why: with
@@ -425,9 +439,7 @@ but it is barred from the measurement path.
 banked and the masked numbers written into this document as fact.** That is what
 the pre-registration was for, and it is the only reason the defect surfaced.
 
-**Status: 0a is not complete at the production configuration.** B is unaffected
-and unblocked on the evidence; C must not be scored on perimeter until its
-assignment converges there.
+**Superseded.** This paragraph said 0a was incomplete at the production configuration and that C must not be scored there. Both were resolved by the budget fix above (C 0.919% -> 0.624%). Kept as a marker because it sat under a "Phase 0 COMPLETE" header for a day, contradicting it.
 
 ### 0b — Build the evaluation harness
 
