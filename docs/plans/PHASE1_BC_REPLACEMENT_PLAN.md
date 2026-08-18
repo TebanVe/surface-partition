@@ -356,6 +356,40 @@ implemented. Early stopping makes this *cheaper*, not merely longer: easy
 fixtures halt as soon as they clear the bar, and only the hard production
 configuration pays for extra iterations.
 
+#### 🔒 PRE-REGISTERED PREDICTION (written 2026-08-17, BEFORE implementing)
+
+Committed *before* the early-stop + budget change is written, so the result
+cannot be re-explained after the fact. Rationale: of my three threshold/config
+adjustments so far, the two made under outside review were correct and the one I
+made myself after seeing a failure — the incumbent floor — was **wrong**. That is
+a one-for-one bad record on self-directed post-failure adjustment, so this one is
+pinned in advance instead of justified afterwards.
+
+**The change:** `solve_dual_offsets` stops as soon as it reaches
+`assignment_quality_bar`, and its budget for normalized scores is raised. The
+**acceptance bar does not move** — it stays 0.907% at the production pin.
+
+**Predictions, all falsifiable:**
+
+| # | Prediction |
+|---|---|
+| P1 | C at V=114,144/N=300 **seed 0** settles at **≤ 0.78%** (from 0.919%) — passing |
+| P2 | C at V=114,144/N=300 **seed 1** stays **≤ 0.78%** (from 0.773%) |
+| P3 | B at V=114,144/N=300 lands **≤ 0.70%** on both seeds (from 0.686 / 0.667%) — essentially unchanged |
+| P4 | C at V=47,488/N=300 **improves to ≤ 1.75%** (from 1.946 / 1.960%, against a 2.022% bar it was nearly touching) |
+| P5 | Gate 3 still **rejects** the null solver (early-stop must not make a broken solver look converged) |
+| P6 | Gate 1 still **byte-identical** — approach A must be untouched, since it does not use the normalized path |
+| P7 | Total gate-2 wall time does **not** increase, despite the higher ceiling: the easy fixtures halt early |
+
+**Falsifier.** If P1 misses — C stays above 0.907% at the production pin — then
+the budget hypothesis is **wrong**, C has a genuine convergence problem at
+production scale, and it must be reported as such rather than tuned at again. In
+that case C is not scoreable on perimeter and the plan says so.
+
+**P7 is the honest test of motive.** If this were really about making a failure
+disappear, wall time would rise. Early-stop is supposed to make the common case
+*cheaper*; that is why the change is B's infrastructure and not C's excuse.
+
 **Status: 0a is not complete at the production configuration.** B is unaffected
 and unblocked on the evidence; C must not be scored on perimeter until its
 assignment converges there.
