@@ -1,6 +1,6 @@
 # Replacing Phase 1 at High N — Shared Harness, then B, then C
 
-**Status:** **Phase 0 complete** (0a ✅ both gates, 0b ✅, 0c ✅, 0d ✅ bitwise).
+**Status:** Phase 0 nearly complete — 0b ✅, 0c ✅, 0d ✅ bitwise, 0a gate 1 ✅ / gate 3 ✅ / gate 2 **11/12** (C fails at the production pin on budget, not algorithm). B is unblocked; C is not yet scoreable.
 B is unblocked, and no new assignment solver is needed.
 **Revision:** v3 (2026-08-15). v1 → v2 → v3 after two adversarial review rounds;
 see [Correction history](#correction-history).
@@ -328,6 +328,35 @@ granularity (0.841% at the pin) while this gate declared 0a complete at 2.022% �
 so in a real arm evaluation the fault flag would have fired about half the time
 while the gate said the solver was fine. Both now read one number,
 `assignment_quality_bar` in `arm_harness.py`.
+
+#### Corrected gate 2 result: 11/12 pass, C fails at the production pin
+
+| Fixture | bar | C (s0/s1) | B (s0/s1) |
+|---|---|---|---|
+| V=47,488/N=300 | 2.022% | 1.946% / 1.960% | 1.621% / 1.655% |
+| V=114,144/N=100 | 0.280% | 0.213% / 0.194% | 0.181% / 0.175% |
+| **V=114,144/N=300** | **0.907%** | **0.919% ❌** / 0.773% | 0.686% / 0.667% |
+
+**C seed 0 at the production configuration misses by 0.012 points (1.3%).** That
+0.919% is not noise — it reproduces the independent 8-outer-iteration median
+exactly. C seed 1 passes at 0.773%; **B passes on both seeds at every fixture.**
+
+**Under this plan's own area lane, this is a solver-configuration fault, not
+evidence against C** — "worst deviation above the quality bar ⇒ fix 0a before
+scoring the arm." The diagnosis is unambiguous: the *strong reference* on those
+same scores (same solver, 1500 iterations instead of 400) reaches **0.685%**,
+comfortably inside the bar. So the algorithm is fine and the default **budget**
+is the binding constraint at production scale.
+
+The pre-registered remedy already names the fix — earlier remedy item 3,
+"early-stop at the bar, and raise the default budget" — which was never
+implemented. Early stopping makes this *cheaper*, not merely longer: easy
+fixtures halt as soon as they clear the bar, and only the hard production
+configuration pays for extra iterations.
+
+**Status: 0a is not complete at the production configuration.** B is unaffected
+and unblocked on the evidence; C must not be scored on perimeter until its
+assignment converges there.
 
 ### 0b — Build the evaluation harness
 
