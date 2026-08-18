@@ -197,12 +197,18 @@ def run_gate2(quick=False):
                 last_scores = None
                 bar = assignment_quality_bar(v, n_cells)
                 for it, scores in gen(mesh, n_cells, n_outer, seed):
-                    # Early stop AT the bar. This cannot manufacture a pass: the
-                    # loop exits only by ACHIEVING the target, never by giving up
-                    # on it, and a solver that cannot reach it still burns the
-                    # whole budget and still fails.
-                    cfg = BalancedReadoutConfig(
-                        normalize_scores=True, dual_early_stop_rel=bar)
+                    # NO early stop here, deliberately. Early stopping is a
+                    # PRODUCTION feature (B calls this solver every MBO step and
+                    # should not burn budget once converged), but inside the gate
+                    # it destroys the measurement: the solver halts the instant
+                    # it crosses the bar, so every reported number hugs the bar
+                    # from below and says nothing about achieved quality.
+                    # Measured 2026-08-18 at the production pin: with early stop
+                    # 0.885%, without it 0.620% on the identical scores. The
+                    # verdict was unaffected -- both pass -- but the first run of
+                    # this gate with early stop on reported numbers that were
+                    # artefacts of the stopping rule, not of the solver.
+                    cfg = BalancedReadoutConfig(normalize_scores=True)
                     _, _, worst = solve_dual_offsets(scores, v, target, cfg)
                     if it == 0:
                         cold = worst
