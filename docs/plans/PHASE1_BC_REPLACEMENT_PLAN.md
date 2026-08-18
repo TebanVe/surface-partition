@@ -1,9 +1,6 @@
 # Replacing Phase 1 at High N — Shared Harness, then B, then C
 
-**Status:** Phase 0 nearly complete — 0b ✅, 0c ✅, 0d ✅ bitwise; 0a gate 1 ✅ /
-gate 3 ✅ / gate 2 **11 of 12** (C misses at the production pin on *budget*, not
-algorithm). **B is unblocked; C is not yet scoreable.** No new assignment solver
-is needed.
+**Status:** **Phase 0 COMPLETE** — 0a ✅ (gates 1, 2 12/12, 3) · 0b ✅ · 0c ✅ · 0d ✅ bitwise. **B and C are both unblocked.** No new assignment solver needed.
 **Revision:** v4 (2026-08-17), after three adversarial review rounds; see
 [Correction history](#correction-history).
 
@@ -389,6 +386,44 @@ that case C is not scoreable on perimeter and the plan says so.
 **P7 is the honest test of motive.** If this were really about making a failure
 disappear, wall time would rise. Early-stop is supposed to make the common case
 *cheaper*; that is why the change is B's infrastructure and not C's excuse.
+
+#### ✅ RESULT vs the pre-registered prediction (2026-08-18) — 6 of 7 hit
+
+Early stop + raised budget, gate measuring at full budget. **12/12 PASS.**
+
+| Fixture | bar | C (s0/s1) | B (s0/s1) |
+|---|---|---|---|
+| V=47,488/N=300 | 2.022% | 1.472% / 1.392% | 1.405% / 1.390% |
+| V=114,144/N=100 | 0.280% | 0.146% / 0.142% | 0.161% / 0.151% |
+| **V=114,144/N=300** | **0.907%** | **0.624% / 0.573%** | **0.537% / 0.573%** |
+
+| # | Predicted | Actual | |
+|---|---|---|---|
+| P1 | C prod s0 ≤ 0.78% | **0.624%** | ✅ |
+| P2 | C prod s1 ≤ 0.78% | **0.573%** | ✅ |
+| P3 | B prod ≤ 0.70% both | **0.537% / 0.573%** | ✅ |
+| P4 | C @47,488 ≤ 1.75% | **1.472% / 1.392%** | ✅ |
+| P5 | gate 3 rejects null solver | 19.030% / 6.680%, rejected | ✅ |
+| P6 | gate 1 byte-identical | exact | ✅ |
+| P7 | wall time does not increase | **93 min vs ~41** | ❌ |
+
+**The budget hypothesis is confirmed.** C at the production pin went 0.919% →
+**0.624%**, clearing the 0.907% bar on merit, and `settled ≈ strong-ref` on
+almost every row — the 2000-iteration budget now reaches what a long reference
+run achieves, i.e. the solver is converging rather than being cut off.
+
+**P7 failed, and the failure is instructive.** It was the one prediction whose
+*mechanism* was wrong, and the first (early-stop-in-the-gate) run is why: with
+early stopping on, the gate passed 12/12 while every number hugged its bar from
+below — 0.885% at the production pin where the solver actually reaches 0.620% on
+the same scores. The verdict was never wrong; the *numbers* were artefacts of the
+stopping rule. Measuring honestly costs 93 minutes instead of 41. Early stopping
+remains in the solver for **production** use, where B calls it every MBO step,
+but it is barred from the measurement path.
+
+**Had the prediction not been committed in advance, a 12/12 PASS would have been
+banked and the masked numbers written into this document as fact.** That is what
+the pre-registration was for, and it is the only reason the defect surfaced.
 
 **Status: 0a is not complete at the production configuration.** B is unaffected
 and unblocked on the evidence; C must not be scored on perimeter until its
