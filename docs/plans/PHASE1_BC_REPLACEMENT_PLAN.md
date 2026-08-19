@@ -394,6 +394,45 @@ that case C is not scoreable on perimeter and the plan says so.
 disappear, wall time would rise. Early-stop is supposed to make the common case
 *cheaper*; that is why the change is B's infrastructure and not C's excuse.
 
+#### ✅ FINAL — 18/18 under the corrected protocol (2026-08-18)
+
+Re-run after review 4 with **all** of its must-fixes in place: the bar re-anchored
+to equal footing (production 0.907% → **0.841%**), a **third seed**, grading from
+the **returned labels** rather than the solver's self-report, and a genuine
+4000-iteration strong reference set through the field the normalized path
+actually reads. 2 h 39 m.
+
+| Fixture | bar | C (s0/s1/s2) | B (s0/s1/s2) |
+|---|---|---|---|
+| V=47,488/N=300 | 2.022% | 1.472 / 1.392 / 1.495% | 1.405 / 1.390 / 1.406% |
+| V=114,144/N=100 | 0.280% | 0.146 / 0.142 / 0.144% | 0.161 / 0.151 / 0.138% |
+| **V=114,144/N=300** | **0.841%** | **0.624 / 0.573 / 0.609%** | **0.537 / 0.573 / 0.607%** |
+
+The third seed lands inside the existing spread on every fixture, so the n=2
+verdicts were not luck. The strong reference is now genuinely longer than the
+tested config and mostly slightly better, so the earlier circularity is gone.
+
+**Against the incumbent at equal footing** (A's own dual, normalized, same 2000
+budget → **0.5991%** at the production pin): C spans 0.573–0.624%, B spans
+0.537–0.607%. **Parity, ±10%** — B a little better, C a little worse. This is the
+honest comparison and it is *not* the "2–3×" or "clear of parity" that two earlier
+versions of this document claimed.
+
+**What that means for the plan:** the assignment step is not a differentiator
+between the arms and the incumbent, and it is not a bottleneck for either. It was
+never supposed to be — 0a's job was to make the shared primitive usable on foreign
+score scales so that **perimeter** can be measured. That is done.
+
+#### ⚠ On "survived adversarial review"
+
+Four adversarial reviews inform this document, and each found real defects that
+changed it. They were **subagents dispatched from the same session as the work
+they reviewed** — independent of the author's reasoning, not of the author's
+framing, tooling, or choice of what to point them at. Every number they produced
+that is load-bearing here has since been self-reproduced, except where explicitly
+marked indicative. "Survived adversarial review" is doing evidentiary work in this
+plan and a reader should know exactly how much weight it can carry.
+
 #### ✅ RESULT vs the pre-registered prediction (2026-08-18) — 2 substantive hits, 4 guards held, 1 substantive miss
 
 Early stop + raised budget, gate measuring at full budget. **12/12 PASS.**
