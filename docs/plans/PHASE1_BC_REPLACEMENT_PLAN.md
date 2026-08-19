@@ -1041,11 +1041,28 @@ settle the comparison.
 
 **P1 missed and I was wrong about the mechanism.** My rationale was that "B only
 ever sees perimeter through a coarse-τ surrogate, PGD saw the Γ-energy for 13.4 h".
-That reasoning is refuted: B is *better*. Note also that B enters Phase 2 from a
-**longer** boundary (label-network 107.60, ≈215.2 in Phase 2's convention, vs the
-control's 214.34 — about +0.4% worse) and still finishes 0.455% ahead. So the
-advantage is not in B's initial geometry; it is in the *combinatorial structure*
-Phase 2 is handed. That is a hypothesis, not a measurement.
+That reasoning is refuted: B is *better*. Note also that B **enters** Phase 2 from a
+*longer* boundary and still finishes ahead — measured directly rather than inferred:
+
+| labels | `label_boundary_length` | vs control |
+|---|---|---|
+| control PGD (argmax of `x_opt`) | **107.3410** | — |
+| B (MBO) | 107.6014 | **+0.243%** |
+| init, i.e. C step 0 | 116.1989 | +8.252% |
+
+(An earlier draft *inferred* the control's figure as 214.34/2 from its recorded
+Phase 2 `initial_perimeter`. Computing it directly gives a ratio of **1.9968**, so
+the inference was right to 0.16% — but it is now measured, not assumed.)
+
+So B starts **0.243% behind** the control and finishes **0.455% ahead**: a genuine
+crossover. The advantage is therefore not in B's initial geometry but in the
+*combinatorial structure* Phase 2 is handed. **That is a hypothesis consistent with
+these data, not a measurement** — nothing here isolates topology from geometry.
+
+MBO also shortens its own init's boundary by **7.399%** (116.1989 → 107.6014),
+which is direct evidence that the MBO loop does substantial work rather than
+inheriting C's answer. The boundary proxy is *not* the scored quantity, so this
+anticipates P13 without settling it.
 
 **P8′ missed, and it invalidates the model I built it on.** P8′ predicted the dE
 clause would flag L2, L3 and L4 — falsifying P8 — from a log-linear interpolation
