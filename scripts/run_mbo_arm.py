@@ -268,9 +268,26 @@ def main():
             print("  Not scored against the +1%/+5% bars. See the report YAML.")
 
     out = run_root / "arm_report.yaml"
+
+    def _plain(o):
+        # numpy scalars are not YAML-serializable. Cast bools to bool FIRST:
+        # np.bool_ passed through float() becomes 0.0/1.0, which silently turns
+        # every flag in the report -- censored, cap_active, annealed -- into a
+        # number nobody reading the YAML would recognise as a flag.
+        if isinstance(o, (bool, np.bool_)):
+            return bool(o)
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        raise TypeError(type(o))
+
     with open(out, "w") as f:
         yaml.safe_dump(
-            json.loads(json.dumps(report, default=float)), f, sort_keys=False, width=100
+            json.loads(json.dumps(report, default=_plain)),
+            f,
+            sort_keys=False,
+            width=100,
         )
     print(f"\nreport: {out}")
     return 0

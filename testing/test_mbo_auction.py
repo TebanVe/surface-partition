@@ -588,8 +588,17 @@ def nc2(nc3_K=None, nc3_f_min=None):
         print("  SKIPPED: NC3-CAL did not produce constants.")
         return None
     mesh, N = build(348, 328), 100
+    # max_anneals=0 is essential: mbo_level RESPONDS to a pinned verdict by
+    # annealing tau and re-probing, so with the default 3 the level would fix
+    # itself and the final probe would report pinned=False -- the test would
+    # silently measure the remedy instead of the detector.
     cfg = MBOConfig(
-        seed=84172851, tau_c=2.0, max_iters=200, nc3_K=nc3_K, nc3_f_min=nc3_f_min
+        seed=84172851,
+        tau_c=2.0,
+        max_iters=200,
+        max_anneals=0,
+        nc3_K=nc3_K,
+        nc3_f_min=nc3_f_min,
     )
     d = tau_diagnostics(mesh, N, cfg)
     print(
@@ -678,13 +687,65 @@ def nc5():
     return ok
 
 
+def nc5b():
+    """POST-HOC, added 2026-08-19 after NC5, and labelled as post-hoc.
+
+    NC5 ran at V=47,488 / N=300 -- **158 verts per cell** -- and found no
+    over-merge signature anywhere up to sqrt(tau)/R_cell = 1.34. But the rho = 1.0
+    cap that the pre-registration pins binds on exactly ONE level in current use,
+    N=300 level 0, which is **32 verts per cell**: a different regime entirely.
+    So NC5 leaves the cap untested precisely where it acts.
+
+    This is not fishing after a failed test -- the verdict of NC5 stands as
+    recorded either way. It closes a scope limit that NC5's own design created,
+    and it runs BEFORE any scored run so it cannot be tuned against a result.
+    """
+    banner("NC5b", "over-merge at the coarse level where the rho cap ACTUALLY binds")
+    print("  N=300 at V=9,600 is 32 verts/cell -- the level, and the only level, where")
+    print("  tau = min((4h)^2, R_cell^2) clamps. NC5 tested 158 verts/cell and could")
+    print("  not have seen a failure here.\n")
+    mesh, N = build(100, 96), 300
+    rows = []
+    for c in (2.0, 4.0, 8.0):
+        cfg = MBOConfig(seed=84172851, tau_c=c, rho=99.0, max_iters=60)
+        d = tau_diagnostics(mesh, N, cfg)
+        labels, _ = geodesic_balanced_init(mesh, N, cfg.seed)
+        labels, rep = mbo_level(mesh, labels, N, cfg, level=0, run_probe=False)
+        gates = run_gates(labels_to_one_hot(labels, N), mesh, N)
+        rows.append((c, d, gates, rep))
+        print(
+            f"  c={c:.0f}  sqrt(t)/R_cell={d['sqrt_tau_over_r_cell']:.3f}  "
+            f"fragmented={gates.n_fragmented:>3d}  Q_mean={rep.geometry['q_mean']:.4f}  "
+            f"Q_worst={rep.geometry['q_worst']:.3f}  core_loss={rep.geometry['core_loss']:>3d}  "
+            f"boundary={rep.label_boundary_length:.2f}"
+        )
+    c4, c8 = rows[1], rows[2]
+    sep = (
+        c8[2].n_fragmented > c4[2].n_fragmented
+        or c8[3].geometry["q_mean"] > c4[3].geometry["q_mean"] * 1.02
+        or c8[3].geometry["core_loss"] > c4[3].geometry["core_loss"]
+    )
+    print(
+        f"\n  c=8 (sqrt(t)/R_cell={c8[1]['sqrt_tau_over_r_cell']:.2f}) vs c=4: "
+        f"{'SEPARATES' if sep else 'no difference'}"
+    )
+    print("  Reported either way; a null here means the cap is unverified, NOT that")
+    print("  over-merging is absent -- no instrument in this plan can see it.")
+    return sep
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--negative-controls", action="store_true")
     ap.add_argument("--all", action="store_true")
     ap.add_argument(
-        "--only", type=str, default=None, help="comma-separated subset, e.g. G4,NC5"
+        "--only", type=str, default=None, help="comma-separated subset, e.g. G4,NC5,NC2"
     )
+    # NC2's detector IS NC3, so it can only run once NC3-CAL has pinned these.
+    # Passing them on the command line keeps the calibration and its use in
+    # separate, individually auditable steps rather than one opaque run.
+    ap.add_argument("--nc2-k", type=float, default=None)
+    ap.add_argument("--nc2-f-min", type=float, default=None)
     args = ap.parse_args()
 
     gates = {
@@ -710,6 +771,10 @@ def main():
                 results[name] = fn()
         if "NC3-CAL" in wanted:
             results["NC3-CAL"] = nc3_cal()
+        if "NC5b" in wanted:
+            results["NC5b"] = nc5b()
+        if "NC2" in wanted:
+            results["NC2"] = nc2(args.nc2_k, args.nc2_f_min)
     else:
         if run_gates_:
             for name, fn in gates.items():
