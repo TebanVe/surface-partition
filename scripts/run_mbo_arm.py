@@ -250,6 +250,22 @@ def main():
         try:
             p2, _ = run_phase2(sol, str(campaign), str(ROOT))
             report["phase2"] = p2.to_dict()
+            # A HARD abort raises (non-zero exit) and is caught below. A SOFT one
+            # does not: report 05's A2 arm stopped at topology iterate 3 of 20 and
+            # the script still exited cleanly, so the only evidence is a short
+            # campaign. Without this check P12 would be scored "no abort" on a run
+            # that died two thirds of the way through.
+            with open(campaign) as cf:
+                expected = int(yaml.safe_load(cf).get("max_iterations", 0))
+            report["phase2"]["expected_iterations"] = expected
+            short = expected and p2.n_iterations < expected
+            report["phase2"]["short_campaign"] = bool(short)
+            if short:
+                print(
+                    f"  ** SHORT CAMPAIGN: {p2.n_iterations} iterates of {expected} "
+                    "expected -> treat as a Phase 2 abort (lane 6a: REFUTATION ON "
+                    "GEOMETRY), NOT scored against +1%/+5% **"
+                )
             print(
                 f"  best perimeter : {p2.best_perimeter:.13f} "
                 f"(iterate {p2.best_iteration} of {p2.n_iterations})"

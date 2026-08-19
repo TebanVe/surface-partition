@@ -135,7 +135,17 @@ def score(path, r, init_p2=None):
     if not p2:
         print("P12 Phase 2       : not run")
         return
-    print(f"P12 Phase 2       : {p2['n_iterations']} iterates, no abort")
+    if p2.get("short_campaign"):
+        print(
+            f"P12 Phase 2       : **SHORT CAMPAIGN {p2['n_iterations']} of "
+            f"{p2.get('expected_iterations')} -> SOFT ABORT, refutation on geometry, "
+            "NOT scored against +1%/+5%**"
+        )
+    else:
+        print(
+            f"P12 Phase 2       : {p2['n_iterations']} of "
+            f"{p2.get('expected_iterations', '?')} iterates, no abort"
+        )
     rel, v = perimeter_verdict(p2["best_perimeter"], anchor)
     print(
         f"P1  perimeter     : {p2['best_perimeter']:.10f} vs anchor {anchor:.10f}"
