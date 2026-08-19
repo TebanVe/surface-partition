@@ -1086,6 +1086,44 @@ been amended before scoring.
 approach C's step 0; if the init alone reaches ~184.4, this is a C result reported
 under B's name. P13 decides it and is running.
 
+### Phase A — SCORED RESULT 2 of 4: P13, the attribution test (2026-08-19)
+
+`results/arm_init_20260819_181203_npart100_V114144_seed84172851`. The balanced
+geodesic init alone — **approach C's step 0** — at the finest mesh, no MBO, through
+the identical pinned campaign.
+
+| | Phase 1 wall | label boundary | Phase 2 best | censored |
+|---|---|---|---|---|
+| init only (C step 0) | 67 s | 116.1989 | **189.6469917457051** (iterate 20 of 20) | **YES** |
+| **B (MBO)** | 228 s | 107.6014 | **184.4117703525215** (iterate 18 of 20) | no |
+| control (PGD) | 48,132 s | 107.3410 | 185.2546144718457 (iterate 20 of 20) | **YES** |
+
+> ## **P13: `(189.646992 − 184.411770) / 189.646992 = +2.761%`, against a 0.3% threshold — PASS by 9×.**
+>
+> **The N=100 result is attributable to B.** MBO's dynamics, not the balanced
+> geodesic init, produce the win. Had this come back under 0.3%, the honest
+> headline would have been *"the init does the work"* and the number would have been
+> a preview of C reported under B's name.
+
+⚠ **The measured 2.761% is an UPPER BOUND on MBO's contribution.** The init arm is
+**censored** — its best iterate is its last, so it was still improving when the cap
+stopped it and its converged value is ≤ 189.6470. A lower true value shrinks the
+gap. For the attribution to fail, the init would have to reach ≈ 185.0, i.e. gain
+another ~2.5% beyond a trajectory that was already flattening; that is implausible
+but it is **not excluded by this measurement**, and the direction of the bias is
+against B.
+
+**A free preview of C, and it is not flattering.** C's step 0 plus Phase 2 lands at
+**189.65, i.e. +2.38% above the PGD control** — a PARTIAL verdict under this plan's
+own bands. Real C iterates Lloyd and would do better, so this is a *lower bound* on
+C. But it does place C's starting point well behind both B and PGD, and it was
+obtained for **67 s** of Phase 1.
+
+**Corroborating signal:** the init's Phase 2 needed **2,285 s** against B's 1,979 s
+and showed 477 migration triggers across 421 components on a single iterate —
+consistent with an 8.25%-longer starting boundary forcing substantially more
+topological repair.
+
 ### Phase A — how the N=300 secondary must be read
 
 Verified before the run: the anchor `run_20260806_123326`'s own `experiment.yaml`
