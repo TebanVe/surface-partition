@@ -83,6 +83,65 @@ Anchors & 0d reproduces \(185.2546144718457\) \textbf{bitwise}; final gate~2 is
 \end{tabular}
 \end{tcolorbox}
 
+\section{Where B and C come from}
+\label{sec:literature}
+
+Neither arm is invented here; both are established constructions applied to this
+surface and this pipeline. This section states the provenance explicitly, because
+an earlier draft of this report carried none.
+
+\paragraph{B --- volume-constrained threshold dynamics.} Threshold dynamics
+originates with Merriman, Bence and Osher \cite{merriman1994motion}: alternate
+short-time diffusion of the phase indicators with a pointwise reassignment, and
+the interfaces move by (approximate) mean curvature. Esedo\u{g}lu and Otto
+\cite{esedoglu2015threshold} put the multiphase case on a variational footing,
+exhibiting a Lyapunov functional that \(\Gamma\)-converges to a weighted
+perimeter --- the same limit our own energy targets \cite{bogosel2023partitions,
+modica1977esempio}. The specific variant we would build is Jacobs, Kim and
+L\'eger's \emph{auction dynamics} \cite{jacobs2018auction}, which imposes exact
+volume constraints by replacing the pointwise threshold with a
+\emph{balanced assignment}, solved by Bertsekas' auction algorithm
+\cite{bertsekas1988auction}. That paper is the direct antecedent: it is
+volume-constrained multiphase MBO, published for this problem class.
+
+Two caveats the literature itself supplies. Connectivity is \emph{not}
+guaranteed per step --- stray components shrink under curvature flow but are not
+excluded --- and on graphs and coarse meshes threshold dynamics is known to
+\emph{freeze} when the diffusion length falls to the discretization scale
+\cite{vangennip2014mean}. Both shaped the design: the first sets the validity
+grading, the second fixes \(\tau = (4h)^2\) rather than \(h^2\).
+
+\paragraph{C --- capacity-constrained centroidal power diagrams.} Lloyd's
+algorithm \cite{lloyd1982least} iterates ``assign to nearest site, move site to
+centroid''. Adding a prescribed-capacity constraint turns the assignment into a
+semi-discrete optimal transport problem whose solution is a \emph{power diagram}
+with per-site weights --- the Minkowski-type result of Aurenhammer, Hoffmann and
+Aronov \cite{aurenhammer1998minkowski}. M\'erigot \cite{merigot2011multiscale}
+and Kitagawa, M\'erigot and Thibert \cite{kitagawa2019convergence} give the
+modern solvers for those weights; de Goes \emph{et al.}
+\cite{degoes2012bluenoise} use exactly this construction for blue-noise
+sampling. On a curved surface the Euclidean distance is replaced by a geodesic
+one, for which the heat method \cite{crane2013geodesics} is the standard
+alternative to the graph-Dijkstra approximation used in our fixtures.
+
+C minimizes a \emph{quantization} energy, not perimeter. It lands near the
+perimeter optimum only because both optima are asymptotically hexagonal in the
+plane --- Hales for perimeter \cite{hales2001honeycomb}, Fejes T\'oth and Gersho
+\cite{gersho1979asymptotically} for quantization. \textbf{Both are flat-plane
+results}, and this torus has Gaussian curvature of both signs, so neither
+transfers; how far C lands from optimal is precisely what remains to be measured.
+
+\paragraph{The shared solver, and what was nearly rebuilt.} All three approaches
+need the same primitive, and it is the semi-discrete OT dual
+\cite{aurenhammer1998minkowski, merigot2011multiscale}: find per-cell offsets
+\(\psi\) such that \(\arg\max_k[\,s_{ik} + \psi_k\,]\) has equal masses. The
+shipped implementation is subgradient ascent on that dual. Section~\ref{sec:0a}
+records that this report's programme nearly replaced it with an auction
+\cite{bertsekas1988auction} or an entropic (Sinkhorn) solver
+\cite{cuturi2013sinkhorn} --- both standard, either defensible --- on evidence
+that turned out to be a fixture artefact. Sinkhorn was implemented and measured;
+it \emph{lost} to the incumbent on five of six score matrices.
+
 \section{Why Phase 0 exists}
 
 The Phase~1 relaxation costs \textbf{22.0--79.3\,h} for a completed \(N{=}300\)
@@ -131,6 +190,7 @@ load-bearing assumption. \textbf{(c)}~The control is itself \emph{censored} ---
 its best iterate is its last --- so \(185.2546144718457\) is a \emph{bound}.
 
 \section{0a --- no new solver was needed}
+\label{sec:0a}
 
 \code{solve\_dual\_offsets} is subgradient ascent on the semi-discrete OT dual.
 It is \emph{correct} for any additive score matrix but its step schedule was
@@ -264,5 +324,8 @@ next to the claim.
 \item Prior arms: \codefile{docs/experiments/05-soft-area-constraint/},
   \codefile{docs/experiments/06-subfloor-ladder/}
 \end{itemize}
+
+\bibliographystyle{plain}
+\bibliography{../../math/shared/references}
 
 \end{document}
