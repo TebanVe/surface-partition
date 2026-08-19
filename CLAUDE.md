@@ -341,7 +341,8 @@ refuted** — 0 fragmented at every level, so N=300's cells 274/290 have another
 and the prepared Stage-2 config was *not* run. But a starved level 0 manufactures a
 **permanent** runt: worst cell 46.80% → 15.92% across 37× more vertices, never
 crossing the 5% gate, vs the control's 0.78%. Also corrects the stall guard — see the
-"under-resolved level" gotcha below). See
+"under-resolved level" gotcha below). and
+`07-phase0-shared-harness/` (measured: Phase 0 of the B/C replacement programme -- qualifying the measurement instrument. The harness reproduces the validated N=100 Phase 2 perimeter 185.2546144718457 **bitwise**, which simultaneously proves hardening an arm's labels costs nothing and that Phase 2 is bit-deterministic here; the shared assignment solver needed **no new algorithm** (the auction/Sinkhorn conclusion was a fixture artefact); gate 2 passes 18/18 and is shown to discriminate (the pre-0a solver scores identically to doing nothing); and at equal footing the arms sit at **parity +/-10%** with the incumbent, not clear of it. Also catalogues **five** occasions on which a measurement artefact was read as a result about the method, and the two practices that caught them). See
 `docs/experiments/README.md`. (Slot 03 is
 `03-dual-projection-verification`, on `feat/newton-projection`.)
 

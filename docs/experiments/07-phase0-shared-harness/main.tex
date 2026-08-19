@@ -1,0 +1,268 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../../math/shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Phase 0: Qualifying the Measurement Instrument},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Qualifying the Measurement Instrument}\\[0.5em]
+  \large Phase~0 of the Phase~1 replacement programme --- and five occasions on
+  which a measurement artefact was read as a result about the method}
+\author{}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Before approaches \textbf{B} (auction-dynamics MBO) and \textbf{C}
+(capacity-constrained geodesic Lloyd) can be compared against the PGD control on
+perimeter, the things that would do the comparing must themselves be shown to
+work: a \emph{balanced-assignment solver} shared by all three approaches, and a
+single \emph{evaluation harness}. This report records that qualification. Four
+results. (1)~The harness reproduces the validated \(N{=}100\) deliverable's
+Phase~2 perimeter \textbf{bitwise} --- \(185.2546144718457\) --- from a
+completely different entry path, which simultaneously establishes that hardening
+an arm's labels costs it nothing and that Phase~2 is bit-deterministic on this
+host. (2)~The shared solver needed \emph{no new algorithm}: the conclusion that
+an auction or Sinkhorn solver was required came from a fixture modelling a state
+the arms occupy for one outer iteration. (3)~Under the final protocol
+(three meshes \(\times\) two arms \(\times\) three seeds) the solver passes
+\textbf{18/18}, and the gate is shown to discriminate --- the pre-0a
+un-normalized solver is \emph{indistinguishable from doing nothing}. (4)~Measured
+at genuinely equal footing the arms sit at \textbf{parity, \(\pm 10\%\)}, with the
+incumbent, not clear of it; two earlier versions of this claim were wrong in the
+arms' favour. The methodological content is larger than the technical content:
+\textbf{five} times during this work a defect in the measurement was read as a
+result about the method, and the report documents what caught each one.
+\end{abstract}
+
+\begin{tcolorbox}[colback=blue!3!white, colframe=blue!45!black,
+                  title={Provenance}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.68\linewidth}@{}}
+Status & \textbf{measured} \\
+Date & 2026-08-16 to 2026-08-18 \\
+Surface & torus \(T(R{=}1.0,\, r{=}0.6)\) throughout \\
+Fixtures & \(V{=}47{,}488\ (224{\times}212)\) at \(N{=}300\);
+  \(V{=}114{,}144\ (348{\times}328)\) at \(N{=}100\) and at \(N{=}300\)
+  (the production configuration). Seeds \(0,1,2\). \\
+Control & \code{results/run\_20260709\_081548\_surftorus\_npart100\_...\_lam5.1\_seed84172851},
+  the validated \(N{=}100\) deliverable: Phase~2 best perimeter
+  \(\mathbf{185.2546144718457}\) at iteration 20 of 20, campaign
+  \code{ipopt\_btol0.001\_lbfgs30\_hess\_bestiter\_partial}, worst cell
+  \(0.7786\%\), 0 dead / 0 weak / 0 fragmented. \\
+\(N{=}300\) baselines & \code{run\_20260806\_123326} (\(V{=}47{,}488\), Phase~2
+  best \(323.319247087254\), plateaued at iterate 18 of 19) and
+  \code{run\_20260808\_191030} (\(V{=}114{,}144\), \(322.96218780465847\),
+  \emph{censored} --- best is its final iterate). These are \emph{one} experiment:
+  the second resumed from the first (\code{warm\_start\_path}). Both were copied
+  into this checkout on 2026-08-18 (12.6\,GB, verified identical). \\
+Incumbent & approach A's own dual stage on its own log densities, normalized, at
+  the same 2000-iteration budget the arms are scored with:
+  \(\mathbf{1.3517\%}\) at \(V{=}47{,}488\), \(\mathbf{0.5991\%}\) at
+  \(V{=}114{,}144\), both \(N{=}300\). \\
+Scripts & \codefile{testing/test\_balanced\_assignment\_solver.py} (gates 1--4);
+  \codefile{testing/test\_arm\_harness.py} (0b acceptance);
+  \codefile{testing/test\_phase0d\_shakedown.py} (0d, \(\sim\)34~min);
+  \codefile{docs/experiments/07-phase0-shared-harness/make\_figures.py}. \\
+Code & \codefile{src/partition/balanced\_readout.py}
+  (\code{solve\_dual\_offsets}, \code{assignment\_margin\_scale});
+  \codefile{src/partition/arm\_harness.py}
+  (\code{assignment\_quality\_bar}, \code{A\_PARITY\_NORMALIZED}). \\
+Versions & Python 3.12.13, numpy 2.4.4, scipy 1.17.1, h5py 3.16.0;
+  macOS 15.3.1 arm64 (Mac mini). \\
+Anchors & 0d reproduces \(185.2546144718457\) \textbf{bitwise}; final gate~2 is
+  \textbf{18/18} in 2\,h\,39\,m; the null solver scores \(16.588\%\) at the
+  production pin against a \(0.841\%\) bar. \\
+\end{tabular}
+\end{tcolorbox}
+
+\section{Why Phase 0 exists}
+
+The Phase~1 relaxation costs \textbf{22.0--79.3\,h} for a completed \(N{=}300\)
+solution and its winner-take-all readout is not a valid partition, so it is
+repaired afterwards. That does not scale. Approaches B and C would produce a
+valid partition at every step in minutes. Deciding between them requires
+measuring \emph{perimeter after Phase~2}, and both --- plus the shipped approach
+A --- need one shared primitive: \emph{balanced assignment given arbitrary
+per-vertex scores}, which exists inside the balanced readout as
+\code{solve\_dual\_offsets}.
+
+Phase~0 makes that primitive usable on foreign score scales (0a), builds one
+evaluation harness (0b), adopts the \(N{=}300\) baselines (0c), and proves the
+harness reproduces a known answer (0d). \textbf{It measures nothing about
+perimeter}; every question about whether B or C is any good remains open.
+
+\section{0d --- the harness reproduces a known answer, bitwise}
+
+The strongest single result. The \(N{=}100\) control's own winner-take-all
+labels were hardened to one-hot densities, written in the Phase~1 solution
+schema, and pushed through the entire harness under the control's own campaign
+\code{refinement.yaml}:
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+reference & \(185.2546144718457\) \\
+harness & \(185.2546144718457\) \quad (iterate 20 of 20) \\
+relative difference & \(0.000000\%\) \quad bitwise: \textbf{true} \quad wall 2023\,s \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Independently verified: the scratch campaign holds 20 fresh iteration files, its
+\code{refinement.yaml} names the one-hot arm file as \code{base\_solution}, and
+the \emph{entire} 20-iterate trajectory is bitwise equal to the control campaign
+computed five weeks earlier, including the 14{,}883-entry
+\code{lambda\_parameters} array.
+
+Three consequences. \textbf{(a)}~The apples-to-apples question is settled
+exactly: an arm's hard labels and PGD's continuous field produce identical
+Phase~2 initial states, because \code{ContourAnalyzer} reads densities only
+through \code{argmax} and every variable point starts at \(\lambda{=}0.5\).
+\textbf{(b)}~Phase~2 is bit-deterministic on this host, previously an unverified
+load-bearing assumption. \textbf{(c)}~The control is itself \emph{censored} ---
+its best iterate is its last --- so \(185.2546144718457\) is a \emph{bound}.
+
+\section{0a --- no new solver was needed}
+
+\code{solve\_dual\_offsets} is subgradient ascent on the semi-discrete OT dual.
+It is \emph{correct} for any additive score matrix but its step schedule was
+calibrated to the log-density scale. Normalizing scores by a robust
+assignment-margin scale, and raising the step (\code{normalized\_eta0} \(0.5 \to
+2.0\); measured \(3.654 \to 2.209 \to \mathbf{1.672} \to 2.248\%\) for
+\(\eta_0 = 0.5, 1, 2, 4\)) and the budget (\(400 \to 2000\)) is the whole fix.
+Approach A's path is untouched and byte-identical.
+
+\subsection{The conclusion that was withdrawn}
+
+The first version of gate~2 scored a \emph{cold start} --- balance a raw
+geometric guess in one shot --- and B failed at \(45.35\%\). This was written up
+as structural: the shipped solver is subgradient ascent tuned for a small
+correction, B and C need to rebalance \(\sim\)230 of 300 cells, therefore build a
+Bertsekas auction or an entropic solver. \textbf{All of that was wrong.} B and C
+are \emph{iterative}: from outer iteration~1 each assignment starts from an
+already-balanced partition. An iterated Lloyd loop with the \emph{existing}
+solver runs 23 consecutive iterations under the bar. Sinkhorn, implemented and
+measured, \emph{loses} to the incumbent on 5 of 6 score matrices. Two knobs
+dismissed as dead --- budget and step size --- each fix it on their own; the
+``a 10\(\times\) budget costs 20 minutes'' figure was operations \emph{counted},
+never timed (the true cost is 33.9\,ms/iteration).
+
+\section{The gate, and whether it discriminates}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{fig_final_vs_bar.pdf}
+\caption{Final protocol: three fixtures, two arms, three seeds, 18/18 pass.
+Red line: the acceptance bar. Grey dashed: the incumbent at equal budget.}
+\end{figure}
+
+The bar is \(\max(2\times\text{vertex granularity},\ \text{A's own dual stall at
+equal budget})\). A bar the shipped solver itself fails cannot be evidence about
+a foreign score scale; a bar below the one-vertex granularity floor is
+impossible by construction.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{fig_discrimination.pdf}
+\caption{Degraded solvers at the production pin, C scores. The pre-0a
+un-normalized solver scores \(16.588\%\) --- \emph{equal to the null solver to
+three decimals}, because its best iterate is its \(\psi{=}0\) starting point.}
+\end{figure}
+
+The shipped configuration sits \(27\text{--}48\%\) under its bars with the
+failure boundary a factor \(2\text{--}5\) away. Gate~3 asserts a null solver
+\emph{fails}; gate~4 verifies that early stopping is safe inside an iterated loop
+(\(3.0\times\) faster for \(+0.008\) points of degradation).
+
+\section{The result, stated at equal footing}
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+fixture & bar & C (s0/s1/s2) & B (s0/s1/s2) \\
+\midrule
+\(V{=}47{,}488\), \(N{=}300\)  & 2.022\% & 1.472 / 1.392 / 1.495 & 1.405 / 1.390 / 1.406 \\
+\(V{=}114{,}144\), \(N{=}100\) & 0.280\% & 0.146 / 0.142 / 0.144 & 0.161 / 0.151 / 0.138 \\
+\(V{=}114{,}144\), \(N{=}300\) & 0.841\% & 0.624 / 0.573 / 0.609 & 0.537 / 0.573 / 0.607 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Against the incumbent's \(0.5991\%\) at the production pin, C spans
+\(0.573\text{--}0.624\%\) and B spans \(0.537\text{--}0.607\%\):
+\textbf{parity, \(\pm 10\%\)}. Earlier drafts of this claim said ``2--3\(\times\)
+better'' and then ``clear of parity by 30\%''; both compared arms at 2000
+iterations against A at 400. \emph{A budget difference wearing a method
+difference's clothes.} The assignment step is not a differentiator and was never
+meant to be one --- 0a's job was to make the shared primitive usable so that
+perimeter can be measured.
+
+\section{Five measurement artefacts read as method results}
+
+\begin{enumerate}\itemsep2pt
+\item \textbf{The stall guard} warned on any floored line search --- which is how
+  a healthy level normally ends. Two commits reasoned from the false positive.
+\item \textbf{A corpus glob} reached 130 of 350 traces, and the resulting
+  ``empty gap'' became a report's strongest argument.
+\item \textbf{A baseline audit} enumerated one working directory and concluded no
+  \(N{=}300\) Phase~2 baseline existed. Two did, in a sibling worktree.
+\item \textbf{The theatre bar}: gate~2's bar included \(1.25\times\) a strong
+  reference computed \emph{with the solver under test}, so a broken solver
+  inflated its own bar. Six crippled solvers passed, the weakest doing nothing at
+  all.
+\item \textbf{The early-stop mask}: with early stopping inside the measurement
+  path, gate~2 passed 12/12 while every number hugged its bar from below
+  (Figure~3).
+\end{enumerate}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.82\linewidth]{fig_masking.pdf}
+\caption{Artefact 5. A passing gate looks identical either way; only the
+pre-registered prediction distinguished them.}
+\end{figure}
+
+Two things caught these, and neither was insight. \textbf{Pre-registration}: the
+early-stop mask surfaced only because predicted values were committed before the
+run, and four ``missed'' in a suspiciously uniform direction. \textbf{Asking
+whether anything fails}: every test asked \emph{``does the shipped solver
+pass?''} and none asked \emph{``does anything fail?''}, so a gate that passed
+everything looked exactly like a gate that worked. Gate~3 now closes that.
+
+\paragraph{On ``survived adversarial review''.} Four adversarial reviews inform
+this work and each found real defects. They were subagents dispatched
+\emph{from the same session as the work they reviewed} --- independent of the
+author's reasoning, not of the author's framing, tooling, or choice of what to
+point them at. Every load-bearing number they produced has since been
+self-reproduced, except one marked indicative in the plan. That caveat belongs
+next to the claim.
+
+\section{Conclusions}
+
+\begin{enumerate}\itemsep2pt
+\item The harness is qualified: it returns a known answer bitwise, and hardening
+  an arm's labels costs nothing measurable.
+\item No new assignment solver is needed. Normalization, step size and budget
+  suffice; the auction/Sinkhorn conclusion was a fixture artefact.
+\item The gate discriminates: 18/18 for the shipped configuration, with the
+  pre-0a solver indistinguishable from doing nothing.
+\item Arms and incumbent are at parity \(\pm 10\%\) on assignment quality. The
+  open question --- whether B or C produces \emph{shorter perimeter} --- is
+  untouched by this report.
+\end{enumerate}
+
+\section*{Related documents}
+\begin{itemize}\itemsep1pt
+\item Plan and pre-registration: \codefile{docs/plans/PHASE1\_BC\_REPLACEMENT\_PLAN.md}
+\item Taxonomy: \codefile{docs/reference/PHASE1\_HIGHN\_APPROACHES\_ABCDE.md}
+\item The gap being closed: \codefile{docs/reference/winner\_take\_all\_partition\_gap.md}
+\item Prior arms: \codefile{docs/experiments/05-soft-area-constraint/},
+  \codefile{docs/experiments/06-subfloor-ladder/}
+\end{itemize}
+
+\end{document}
