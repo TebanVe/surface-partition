@@ -988,6 +988,72 @@ be costing perimeter for no measured benefit.
 changing either after seeing NC5 is precisely the tuning this apparatus exists to
 prevent. The follow-up is a separate arm, scored through the same harness.
 
+### Phase A — SCORED RESULT 1 of 4: N=100, seed 84172851 (2026-08-19)
+
+`results/arm_mbo_20260819_173411_npart100_V114144_seed84172851`. Scored by
+`scripts/score_mbo_arm.py`, which applies the committed thresholds mechanically.
+
+| level | V | steps | active | worst area | Q̄ | wall |
+|---|---|---|---|---|---|---|
+| L0 | 9,600 | 25 | 22 | 1.8068% | 1.558 | 5.3 s |
+| L1 | 24,948 | 43 | 42 | 0.4950% | 1.547 | 23.0 s |
+| L2 | 47,488 | 18 | 18 | 0.3304% | 1.557 | 36.5 s |
+| L3 | 77,220 | 15 | 12 | 0.2095% | 1.560 | 61.1 s |
+| L4 | 114,144 | 15 | 15 | **0.1504%** | 1.558 | 96.9 s |
+
+**Gates on RAW labels: all clean.** 0 dead / 0 weak, 0 imbalanced (worst 0.1504%
+vs a 0.2803% bar), **0 fragmented**. Re-verified through the independent path
+`testing/check_fragmentation.py`, which additionally reports **0 cells with more
+than one raw component including sub-threshold speckle** — the "compose with E"
+lane is unused, on a method whose connectivity the literature does *not* guarantee
+per step.
+
+**Phase 2: 184.4117703525215 at iterate 18 of 20, NOT censored, full 20 iterates,
+no abort.** Against the anchor 185.2546144718457 that is **−0.455%**: B is
+**better** than the 13.4-hour PGD control, at **228 s** of Phase 1 — **210.9×**.
+
+| # | Predicted | Actual | |
+|---|---|---|---|
+| P1 | 188.0 (+1.5%), modal **PARTIAL** | **184.4118 (−0.455%), SUCCESS** | ❌ **MISS, in B's favour** |
+| P3 | ≤ 0.28%, point 0.15% | **0.1504%** | ✅ |
+| P4 | ≤ 3, point 0 | **0** | ✅ |
+| P5 | ≤ 25 min, ≥ 30×; point 15 min / 53× | **3.8 min / 210.9×** | ✅ bound; ❌ point estimate 4× pessimistic |
+| P8 | ≤ 2 of 5 flagged | **0 flagged, clauses agree** | ✅ **HELD** |
+| P10 | viol ≤ 1e-12; excursions ≤ ceiling on < 25% | viol **−3.53e-09**; **0** increases / 109 active steps | ✅ |
+| P12 | 20 iterates, no abort | **20, no abort** | ✅ |
+
+#### Two of my own predictions missed, and the second one matters more
+
+**P1 missed and I was wrong about the mechanism.** My rationale was that "B only
+ever sees perimeter through a coarse-τ surrogate, PGD saw the Γ-energy for 13.4 h".
+That reasoning is refuted: B is *better*. Note also that B enters Phase 2 from a
+**longer** boundary (label-network 107.60, ≈215.2 in Phase 2's convention, vs the
+control's 214.34 — about +0.4% worse) and still finishes 0.455% ahead. So the
+advantage is not in B's initial geometry; it is in the *combinatorial structure*
+Phase 2 is handed. That is a hypothesis, not a measurement.
+
+**P8′ missed, and it invalidates the model I built it on.** P8′ predicted the dE
+clause would flag L2, L3 and L4 — falsifying P8 — from a log-linear interpolation
+of `dE/tail` in the freeze ratio `c/c_lo` between the two NC3-CAL anchors.
+**Measured, `dE/tail` is essentially flat across the whole ladder**: 15.76, 21.62,
+15.11, 14.22, **16.49** for L0…L4, against a threshold of 79.25 — and L4, sitting
+exactly at `c/c_lo = 0.999`, scores 16.49 where my model demanded ~260.
+
+So **the freeze ratio does not predict pinning here**, the two-point interpolation
+was unjustified, and P8 held on the merits (both clauses empty ⇒ they agree)
+rather than by the `f_min` suppression I expected. The `f_min` mesh-transfer
+concern is therefore *untested* by this run, not resolved: nothing reached the dE
+clause for `f_min` to suppress.
+
+⚠ **P10's amendment earned itself.** Max slack was **1.508e-03**, so the adaptive
+ceiling was 2.261e-03 and the pre-registered 2e-3 floor would have sat at only
+1.33× the mechanism's own output — the same defect, one revision later, had it not
+been amended before scoring.
+
+⚠ **This result is not attributable to B until SF-a returns.** B's init is
+approach C's step 0; if the init alone reaches ~184.4, this is a C result reported
+under B's name. P13 decides it and is running.
+
 #### Deferred, as a named follow-up
 
 `docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
