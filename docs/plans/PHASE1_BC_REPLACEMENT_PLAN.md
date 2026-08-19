@@ -661,6 +661,22 @@ rounds on the design. Thresholds are not renegotiated after seeing results.
   anchor `run_20260806_123326` used 3 (V=47,488) — verified on disk. The driver
   asserts `arm_final_V == anchor_V` and refuses to score otherwise.
 
+#### Pinned numeric constants
+
+Transcribed here for the record. **These were pinned as `MBOConfig` defaults in
+commit `75040c8`, before any scored run**, so they were fixed in a committed
+artifact even though this prose entry is later; they are not being chosen now.
+
+`tau_c = 4.0` · `rho = 1.0` · `churn_tol = 1e-4` (fraction of V flipping per step)
+· `patience = 3` consecutive steps · `max_iters = 200` per level ·
+`anneal_factor = 1.5`, `max_anneals = 3` · `probe_factors = (2.0, 4.0)` ·
+`nc3_K = 79.2482`, `nc3_f_min = 5.634e-03` (from NC3-CAL, commit `e1e6288`).
+
+⚠ **No prediction is attached to `max_iters`.** My planning notes contained "no
+level hits max_iters", but that was never committed, so it is **not** scored as a
+prediction. `hit_max_iters` is reported factually per level; a level that reaches
+the cap is recorded as a censored level, not as a passed or failed forecast.
+
 #### ⚠ The monotonicity theorem does not transfer — a finding, not a bug
 
 Esedoğlu–Otto monotonicity is a minorize–maximize argument needing (i) the *same*
