@@ -585,7 +585,12 @@ Three things this settles, beyond "the instrument works":
 ## Phase A — B: auction-dynamics MBO
 
 *(named to avoid colliding with the project's own "Phase 1 / Phase 2")*
-**Status:** Not Started
+**Status:** **Prototype built** on `feat/phase1-mbo-auction-dynamics` —
+`src/partition/mbo_auction.py`, `scripts/run_mbo_arm.py`,
+`testing/test_mbo_auction.py`. Gates and negative controls run first; **no scored
+run until the pre-registration below is committed and NC3-CAL has pinned the
+pinning detector.** See [Phase A pre-registration](#phase-a--pre-registration-b)
+for the numbers committed in advance.
 
 Threshold dynamics (Esedoğlu–Otto) with volume constraints by balanced assignment
 (Jacobs–Kim–Léger, JCP 2018). **B descends the project's actual objective** — the
@@ -626,6 +631,157 @@ per level:
   ≈ 4.0 and 2.4 respectively.
 
 If a fixed τ pins, **anneal τ** — this is what the MBO literature does.
+
+### Phase A — pre-registration (B)
+
+Committed **2026-08-19, before any scored run**, after four adversarial review
+rounds on the design. Thresholds are not renegotiated after seeing results.
+
+#### What the implementation pins, and why
+
+- **τ = min((4·h_mean)², (ρ·R_cell)²), ρ = 1.0.** c=4, not 2. The cap is the
+  over-merge side of a two-sided window; ρ=1.0 is the loosest defensible value
+  (at √τ = R_cell the diffused indicator has spread over the whole cell) and any
+  tighter ρ is a preference, so the over-merge **instrument** adjudicates instead.
+  Measured across both ladders, the cap binds on **exactly one level**, N=300
+  level 0 (c_eff 2.68). Both √τ/h_max and √τ/R_cell are reported per level.
+- **One ruler.** Rule and window both use h_mean. The same criterion on h_max
+  fails at N=100 L2/L3/L4 where h_mean fails only at L4, so **"L4 pins and nowhere
+  else" is not derivable under either ruler** — an earlier draft mixed the two.
+  Both are reported; the calibrated probe is the arbiter.
+- **The initialization is a hard requirement** (one balanced C-scores assignment),
+  since gate 2's PASS for B is conditional on it.
+- **Early stopping is production-only and barred from the measurement path.** Every
+  level ends with a full-budget re-assignment; in-loop figures carry an
+  `early_stop_capped` tag and are never quoted as assignment quality. This
+  reproduces report 07's artefact 5 by construction and designs around it.
+- ⚠ **The ladder is read from the anchor run's `experiment.yaml`, never from
+  `parameters/`.** `parameters/torus_300part_seeded_lam11p5_original_energy.yaml`
+  says `refinement_levels: 5` (V=114,144), raised post-hoc for a resume, while the
+  anchor `run_20260806_123326` used 3 (V=47,488) — verified on disk. The driver
+  asserts `arm_final_V == anchor_V` and refuses to score otherwise.
+
+#### ⚠ The monotonicity theorem does not transfer — a finding, not a bug
+
+Esedoğlu–Otto monotonicity is a minorize–maximize argument needing (i) the *same*
+symmetric PSD form in the energy and the assignment objective, and (ii) an *exact*
+assignment. **Both fail here, for independent reasons.** The theorem's object is
+`M A_τ = M(M+τK)⁻¹M`, symmetric PSD; our step maximizes `⟨χ',Dy⟩` with `D = diag(v)`
+**lumped**, and `D A_τ` is not symmetric. And Jacobs–Kim–Léger get a theorem because
+Bertsekas' auction is *exact*, whereas `solve_dual_offsets` is subgradient ascent
+returning its best iterate. **This is the price of Phase 0's substitution**, made
+correctly (Sinkhorn and auction both lost to the incumbent on assignment quality) —
+paid here rather than there.
+
+What survives holds by construction, needs neither concavity nor exactness, and is
+computable every step:
+
+> **⟨χ', D y⟩ − ⟨χ, D y⟩ ≥ Σ_k ψ_k (T_k − T'_k)**
+
+The RHS is exactly the slack inexactness costs; it vanishes at perfect balance. So
+`E_τ` is a **descriptive trend, never a gate**, and G4 gates the inequality instead.
+
+**Measured 2026-08-19 by me at V=9,600**, four configurations (N∈{100,300} ×
+early-stop/full-budget, 25/40 steps): slack `|Σψ(T−T′)|/⟨χ,Dy⟩` runs
+**1.66e-4 to 1.45e-3**, five to seven orders of magnitude above the 1e-9 tolerance
+an earlier draft proposed — so 1e-9 was never defensible. Inequality violation was
+**exactly 0.00e+00** in all four. A review reported 4 and 5 `E_τ` increases in those
+step counts; I did not reproduce them at V=9,600 (0 increases in all four,
+including one run still churning at step 40).
+
+**Resolved 2026-08-19 by G4, in the review's favour.** Re-run at **V=47,488 /
+N=300** — 40 active steps — the loop produces **1 `E_τ` increase, +2.542e-05
+relative**, against a measured slack of 2.075e-4 at that configuration. So the
+increases are real, they are bounded by the slack exactly as the mechanism
+predicts, and my failure to see them was a **fixture artefact**: at V=9,600 the
+partition freezes before one appears. The earlier "unresolved" label is withdrawn.
+This is the third time in this programme that a null result turned out to be a
+fixture that could not produce the effect it was looking for.
+
+#### 🔒 Predictions
+
+| # | Prediction |
+|---|---|
+| P1 | N=100 Phase 2 perimeter: point **188.0 (+1.5%)**, 80% interval [185.5, 193.0]. Modal verdict **PARTIAL** |
+| P2 | **Seed spread at N=100 < 0.5%**. If > 1%, the primary falsifier cannot be scored at ±1% and I report that instead of a verdict |
+| P3 | N=100 area worst dev ≤ **0.28%** (bar); point 0.15% |
+| P4 | N=100 fragmented ≤ **3**; point 0 |
+| P5 | N=100 ladder ≤ **25 min/seed** vs 48,132 s ⇒ ≥ 30× |
+| P6 | N=300 vs 323.319247: point **331.4 (+2.5%)**, 80% interval [323.3, 341.0] — upper end deliberately crosses the +5% line (339.5); ~10–15% on refutation |
+| P7 | N=300 area ≤ **2.02%** at V=47,488, fragmented ≤ 6, ladder ≤ 15 min ⇒ ≥ 88×. *At N=300 level 0 granularity is 5.000% against a 10.000% bar (V=9,600, verified) — a large deviation there is granularity, not a solver fault* |
+| P8 | Under any calibration separating frozen from converged, **≤ 2 of 5 N=100 levels flagged pinned**. The level list is **P8′**, committed after NC3-CAL, still before scoring |
+| P9 | Over-merge shows as **fragmentation, not cell death** (balanced assignment cannot let a cell die); worst fragmentation over the N=300 ladder at **level 0** |
+| P10 | (a) descent inequality violation ≤ **1e-12** relative at every **active** step; (b) lumped `E_τ` falls overall, excursions ≤ **max(2e-3, 1.5 × the run's own max slack)** on < 25% of active steps (see the amendment below); (c) anything above that is not dual slack and B is not scoreable until explained |
+| P11 | NC1 and NC4 **fail** as designed; NC3-CAL separates frozen from converged with ≥ 2× margin (**or reports NC3 unusable**); NC2 then fires; **NC5 separates c=8 from c=4** on ≥ 1 of three instruments |
+| P12 | Phase 2 completes all 20 (N=100) / 19 (N=300) topology iterations without aborting |
+| P13 | **SF-a attribution:** `(P₂(init) − P₂(B))/P₂(init) ≥ 0.003`. If < 0.3%, the headline is *"the balanced geodesic init does the work"*, B's descent claim is unearned, and the number is a **preview of C** — which must then be said plainly rather than reported as B |
+
+#### Amendment to P10(b), made 2026-08-19 BEFORE any scored run
+
+The fixed **2e-3** ceiling was set as 1.5 × a **1.45e-3** slack measured over four
+configurations. **The first new configuration run under G4 reached 1.868e-3**
+(N=300, V=9,600, early-stop), putting the fixed bar within **1.07×** of what the
+mechanism itself can legitimately produce — the same defect that sank the 1e-9
+before it, one revision later and from the same cause: pinning a constant to the
+largest number seen so far.
+
+P10(b) now gates on **max(2e-3, 1.5 × the run's own measured max slack)**, with the
+pre-registered 2e-3 retained as a floor and the binding term disclosed in the
+output. This is not a loosening: P10(c) asks whether an excursion exceeds *what dual
+slack can produce*, and a fixed constant was only ever a proxy for that quantity —
+tying the bar to the measured slack tests the stated hypothesis directly. The
+per-run slack is reported alongside every verdict, so a bar that moved can always
+be seen to have moved.
+
+#### G4's non-vacuity guard fired on its first run, as designed
+
+At V=9,600 the N=300 configuration is 32 verts/cell and **froze after 12 of 40
+steps**, so 28 steps of flat tail would have certified the gate. The guard failed it
+(`got 12`, needs ≥ 20) while every substantive check passed. G4's N=300 fixture
+moved to **V=47,488** (158 verts/cell), where the dynamics stay live past 40 steps.
+Recorded because a gate whose guard has never fired is indistinguishable from one
+that cannot fire.
+
+#### Lane: Phase 2 aborting (decided in advance)
+
+A2's arm made IPOPT abort with `EXIT: Restoration Failed!` at iteration 3 of 20.
+An abort is **REFUTATION ON GEOMETRY** — reported with the iterate reached and the
+best perimeter before it, and **explicitly not scored** against the +1%/+5% bars.
+**One retry** is permitted, disclosed as "composed with E".
+
+⚠ **E-for-arms must not receive a one-hot field.** `apply_balanced_readout` scores
+by `log u`, so on one-hot input a flip needs ψ gaps > `|log 1e-300| = 690.8` and the
+dual cannot move anything, while `rebalance_boundaries`' ranking is −690.78 for
+*every* candidate — all ties. Repair strain would then be compared against control
+bands (+1.88%/+2.77%) measured with a meaningful ranking. The retry therefore passes
+the arm's **diffused y** as row-wise `softmax(y)` (so `log u_ik = y_ik + const_i`,
+the constant cancelling in both argmax and dual), asserts the field is not one-hot,
+and runs `normalize_scores=True` — which `scripts/balanced_readout.py` does not
+expose, so the driver calls `apply_balanced_readout` directly.
+
+Asymmetry disclosed either way: the **N=300 baseline came through the readout**, so
+composing with E is like-for-like there; the **N=100 control did not**, so a
+composed-with-E N=100 number is labelled as not like-for-like.
+
+#### The over-merge instrument
+
+Assignment quality **cannot** see over-merging — the balanced assignment hits its
+area target by construction. (An earlier draft cited gate 2's healthy B fixture at
+√τ/R_cell = 0.671 as evidence that ρ=0.5 was too conservative; that was an
+assignment-quality measurement standing in for a geometry claim, the same class of
+error as the theatre bar and the early-stop mask, and it is withdrawn.) Three
+instruments, recorded per level and swept in NC5: **fragmented-cell count**;
+**per-cell isoperimetric ratio** `Q_k = P_k²/(4πA_k)`; and **core loss** — cells
+whose own diffused-score peak vertex lies outside their territory. If NC5 shows
+c=8 ≈ c=4 on all three, the finding is *"no instrument here distinguishes
+over-merging"*, not *"the risk is absent"*.
+
+#### Deferred, as a named follow-up
+
+`docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
+and reviewed** — report 06's headline was refuted and report 07's corrected three
+times, twice in the arms' favour, so LaTeX at the moment of first result is the
+most expensive artifact to revise. **This is a deferral, not a cancellation.**
 
 ## Phase B — C: capacity-constrained geodesic Lloyd
 
