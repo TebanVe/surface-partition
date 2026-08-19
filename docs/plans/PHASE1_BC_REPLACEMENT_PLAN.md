@@ -1086,6 +1086,24 @@ been amended before scoring.
 approach C's step 0; if the init alone reaches ~184.4, this is a C result reported
 under B's name. P13 decides it and is running.
 
+### Phase A — how the N=300 secondary must be read
+
+Verified before the run: the anchor `run_20260806_123326`'s own `experiment.yaml`
+gives **3 levels → V = 47,488**, matching its solution exactly, while the live
+`parameters/torus_300part_seeded_lam11p5_original_energy.yaml` gives **5 levels →
+V = 114,144**. So the MF3 trap is not hypothetical here — it is the actual
+difference between a mesh-matched comparison and one biased in B's favour, and the
+driver's `arm_final_V == anchor_V` assertion is what prevents it. Campaign:
+`readout/dualshift_gate0.05_repair/...`, `max_iterations: 19`, seed 61803399.
+
+⚠ **The N=300 baseline is PGD *plus* the balanced readout (A + E), not raw PGD**,
+because raw PGD fails its own gates at N=300 (10 imbalanced, worst 36.15%, 2
+fragmented). B's **raw** labels are therefore scored against *the best available
+PGD pipeline*. That asymmetry **disfavours B** and is the correct comparison to
+make — but it must be stated whichever way the number falls, and it means a B
+result at N=300 is not comparable in kind to the N=100 one, where the control
+needed no readout.
+
 #### Deferred, as a named follow-up
 
 `docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
