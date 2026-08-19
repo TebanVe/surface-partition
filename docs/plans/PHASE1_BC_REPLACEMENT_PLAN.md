@@ -1009,8 +1009,23 @@ lane is unused, on a method whose connectivity the literature does *not* guarant
 per step.
 
 **Phase 2: 184.4117703525215 at iterate 18 of 20, NOT censored, full 20 iterates,
-no abort.** Against the anchor 185.2546144718457 that is **−0.455%**: B is
-**better** than the 13.4-hour PGD control, at **228 s** of Phase 1 — **210.9×**.
+no abort.** Against the anchor 185.2546144718457 that is **−0.455%**, at **228 s**
+of Phase 1 versus 48,132 s — **210.9×**.
+
+⚠ **State this as "at equal Phase 2 budget", not "B beats PGD".** The anchor is
+**censored** — the control's best iterate is its *last* (20 of 20), so it was still
+improving when the cap stopped it and its converged value is a **bound**,
+≤ 185.2546. B's best is iterate **18** of 20, so B had plateaued while the control
+had not. The defensible claim is therefore: *at the same pinned campaign and the
+same 20 topology iterations, B finishes 0.455% shorter, having converged where the
+control had not.* Whether PGD would pass B given more Phase 2 iterations is
+**unmeasured**, and the asymmetry cuts both ways — B's own convergence is evidence
+for it, the control's censoring is evidence against.
+
+**Named follow-up:** re-run the control's Phase 2 past 20 iterations to see whether
+it drops below 184.4118. That is a *new* measurement against a pre-registered
+anchor, so it does not belong in this run, but it is the one experiment that would
+settle the comparison.
 
 | # | Predicted | Actual | |
 |---|---|---|---|
