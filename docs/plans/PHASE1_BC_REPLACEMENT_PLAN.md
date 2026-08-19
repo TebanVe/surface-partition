@@ -776,6 +776,158 @@ whose own diffused-score peak vertex lies outside their territory. If NC5 shows
 c=8 ≈ c=4 on all three, the finding is *"no instrument here distinguishes
 over-merging"*, not *"the risk is absent"*.
 
+### Phase A — gate and negative-control results (2026-08-19)
+
+Run on this machine by me; every number below is self-produced. **No scored ladder
+run had been started when these were recorded.**
+
+#### Gates: G1–G8 all PASS (257 s)
+
+Two are worth recording beyond the verdict.
+
+**G2 independently reproduces the plan's τ table** — 2.196 / 0.863 at V=9,600
+N=100, 2.202 / 0.671 at V=47,488 N=300, 2.204 / 0.250 at V=114,144 N=100 — from a
+recomputation that shares no code with `tau_diagnostics`.
+
+**G4's non-vacuity guard fired on its first run and failed the gate.** The N=300
+fixture at V=9,600 (32 verts/cell) froze after **12 of 40** steps, so 28 steps of
+flat tail would otherwise have certified it. Moving the fixture to V=47,488 (158
+verts/cell) gives 40/40 active and it passes. *A gate whose guard has never fired
+is indistinguishable from one that cannot fire.*
+
+| G4 config | active | worst inequality violation | max slack | E_τ increases |
+|---|---|---|---|---|
+| N=100, V=9,600, full budget | 40/40 | −4.314e-07 | 1.665e-04 | 0/40 |
+| N=300, V=47,488, early stop | 40/40 | −2.914e-08 | 2.075e-04 | **1/40, +2.542e-05** |
+
+**G7 earns its place:** a 2× τ error is rejected at 1.63e-01 relative, while mass
+conservation is *exactly* τ-blind (`1ᵀK = 0`, verified at 2.5e-15) — G1, G2 and NC4
+would all pass a mis-scaled τ.
+
+#### Negative controls
+
+| | Result | |
+|---|---|---|
+| **NC1** cold init | 45.55% raw Voronoi → 50.67% after one diffusion → **50.6742% after balancing** vs **1.6156%** warm (bar 2.0216%) | **PASS**, 31.4× |
+| **NC4** wrong operator | 4.060e+02 vs correct 3.577e-15 | **PASS** |
+| **NC3-CAL** | frozen 260.72 vs converged 24.09 dE/tail ⇒ `nc3_K = 79.2482`, `nc3_f_min = 5.634e-03`, **10.82× margin** | **PASS** |
+| **NC5** over-merge, 158 v/cell | no instrument separates c=8 from c=4 | **FAIL — reported as pre-registered** |
+| **NC5b** over-merge, 32 v/cell (post-hoc) | same, to √τ/R_cell = **2.99** | **null** |
+| **NC2** c=2 freeze, V=114,144 | flagged **PINNED** (24 steps, 24 active, 88 s); moved_frac 4.60e-03 / 9.76e-03, dE/tail +42.99 / +89.82 | **PASS** |
+
+**NC1 is stronger than it was designed to be.** The concern was that it is
+near-tautological — that it only shows the first step is worse. What it actually
+shows is that the balanced assignment **cannot repair a cold start at all**: the
+solver returns 50.6742% against a raw argmax of 50.67%, i.e. its ψ=0 iterate, so
+the dual moves *nothing*. The hard init requirement is not a convenience.
+
+**NC3-CAL confirms the review's objection quantitatively.** A bare "labels moved
+AND E_τ dropped" sign test fires on **both** states — the converged one moves 31–39
+vertices with ΔE_τ +8.9e-03. Only the threshold separates them, and the 4× rung
+carries it (frozen 154 → 261 between 2× and 4×), so the geometric ladder earned its
+place. ⚠ The `moved_frac` half of the AND separates by only **1.9×** against
+dE/tail's 10.8×; the discrimination is carried by dE/tail alone, and a pinned level
+with small motion could be missed.
+
+#### ⚠ NC5 + NC5b: the over-merge side of the τ window is not demonstrable here
+
+| level | v/cell | √τ/R_cell at c = 2 / 4 / 8 | fragmented | Q̄ | Q_worst | boundary |
+|---|---|---|---|---|---|---|
+| V=47,488, N=300 | 158 | 0.335 / 0.671 / 1.341 | 0 / 0 / 0 | 1.6149 → 1.5649 → **1.5543** | 2.036 → 1.928 → 1.874 | 189.71 → 186.79 → 186.18 |
+| V=9,600, N=300 | 32 | 0.747 / 1.495 / **2.990** | 0 / 0 / 0 | 1.6269 → 1.5949 → **1.5770** | 2.381 → 2.194 → 2.174 | 190.26 → 188.37 → 187.33 |
+
+Across a **9× span of √τ/R_cell** (0.335 → 2.990) and two levels differing 5× in
+resolution, **no over-merge signature appears on any of the three instruments**, and
+core loss is 0 everywhere. The pre-registered signature was Q̄ / fragmentation /
+core-loss rising with c; every one is flat or **falling**.
+
+Two readings, and the difference matters:
+
+- The instruments are **not blind** — Q̄ moves 3.8%, Q_worst 8%, boundary 1.9%
+  monotonically with τ. A blind instrument would not move.
+- But they move in the direction of **improvement**, so what is established is that
+  *no damage is detectable*, not that over-merging cannot occur. **The pre-registered
+  verdict stands as written: no instrument in this plan distinguishes over-merging.**
+
+**Consequence for ρ, stated without acting on it.** The `ρ = 1.0` cap is
+**unsupported by any measurement here** — it binds only at N=300 level 0, and at
+exactly that level c=8 (√τ/R_cell = 2.99) is better than c=4 on every instrument.
+**The cap is NOT removed**: it is pre-registered, and changing a constant after
+seeing results is the tuning this whole apparatus exists to prevent. It is also
+*conservative* — it lowers c to 2.68 at that level, and c=2 is measurably worse
+than c=4, so keeping it biases against B, which is the safe direction. N=100 is
+unaffected (no level triggers the cap there). Recorded as a follow-up, not a change.
+
+Likewise the boundary proxy hints c=8 would give a shorter Phase 2 starting
+boundary (186.18 vs 186.79, 0.33%). **c stays at 4.** Noted as a follow-up.
+
+**A mechanism consistent with these data, not established by them:** the *volume
+constraint* is what makes MBO robust to large τ here. All N indicators are diffused
+equally, so the relative ordering of `y` still localizes each cell near its core,
+and ψ then holds every area at target no matter how far the field has spread. That
+is the property auction dynamics was introduced for; if it is what is happening,
+the over-merge side of the window is much less binding on a *volume-constrained*
+scheme than on plain thresholding. Testing that is a separate experiment.
+
+#### ⚠ Ex-ante concern about NC3-CAL's `f_min`, recorded BEFORE NC2 returned
+
+`nc3_f_min` is an absolute *fraction of vertices*, calibrated at V=9,600. The
+vertices a τ-probe can move are boundary vertices, which scale like `1/h ~ √V`, so
+their **fraction** scales like `1/√V`. From V=9,600 to V=114,144 that is a factor
+`√(114144/9600) = 3.45` smaller: the frozen state's 7.81e-03 would land near
+**2.3e-03**, *below* the pinned `f_min = 5.634e-03`. Since the detector ANDs
+dE/tail with moved-fraction, a genuinely frozen fine level could be reported as
+NOT pinned — a false negative created by the threshold, not by the dynamics.
+
+Written down before the result so the diagnosis cannot be retrofitted. If NC2 does
+report not-pinned, the correct reading is **the detector's `f_min` is not
+mesh-transferable**, not "the finest level is healthy".
+
+**Outcome: NC2 PASSES, and the prediction MISSED.** c=2 at V=114,144 is flagged
+pinned (24 steps, 24 active, 88 s), with moved_frac **4.60e-03 at 2×** and
+**9.76e-03 at 4×** — the 4× rung clears `f_min` comfortably, where I predicted
+~2.3e-03 and suppression.
+
+The mechanism I reasoned from was real but I applied it to the wrong quantity.
+NC2's state is far *more* frozen than the calibration's: `c/c_lo = 2/4.003 = 0.50`
+against the frozen anchor's 0.929. A deeper freeze leaves more reachable
+improvement, so the probe moves more vertices — and that effect outweighed the
+`1/√V` shrinkage I had predicted. **The 4× rung is what carried it** (4.60e-03 →
+9.76e-03), the second time in this work that the geometric ladder was load-bearing.
+
+⚠ **This does not retire the concern for P8′.** NC2 runs at c=2; the *scored*
+N=100 ladder runs at c=4, where every level sits at `c/c_lo` between 1.00 and 1.86
+— near the boundary, not deeply frozen — so probe motion will be far smaller and
+`f_min` can still suppress. The concern stands where it was raised.
+
+#### 🔒 P8′ — committed after NC3-CAL, before any scored run
+
+The calibration gives two anchors on the level's own freeze ratio `c / c_lo`
+(h_mean ruler): **frozen** at 0.929 → dE/tail 260.7, **converged** at 1.858 →
+24.1. Interpolating `log(dE/tail)` linearly between them puts the pinned threshold
+`K = 79.25` at **c/c_lo ≈ 1.394**. The N=100 ladder at c=4 sits at:
+
+| level | V | c_lo | **c/c_lo** | vs threshold 1.394 |
+|---|---|---|---|---|
+| L0 | 9,600 | 2.153 | 1.858 | above — not flagged |
+| L1 | 24,948 | 2.735 | 1.462 | above — not flagged |
+| L2 | 47,488 | 3.214 | **1.244** | below — flagged |
+| L3 | 77,220 | 3.630 | **1.102** | below — flagged |
+| L4 | 114,144 | 4.003 | **0.999** | below — flagged |
+
+**P8′, stated as two predictions because the detector has two clauses:**
+
+- **On dE/tail alone: L2, L3 and L4 flag — 3 of 5.** That would **falsify P8**,
+  which committed to "at most 2 of 5". I am recording the falsification of my own
+  prediction in advance rather than quietly widening it.
+- **On the pre-registered AND (dE/tail *and* moved-fraction): 0 or 1 flag**,
+  because `f_min` is an absolute vertex fraction that shrinks like `1/√V` (the
+  ex-ante concern above), so it suppresses exactly the fine levels dE/tail flags.
+
+Both verdicts are reported per level. **If they disagree, the finding is that the
+detector is not mesh-transferable** — and P8 must then be reported as untestable as
+written rather than as passed on the AND's silence.
+
 #### Deferred, as a named follow-up
 
 `docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
