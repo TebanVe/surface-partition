@@ -714,7 +714,7 @@ fixture that could not produce the effect it was looking for.
 | P10 | (a) descent inequality violation ≤ **1e-12** relative at every **active** step; (b) lumped `E_τ` falls overall, excursions ≤ **max(2e-3, 1.5 × the run's own max slack)** on < 25% of active steps (see the amendment below); (c) anything above that is not dual slack and B is not scoreable until explained |
 | P11 | NC1 and NC4 **fail** as designed; NC3-CAL separates frozen from converged with ≥ 2× margin (**or reports NC3 unusable**); NC2 then fires; **NC5 separates c=8 from c=4** on ≥ 1 of three instruments |
 | P12 | Phase 2 completes all 20 (N=100) / 19 (N=300) topology iterations without aborting |
-| P13 | **SF-a attribution:** `(P₂(init) − P₂(B))/P₂(init) ≥ 0.003`. If < 0.3%, the headline is *"the balanced geodesic init does the work"*, B's descent claim is unearned, and the number is a **preview of C** — which must then be said plainly rather than reported as B |
+| P13 | **REPORTED WITH THE SAME PROMINENCE AS P1, never as a sub-clause** — it is the most likely way this experiment surprises us. **SF-a attribution:** `(P₂(init) − P₂(B))/P₂(init) ≥ 0.003`. If < 0.3%, the headline is *"the balanced geodesic init does the work"*, B's descent claim is unearned, and the number is a **preview of C** — which must then be said plainly rather than reported as B |
 
 #### Amendment to P10(b), made 2026-08-19 BEFORE any scored run
 
@@ -924,9 +924,53 @@ The calibration gives two anchors on the level's own freeze ratio `c / c_lo`
   because `f_min` is an absolute vertex fraction that shrinks like `1/√V` (the
   ex-ante concern above), so it suppresses exactly the fine levels dE/tail flags.
 
-Both verdicts are reported per level. **If they disagree, the finding is that the
-detector is not mesh-transferable** — and P8 must then be reported as untestable as
-written rather than as passed on the AND's silence.
+Both verdicts are reported per level.
+
+##### 🔒 P8 scoring rule — committed BEFORE the first scored run
+
+Split explicitly, because as previously written "untestable" could have absorbed an
+ordinary miss, and that is the one thing this protocol cannot allow:
+
+- **The two clauses AGREE and more than 2 of the 5 N=100 levels are flagged ⇒ P8
+  FAILED.** Recorded plainly as a miss. Not reinterpreted, not widened, not
+  reported as untestable.
+- **ONLY if the two clauses disagree about WHICH levels are pinned** is P8
+  *untestable as written* — and then both clause-wise level lists are reported and
+  the finding is that the detector is not mesh-transferable.
+
+A missed prediction is a fine outcome and often the most useful one: report 07's
+P7 missed, was recorded as a miss, and was the single most informative result of
+that phase. P8′ already predicts P8 will fail; it is allowed to fail cleanly.
+
+#### ⚠⚠ HEADLINE NULL: a three-part over-merge instrument was built and it detected NOTHING
+
+Stated here at full prominence rather than inside the results table, because its
+consequence is a standing limit on what this plan's evidence can support.
+
+Fragmentation, per-cell isoperimetric ratio, and core loss were all implemented and
+swept over a **9× span of √τ/R_cell (0.335 → 2.990)** at two levels differing 5× in
+resolution. **Not one of them registered any over-merge penalty.** Core loss and
+fragmentation were 0 in all six configurations; compactness moved monotonically the
+*other* way.
+
+**Therefore the ρ question is OPEN, and no future claim about `c` or `ρ` may lean on
+this plan's evidence in either direction** — not "over-merging is absent" (never
+shown), and not "the cap is needed" (never shown either). The cap is retained
+because it is pre-registered and because it biases *against* B, which is the right
+direction to be wrong; that is a discipline argument, not an empirical one.
+
+#### 🔖 NAMED FOLLOW-UP: test removing the τ cap — the current evidence says it may cost perimeter for nothing
+
+Recorded as a named experiment so it survives, and stated at full strength because
+it is stronger than a hint. **Two measurements point the same way:** NC5 found no
+over-merge penalty at c=8 on *any* of the three instruments, and c=8 starts Phase 2
+from a **0.33% shorter label boundary** (186.18 vs 186.79) — **a third of the entire
++1% success bar**. The best evidence currently available is that the ρ=1.0 cap may
+be costing perimeter for no measured benefit.
+
+**This must not touch the present run.** `c = 4` and `ρ = 1.0` are pre-registered;
+changing either after seeing NC5 is precisely the tuning this apparatus exists to
+prevent. The follow-up is a separate arm, scored through the same harness.
 
 #### Deferred, as a named follow-up
 
