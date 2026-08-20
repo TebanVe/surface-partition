@@ -460,16 +460,31 @@ committed --- not a resolution to be careful.
   initially mis-scored in B's \emph{dis}favour by an instrument that did not exist.
 \end{enumerate}
 
-\section*{References we could not verify}
-Author given names for \cite{hu2024iterative} are \textbf{unverified}; the entry
-records ``Hu, Wei and Liu, Chong and Wang, Dong'' from a secondary description, not
-from the paper's title page. Volume and page numbers throughout
-\codefile{docs/math/shared/references.bib} carry an upstream note that they should
-be checked against published sources before external distribution, and that note
-still stands. Neither \cite{hu2024iterative} nor \cite{bogosel2021longest} was read
-by the report's author; both are summarised from a literature review supplied to
-this work, and the \emph{characterisation} of their scope (outer problem, flat
-Cartesian domains, small \(N\)) rests on that review.
+\section*{Provenance of the two closest references}
+Both papers are held at \codefile{docs/papers/}. Authors, titles and versions are
+now \textbf{verified against their title pages}:
+\cite{hu2024iterative} is Shilong Hu, Hao Liu and Dong Wang (v1, 25 May 2024) ---
+an earlier draft of this report guessed two of the three given names wrongly, from a
+secondary description --- and \cite{bogosel2021longest} is Beniamin Bogosel and
+Edouard Oudet (v2, 7 June 2021).
+
+The scope characterisation is now partly checked directly rather than taken on
+trust: \cite{hu2024iterative} states in its abstract that it treats the
+\emph{longest} minimal length partition problem by Gaussian convolution with
+auction dynamics and threshold dynamics, on \(128\times128\) and
+\(256\times256\) grids in 2D and 3D, and its full text contains \textbf{zero}
+occurrences of ``manifold'', ``Riemannian'' or ``torus'';
+\cite{bogosel2021longest} states in its abstract that it seeks the set maximizing
+the perimeter of the least-perimeter partition and uses capacity-constrained
+Voronoi diagrams as \emph{initialization}, with 44 occurrences of ``convex'' and
+2 of ``manifold''. \textbf{What remains second-hand} is the reading of their full
+numerical sections; the author has read the title pages, abstracts and these
+keyword counts, not the papers end to end.
+
+Volume and page numbers throughout \codefile{docs/math/shared/references.bib}
+carry an upstream note that they should be checked against published sources
+before external distribution. That note still stands for the other 28 entries,
+none of which this report verified.
 
 \section*{Related documents}
 \begin{itemize}\itemsep1pt

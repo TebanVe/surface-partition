@@ -312,21 +312,27 @@
 % --- closed curved surface. Author first names for hu2024iterative are NOT
 % --- verified -- see the report's "References we could not verify" note.
 @article{hu2024iterative,
-  author  = {Hu, Wei and Liu, Chong and Wang, Dong},
+  author  = {Hu, Shilong and Liu, Hao and Wang, Dong},
   title   = {Iterative Thresholding Methods for Longest Minimal Length Partitions},
-  journal = {arXiv preprint arXiv:2405.16040},
+  journal = {arXiv preprint arXiv:2405.16040v1},
   year    = {2024},
-  note    = {Auction dynamics + threshold dynamics for the OUTER problem;
-             experiments on $[0,1]^2$ and 3D boxes, $128^2$/$256^2$ Cartesian
-             grids with FFT convolution, small $N$. Author given names UNVERIFIED.}
+  month   = may,
+  note    = {Auction dynamics + threshold dynamics for the OUTER (P\'olya) problem;
+             Gaussian convolution on $128\times128$ and $256\times256$ Cartesian
+             grids, 2D and 3D. Authors verified against the title page of
+             \texttt{docs/papers/2405.16040v1.pdf}; zero occurrences of
+             manifold/Riemannian/torus in the full text.}
 }
 
 @article{bogosel2021longest,
   author  = {Bogosel, Beniamin and Oudet, Edouard},
   title   = {Longest Minimal Length Partitions},
-  journal = {arXiv preprint arXiv:2102.02891},
+  journal = {arXiv preprint arXiv:2102.02891v2},
   year    = {2021},
-  note    = {Outer problem on convex sets in $\mathbb{R}^2$/$\mathbb{R}^3$,
-             $n = 2,3,4,6,10$; its capacity-constrained Voronoi figure with
-             $>100$ cells is PLANAR. Volume/pages not applicable (preprint).}
+  month   = jun,
+  note    = {Outer problem: numerical evidence that the ball maximizes the
+             perimeter of the least-perimeter partition under volume constraint.
+             Uses capacity-constrained Voronoi diagrams as INITIALIZATION.
+             Verified against \texttt{docs/papers/2102.02891v2.pdf} (v2,
+             7 June 2021); 44 occurrences of ``convex'', 2 of ``manifold''.}
 }
