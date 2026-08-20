@@ -1152,7 +1152,8 @@ seed noise. Measured, the spread is **0.136%** — **3.3× smaller than the 0.45
 margin by which the worse of the two seeds beats the control**, and 4.3× smaller
 than the better one. The win is not seed noise.
 
-Both seeds: **SUCCESS**, all three gates clean on raw labels, **0 fragmented**,
+Both seeds: **SUCCESS**, **0 fragmented** on raw labels (the only gate with content
+for B — dormant is vacuous, area is the solver check),
 uncensored (best at iterate 18 and 19 of 20, so both had plateaued while the
 control had not). P13 recomputes to **+2.892%** against seed 61803399.
 
@@ -1214,7 +1215,7 @@ Against the anchor 323.319247087254 that is **−1.044%**, from **248 s** agains
 |---|---|---|---|
 | P6 | 331.4 (+2.5%), 80% interval **[323.3, 341.0]** | **319.9428 (−1.044%)** | ❌ **MISS — below the entire interval** |
 | P7 | area ≤ 2.02% (point 1.5%); frag ≤ 6 (point 0–2); ≥ 88× | **1.4172%; 0; 318.8×** | ✅ (speed point again pessimistic) |
-| P9 | worst fragmentation at level 0 | **0 fragmented at every level** | ⚠ **UNTESTABLE — the predicted phenomenon never occurred** |
+| P9 | over-merge shows as fragmentation not cell death; worst fragmentation at **level 0** | **1 fragmented cell (295) at L0, 0 at L1/L2, no cell death** | ✅ **HIT** — see the correction below |
 | P10 | viol ≤ 1e-12; excursions ≤ ceiling on < 25% | viol **−6.13e-08**; **4** increases / 96 active (4.2%), max slack 5.505e-03, ceiling 8.258e-03 | ✅ |
 | P12 | 19 iterates, no abort | **19 of 19, no abort** | ✅ |
 
@@ -1222,9 +1223,32 @@ Against the anchor 323.319247087254 that is **−1.044%**, from **248 s** agains
 itself, so I assigned essentially no probability to B beating PGD+A+E at N=300 —
 and it did, by more than the whole +1% success band. Recorded as a miss.
 
-**P9 is untestable, not passed.** It predicted *where* fragmentation would appear;
-none appeared anywhere, so the prediction has no purchase. Reporting it as "held"
-would be scoring a vacuous truth.
+#### ⚠⚠ CORRECTION (2026-08-19, review 6): "0 fragmented at every level" was FALSE, and never measured
+
+An earlier version of this row asserted **"0 fragmented at every level"** and scored
+P9 ⚠ UNTESTABLE on the grounds that the predicted phenomenon never occurred.
+**Both statements were wrong, and the first was never measured at all** — until
+review 6, `LevelReport` carried *no connectivity field*, so per-level fragmentation
+was never computed. The claim was an inference presented as a result.
+
+**Measured by me after adding the instrument** (`run_gates` per level, now in
+`mbo_level`), re-running the N=300 ladder to a bit-exact reproduction (worst areas
+6.7063 / 2.5394 / 1.4172%, steps 16 / 21 / 66, boundary 187.2574 — all identical):
+
+> **level 0: 1 FRAGMENTED cell — cell 295. Levels 1 and 2: 0. No cell death.**
+
+So the phenomenon **did** occur, **at exactly the level P9 named**, and **as
+fragmentation rather than cell death** — which is precisely what P9 predicted.
+**P9 is a HIT, not untestable.** The stray is healed by level 1's MBO run, which is
+direct evidence for the taxonomy's *"stray islands shrink to extinction under
+curvature flow"* mechanism — the opposite dynamic to the discrete-area trim.
+
+**This is the sixth instance of this programme's signature artefact, and I produced
+it: a null produced by an instrument that could not see the effect.** Reports 06 and
+07 catalogue five; this is the same shape — the stall guard, the corpus glob, the
+baseline audit, the theatre bar, the early-stop mask, and now a per-level claim with
+no per-level measurement behind it. The fix is instrumentation, committed alongside
+this correction, not a note to be careful.
 
 **P10's E_τ increases are real here** — 4 of 96 active steps, up to a bound of
 8.258e-03 set by the run's own 5.505e-03 slack. This is the third independent

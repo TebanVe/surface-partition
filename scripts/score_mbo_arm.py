@@ -53,7 +53,7 @@ def _speed(n_partitions, wall):
     return f"{cw/max(wall,1e-9):.1f}x vs {cw:.0f}s PGD" if cw else "n/a (no PGD wall)"
 
 
-def score(path, r, init_p2=None):
+def score(path, r, init_p2=None, init_n=None):
     N, V = r["n_partitions"], r["arm_final_V"]
     anchor = N100_ANCHOR if N == 100 else N300_ANCHOR
     print(
@@ -164,7 +164,16 @@ def score(path, r, init_p2=None):
         print(
             "    ** CENSORED (best iterate is the last) -> NOT scored against a threshold **"
         )
-    if init_p2 is not None:
+    # P13 only means anything when the init control is the SAME configuration.
+    # Applying an N=100 init to an N=300 report printed "-68.704% ... B's descent
+    # claim is unearned" -- a nonsense verdict from a cross-N comparison, and the
+    # same unit-bug class as the 194x speedup.
+    if init_p2 is not None and init_n is not None and init_n != N:
+        print(
+            f"P13 ATTRIBUTION   : SKIPPED -- init control is N={init_n}, this report "
+            f"is N={N}. Cross-N attribution is meaningless."
+        )
+    elif init_p2 is not None:
         rel13 = (init_p2 - p2["best_perimeter"]) / init_p2
         print(
             f"P13 ATTRIBUTION   : init {init_p2:.6f} -> MBO {p2['best_perimeter']:.6f} "
@@ -189,17 +198,18 @@ def main():
     )
     args = ap.parse_args()
 
-    init_p2 = None
+    init_p2 = init_n = None
     if args.init_report:
         for _, ir in load(args.init_report):
             if ir.get("phase2"):
                 init_p2 = ir["phase2"]["best_perimeter"]
+                init_n = ir["n_partitions"]
 
     loaded = []
     for pat in args.reports:
         loaded.extend(load(pat))
     for path, r in loaded:
-        score(path, r, init_p2)
+        score(path, r, init_p2, init_n)
 
     p2s = [
         (r["seed"], r["phase2"]["best_perimeter"])

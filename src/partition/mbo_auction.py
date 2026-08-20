@@ -525,6 +525,11 @@ class LevelReport:
     final_early_stop_capped: bool = True
     probe: Dict = field(default_factory=dict)
     geometry: Dict = field(default_factory=dict)
+    #: All three validity gates on THIS level's labels. Without this the ladder
+    #: reports only final-label gates, and a per-level claim can only be inferred.
+    #: That is exactly how "0 fragmented at every level" got into the record as an
+    #: unmeasured assertion -- and it was false (1 transient fragment at N=300 L0).
+    gates: Dict = field(default_factory=dict)
     label_boundary_length: float = float("nan")
     wall_seconds: float = 0.0
 
@@ -546,6 +551,7 @@ class LevelReport:
             "final_early_stop_capped": bool(self.final_early_stop_capped),
             "probe": self.probe,
             "geometry": self.geometry,
+            "gates": self.gates,
             "label_boundary_length": float(self.label_boundary_length),
             "wall_seconds": float(self.wall_seconds),
             "steps": [s.to_dict() for s in self.steps],
@@ -753,6 +759,25 @@ def mbo_level(
     report.final_early_stop_capped = final_capped
 
     report.active_steps = sum(1 for s in report.steps if s.churn > 0)
+    # Per-level gates, through the SAME harness path used for the final labels.
+    from .arm_harness import labels_to_one_hot, run_gates
+
+    _g = run_gates(labels_to_one_hot(labels, n_cells), mesh, n_cells)
+    report.gates = {
+        "n_imbalanced": int(_g.n_imbalanced),
+        "worst_rel_dev": float(_g.worst_rel_dev),
+        "quality_bar": float(_g.quality_bar),
+        "n_fragmented": int(_g.n_fragmented),
+        "fragmented": [int(c) for c in _g.fragmented],
+        "worst_stray_rel": float(_g.worst_stray_rel),
+    }
+    if _g.n_fragmented:
+        logger.warning(
+            "level %d: %d FRAGMENTED cell(s) %s on this level's labels",
+            level,
+            _g.n_fragmented,
+            _g.fragmented[:10],
+        )
     report.geometry = compactness(labels, mesh, n_cells)
     report.geometry["core_loss"] = core_loss(y, labels) if y is not None else -1
     from .balanced_readout import label_boundary_length

@@ -698,10 +698,29 @@ pre-registered thresholds committed before any run:
    *upper* bound: the init arm is censored.)
 3. **Seed spread is 0.136%**, 3.3× smaller than the margin over the control, so the
    result is not seed noise.
-4. **The comparison is "at equal Phase 2 budget", not "B beats PGD".** Both PGD
-   anchors are **censored** (best iterate = last), so they were still improving;
-   B's bests are at iterates 18/20, 19/20 and 16/19, i.e. converged. Whether PGD
-   overtakes B given more Phase 2 iterations is **unmeasured** — a named follow-up.
+4. **The comparison is "B beats the best available PGD pipeline at each N, at
+   equal Phase 2 budget" — never "B beats PGD", and the two N must NOT be pooled.**
+   The N=100 anchor is *raw* PGD; the N=300 anchor is PGD **+ balanced readout**,
+   because raw PGD is invalid there. Different baselines, so the −0.455% and
+   −1.044% margins are not one trend.
+   ⚠ *An earlier version of this line said "both PGD anchors are censored, so they
+   were still improving". That is **false for N=300**, whose best is iterate 18 of
+   19 — plateaued, not censored.* For N=100, review 6 resumed the control's own
+   Phase 2 for **20 further iterations (21–40) and found no improvement**: best over
+   all 40 remains 185.2546 at iterate 20, the extension drifting up to ~185.30. So
+   both trajectories sit at the migration-cycling plateau and B's plateau is simply
+   0.455% lower — **do not say "B converged where the control had not"; both are
+   plateaued.** (That extension is the review's measurement, **not self-reproduced**;
+   report 08 must either reproduce it or label it as such.)
+   ⚠ **PGD's own seed-to-seed spread at these configs is UNMEASURED** — every N=100
+   PGD run on both worktrees is seed 84172851 and every N=300 λ=11.5 run is seed
+   61803399, so each anchor is a single trajectory. B's margin exceeds *B's* seed
+   spread by 3.3×, but "B beats PGD by more than PGD's own seed lottery" is not
+   established.
+5. **The 211–319× is Phase-1-replacement wall only.** End-to-end, including the
+   shared ~30–40 min Phase 2, it is ≈23× (N=100) and ≈31× (N=300). And the 48,132 s
+   incumbent contains the diagnosed 15,340 s frozen level-0 tail: against the
+   structure-trigger variant (34,967 s) the incumbent-best figure is ≈153×.
 
 **Free datum on C:** its step 0 lands at **+2.38% above the PGD control** (PARTIAL)
 for 67 s. Real C iterates Lloyd, so that is a *lower bound* — but C starts behind
