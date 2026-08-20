@@ -1124,6 +1124,30 @@ and showed 477 migration triggers across 421 components on a single iterate —
 consistent with an 8.25%-longer starting boundary forcing substantially more
 topological repair.
 
+### Phase A — SCORED RESULT 3 of 4: N=100 seed 61803399, and P2 (2026-08-19)
+
+`results/arm_mbo_20260819_184901_npart100_V114144_seed61803399` (ladder 214 s;
+L4: 11 steps, 11 active, worst 0.1493%, Q̄ 1.565; boundary 107.8595).
+
+| seed | Phase 1 wall | speedup | area worst | fragmented | Phase 2 best | vs anchor | censored |
+|---|---|---|---|---|---|---|---|
+| 84172851 | 228 s | 210.9× | 0.1504% | 0 | 184.4117703525215 (it 18) | **−0.455%** | no |
+| 61803399 | 214 s | 225.2× | 0.1493% | 0 | **184.1614647856558** (it 19) | **−0.590%** | no |
+
+> ## **P2: seed spread = 0.136%. HELD (threshold 0.5%).**
+
+**This is the result that makes P1 scoreable, and it is why the second seed was a
+control rather than a nice-to-have.** The pre-registration said that if B's
+run-to-run spread exceeded 1% the primary falsifier could not be scored at ±1% at
+all, and a single-seed B number would have been conflating method difference with
+seed noise. Measured, the spread is **0.136%** — **3.3× smaller than the 0.455%
+margin by which the worse of the two seeds beats the control**, and 4.3× smaller
+than the better one. The win is not seed noise.
+
+Both seeds: **SUCCESS**, all three gates clean on raw labels, **0 fragmented**,
+uncensored (best at iterate 18 and 19 of 20, so both had plateaued while the
+control had not). P13 recomputes to **+2.892%** against seed 61803399.
+
 ### Phase A — how the N=300 secondary must be read
 
 Verified before the run: the anchor `run_20260806_123326`'s own `experiment.yaml`
