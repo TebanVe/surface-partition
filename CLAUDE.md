@@ -375,7 +375,13 @@ byte-identically from a committed `data.yaml`). See
 `03-dual-projection-verification`, on `feat/newton-projection`.)
 
 **`docs/plans/`** — design plans for work not yet implemented (e.g. the
-mesh-cleanup tool). The **active forward plan** is
+mesh-cleanup tool). **`PUBLICATION_READINESS_PLAN.md`** assesses whether this work
+is an independent publishable project: what is established vs not, what may and
+may not be claimed, and a prioritised programme (three cheap studies on existing
+data — stationarity, a Γ-energy basin comparison of B vs PGD, band-exchange
+decomposition — then a real literature search, N=500/1000 scaling, and the finding
+that **Phase 2 is becoming the bottleneck**: B has already reduced Phase 1 to 11%
+of end-to-end cost at N=400). The **active forward plan** is
 `PHASE1_BC_REPLACEMENT_PLAN.md` — the shared balanced-assignment solver and
 evaluation harness (Phase 0), then approach C, then approach B, with
 pre-registered falsifiers anchored on the N=100 deliverable (Phase 2 perimeter
