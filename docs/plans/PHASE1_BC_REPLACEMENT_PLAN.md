@@ -4,9 +4,10 @@
 N=100: **184.4118 / 184.1615** vs the 185.2546 anchor (**−0.455% / −0.590%**), seed
 spread 0.136%, from **214–228 s** of Phase 1 against 48,132 s (**211–225×**).
 N=300: **319.9428** vs 323.3192 (**−1.044%**) from 248 s against 79,068.6 s
-(**318.8×**). **All three validity gates pass on B's RAW labels at both N, 0
-fragmented, no readout and no repair stage** — where raw PGD needs the balanced
-readout at N=300. Attribution confirmed: MBO beats its own init by **+2.761 /
+(**318.8×**). **0 FRAGMENTED on B's RAW labels at both N, with no readout and
+no repair stage** — where raw PGD gives 2 fragmented and 10 imbalanced at N=300.
+Connectivity is the *only* gate with content for B (dormant is vacuous on one-hot
+labels; area is what B's assignment optimizes and is the solver-failure detector). Attribution confirmed: MBO beats its own init by **+2.761 /
 +2.892%** (P13, threshold 0.3%). **Phase B (C) not started.**
 **Revision:** v5 (2026-08-19), after four adversarial review rounds and the Phase A
 runs; see [Correction history](#correction-history).
@@ -1188,10 +1189,19 @@ needed no readout.
 Against the anchor 323.319247087254 that is **−1.044%**, from **248 s** against
 79,068.6 s — **318.8×**.
 
-> ## **The headline is not the perimeter. It is that B's RAW labels pass all three gates at N=300.**
+> ## **The headline is not the perimeter. It is 0 FRAGMENTED cells at N=300 on RAW labels — the one gate B could have failed.**
 >
-> 0 dead / 0 weak · **0 imbalanced** (worst 1.4172%, bar 2.0216%, granularity
-> 1.0108%) · **0 fragmented**.
+> ⚠ **Not "all three gates pass".** By this plan's own validity-lane table:
+> **dormant is vacuous** for any balanced-assignment arm (one-hot ⇒ peak density
+> 1.0 by construction), and **area is near-expected**, being exactly what B's
+> assignment step optimizes — Phase 0 defined it as the *solver-failure detector*,
+> so passing it means the solver converged, not that the partition is valid.
+> **Connectivity is the only gate genuinely at risk**: nothing in B enforces it and
+> the source proposal calls it *"not per-step guaranteed"*.
+>
+> Reported for completeness: 0 dead / 0 weak (vacuous) · 0 imbalanced (worst
+> 1.4172%, bar 2.0216%, granularity 1.0108% — a solver check) · **0 fragmented
+> (the result)**.
 >
 > **Raw PGD does not.** At this exact configuration it produces 10 imbalanced
 > cells, worst 36.15%, and 2 fragmented — which is why the baseline had to be

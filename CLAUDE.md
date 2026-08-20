@@ -669,19 +669,28 @@ there is never a continuous field whose winner-take-all readout can diverge.
 Measured on `feat/phase1-mbo-auction-dynamics` through the Phase 0 harness, against
 pre-registered thresholds committed before any run:
 
-| | Phase 1 wall | speedup | gates on RAW labels | Phase 2 best | vs anchor |
+| | Phase 1 wall | speedup | gates on RAW labels (see caveat 1) | Phase 2 best | vs anchor |
 |---|---|---|---|---|---|
-| N=100 s84172851 | 228 s | **210.9×** | 0 dead/weak, 0 imbalanced (0.1504%), **0 frag** | 184.4118 (it 18/20) | **−0.455%** |
-| N=100 s61803399 | 214 s | **225.2×** | 0 / 0 (0.1493%) / **0 frag** | 184.1615 (it 19/20) | **−0.590%** |
-| N=300 s61803399 | 248 s | **318.8×** | 0 / 0 (1.4172%) / **0 frag** | 319.9428 (it 16/19) | **−1.044%** |
+| N=100 s84172851 | 228 s | **210.9×** | dormant vacuous; area 0.1504% (solver check); **0 frag** | 184.4118 (it 18/20) | **−0.455%** |
+| N=100 s61803399 | 214 s | **225.2×** | vacuous; 0.1493%; **0 frag** | 184.1615 (it 19/20) | **−0.590%** |
+| N=300 s61803399 | 248 s | **318.8×** | vacuous; 1.4172%; **0 frag** | 319.9428 (it 16/19) | **−1.044%** |
 
 **Four things that matter more than the perimeter:**
 
-1. **B's raw labels pass all three validity gates at both N, with no readout and no
-   repair.** At N=300 raw PGD does *not* — it gives 10 imbalanced (worst 36.15%)
-   and 2 fragmented, which is why its baseline had to be PGD **+ balanced readout
-   (A + E)**. B doesn't close the continuous–discrete gap; **the category is
-   absent.** The "compose with E" lane went unused at both N.
+1. **B produces 0 FRAGMENTED cells at both N — and connectivity is the only one of
+   the three gates that has content for B.** ⚠ *"All three gates pass" is true but
+   misleading, and an earlier version of this section said it.* Per Phase 0's own
+   lane definitions: **dormant is VACUOUS** (one-hot labels give peak density 1.0
+   by construction — `arm_harness.py` already flags `vacuous_for_arms: True`);
+   **area is near-expected**, since equal area is precisely what B's assignment
+   step optimizes, so passing means the solver converged — Phase 0 established it
+   as the *solver-failure detector*, not a validity test. **Connectivity is the
+   only gate B could genuinely fail**: nothing in B enforces it and the source
+   proposal states it is *"not per-step guaranteed"*. The defensible claim is
+   therefore narrower and still strong — **0 fragmented at N=300 where raw PGD
+   gives 2** (plus 10 imbalanced, worst 36.15%), which is why PGD's baseline needed
+   the balanced readout (A + E) and B needed nothing. The "compose with E" lane
+   went unused at both N.
 2. **The win is attributable to MBO, not to its init.** B is initialized from one
    balanced C-scores assignment — literally approach C's step 0 — so the attribution
    control was run: init alone + Phase 2 = **189.65**, against B's 184.41.
