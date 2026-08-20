@@ -1,0 +1,486 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../../math/shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Replacing Phase 1 with Auction-Dynamics MBO},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Replacing Phase~1 with Auction-Dynamics MBO}\\[0.5em]
+  \large Approach~B, measured against the validated deliverables --- and a sixth
+  occasion on which an instrument that could not see an effect reported its absence}
+\author{}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Phase~1 ($\Gamma$-convergence relaxation by projected gradient descent) costs
+\(22\,\mathrm{h}\)--\(79\,\mathrm{h}\) for a completed \(N{=}300\) solution, and its
+winner-take-all readout is not a valid partition at that scale, so it is repaired
+afterwards. This report measures \textbf{approach~B} --- volume-constrained
+multiphase threshold dynamics \cite{merriman1994motion, esedoglu2015threshold},
+with the volume constraint imposed by balanced assignment in the manner of auction
+dynamics \cite{jacobs2018auction} --- as an outright \emph{replacement} for
+Phase~1. Four results. (1)~At the pinned Phase~2 campaign, B reaches perimeter
+\(\mathbf{184.4118}\) and \(\mathbf{184.1615}\) at \(N{=}100\) (two seeds) against
+the control's \(185.2546\), and \(\mathbf{319.9428}\) at \(N{=}300\) against
+\(323.3192\) --- from \(214\text{--}248\,\mathrm{s}\) of Phase~1 against
+\(48{,}132\,\mathrm{s}\) and \(79{,}069\,\mathrm{s}\), a \(211\text{--}319\times\) reduction
+in the replaced stage. (2)~B produces \textbf{0 fragmented cells} at both \(N\) on
+its raw labels, where raw PGD at \(N{=}300\) produces 2 and requires the balanced
+readout; connectivity is the only one of the three validity gates that has content
+for B, and it is the one B could have failed. (3)~The win is attributable to the
+MBO dynamics and not to the balanced geodesic initialisation B starts from ---
+which is approach~C's first step --- by \(+2.761\%\) against a pre-registered
+\(0.3\%\) threshold. (4)~Of thirteen predictions committed before any run, nine
+held, three missed and one was initially mis-scored. The methodological content is
+again larger than the technical: a \textbf{three-part over-merge instrument was
+built and detected nothing}, and a per-level claim entered the record having never
+been measured --- the sixth instance of this project's signature artefact.
+\end{abstract}
+
+\begin{tcolorbox}[colback=blue!3!white, colframe=blue!45!black,
+                  title={Provenance}, fontupper=\small]
+\begin{tabular}{@{}l@{\hspace{1.5em}}p{0.70\linewidth}@{}}
+Status & \textbf{measured} \\
+Date & 2026-08-19 \\
+Surface & torus \(T(R{=}1.0,\, r{=}0.6)\) throughout \\
+Branch & \code{feat/phase1-mbo-auction-dynamics} \\
+Code & \codefile{src/partition/mbo\_auction.py} (the arm);
+  \codefile{scripts/run\_mbo\_arm.py} (driver);
+  \codefile{scripts/score\_mbo\_arm.py} (mechanical scorer);
+  \codefile{testing/test\_mbo\_auction.py} (G1--G8, NC1--NC5b) \\
+Scored runs & \code{results/arm\_mbo\_20260819\_173411\_npart100\_V114144\_seed84172851},
+  \code{results/arm\_mbo\_20260819\_185131\_npart100\_V114144\_seed61803399},
+  \code{results/arm\_mbo\_20260819\_192659\_npart300\_V47488\_seed61803399},
+  \code{results/arm\_init\_20260819\_181203\_npart100\_V114144\_seed84172851} \\
+Anchors & \(N{=}100\): \code{run\_20260709\_081548}, Phase~2 best
+  \(\mathbf{185.2546144718457}\) (iterate 20 of 20), \emph{raw} PGD, Phase~1
+  \(48132.12\,\mathrm{s}\). \(N{=}300\): \code{run\_20260806\_123326}, Phase~2 best
+  \(\mathbf{323.319247087254}\) (iterate 18 of 19), PGD \emph{plus} balanced
+  readout, Phase~1 \(79068.56\,\mathrm{s}\). Both from
+  \code{timing\_profile.yaml} \code{total\_wall\_s}, never
+  \code{run\_time\_seconds}. \\
+Pre-registration & commit \code{9ffdefb}, 2026-08-19 16:53, \emph{before} the
+  first scored run at 17:34:11. Results commits \code{b414b67}, \code{c8aea83},
+  \code{5bdc947}, \code{54b937c}; corrections \code{d4dc66d}, \code{d4b75d7}. \\
+Figures & \codefile{make\_figures.py} from the committed
+  \codefile{data.yaml}, itself re-derivable by \codefile{extract\_data.py}. \\
+Versions & Python 3.12.13, numpy 2.4.4, scipy 1.17.1, h5py 3.16.0;
+  macOS 15.3.1 arm64 (Mac mini). \\
+Anchor check & the harness reproduces the \(N{=}100\) control's own perimeter
+  \emph{bitwise} (report~07, \(0d\)); no Phase~2 code has changed since. \\
+\end{tabular}
+\end{tcolorbox}
+
+\section{What B is, and what is not claimed for it}
+\label{sec:what}
+
+Threshold dynamics originates with Merriman, Bence and Osher
+\cite{merriman1994motion}: alternate short-time diffusion of the phase indicators
+with a pointwise reassignment, and interfaces move by approximate mean curvature.
+Esedo\u{g}lu and Otto \cite{esedoglu2015threshold} placed the multiphase case on a
+variational footing with a Lyapunov functional that \(\Gamma\)-converges to a
+weighted perimeter --- the same limit this project's own energy targets
+\cite{bogosel2023partitions, modica1977esempio, modica1987gradient}. Jacobs, Kim
+and L\'eger \cite{jacobs2018auction} impose \emph{exact volume constraints} by
+replacing the pointwise threshold with a balanced assignment solved by Bertsekas'
+auction algorithm \cite{bertsekas1988auction}. \textbf{None of this is invented
+here.}
+
+Per mesh level, the arm iterates on a \emph{hard} labelling
+\(\omega : V \to \{0,\dots,N-1\}\):
+\begin{enumerate}\itemsep1pt
+  \item \textbf{diffuse}: solve \((M + \tau K)\, y_k = M \chi_k\) for each cell,
+    with one prefactorised LU per level and \(N\) back-substitutions;
+  \item \textbf{balanced threshold}: \(\omega(i) = \arg\max_k [\, y_{ik} + \psi_k \,]\),
+    with \(\psi\) from the shared semi-discrete optimal-transport dual
+    \cite{aurenhammer1998minkowski, merigot2011multiscale, kitagawa2019convergence}
+    that approach~A already ships.
+\end{enumerate}
+
+There is never a continuous field whose winner-take-all readout can diverge from
+what was constrained. B therefore does not \emph{close} the continuous--discrete
+gap that motivated approaches A--E; the category is absent.
+
+\paragraph{The regime, and the novelty claim we do \emph{not} make.}
+Every published implementation of this machinery we are aware of convolves on a
+\emph{uniform Cartesian grid via FFT}, on a flat domain, at small \(N\), and for
+P\'olya's \emph{outer} problem --- which convex body maximises the length of the
+shortest partition. That is true of Hu, Liu and Wang \cite{hu2024iterative}, whose
+auction-plus-thresholding machinery is closest to ours but whose domains are
+\([0,1]^2\) and 3D boxes on \(128^2\)/\(256^2\) grids, and of Bogosel and Oudet
+\cite{bogosel2021longest}, whose capacity-constrained Voronoi construction with
+\(>100\) cells is planar. Ours is the \emph{inner} problem: partition a fixed
+closed genus-1 surface into \(N\) equal-area minimal-perimeter cells on an
+unstructured triangulated mesh, at \(N\) in the hundreds. \textbf{We phrase this as
+``we are not aware of'', never as ``first''}: two web searches and two papers is
+not a literature review, and surface-remeshing and computer-graphics venues may
+cover adjacent ground under different vocabulary. Stated as a population claim, the
+corpus is: two full-text readings plus this project's standing bibliography.
+
+The difference is load-bearing rather than cosmetic. The FEM operator
+\((M+\tau K)^{-1}M\) is a different object from an FFT convolution, with different
+failure modes; mesh pinning \cite{vangennip2014mean} is ours to manage, and no
+grid-derived \(\tau\) heuristic is imported.
+
+\section{Result 1 --- perimeter}
+\label{sec:perimeter}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{fig_perimeter.pdf}
+\caption{Phase 2 best perimeter against each anchor's own pipeline. \textbf{The two
+panels are not comparable and must never be pooled}: the \(N{=}100\) anchor is raw
+PGD, the \(N{=}300\) anchor is PGD \emph{plus} the balanced readout, because raw
+PGD is not a valid partition at \(N{=}300\).}
+\end{figure}
+
+\begin{center}\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+run & Phase 1 & speedup & area worst & frag. & Phase 2 best & vs anchor \\
+\midrule
+\(N{=}100\) s84172851 & \(228\,\mathrm{s}\) & \(210.9\times\) & 0.1504\% & \textbf{0} & 184.4117703525215 (18/20) & \(\mathbf{-0.455\%}\) \\
+\(N{=}100\) s61803399 & \(214\,\mathrm{s}\) & \(225.2\times\) & 0.1493\% & \textbf{0} & 184.1614647856558 (19/20) & \(\mathbf{-0.590\%}\) \\
+\(N{=}300\) s61803399 & \(248\,\mathrm{s}\) & \(318.8\times\) & 1.4172\% & \textbf{0} & 319.9427628182375 (16/19) & \(\mathbf{-1.044\%}\) \\
+\midrule
+init only (C step 0) & \(67\,\mathrm{s}\) & --- & 0.1355\% & 0 & 189.6469917457051 (20/20) & \(+2.37\%\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Seed spread at \(N{=}100\) is \(\mathbf{0.136\%}\), which is \(3.3\times\) smaller
+than the margin by which the \emph{worse} of the two seeds beats the control. This
+is what makes the result scoreable at all: the pre-registration committed that a
+spread above \(1\%\) would mean the primary falsifier could not be evaluated at
+\(\pm 1\%\) and that a single-seed number would be conflating method difference
+with seed noise.
+
+\paragraph{Six constraints on how these numbers may be stated.}
+\begin{enumerate}\itemsep2pt
+\item \textbf{Never pool the two anchors.} They are different baselines. ``B beats
+  the best available PGD pipeline at each \(N\), at equal Phase~2 budget'' is
+  valid; ``B beats PGD by \(0.455\text{--}1.044\%\)'' as a trend in \(N\) is not.
+\item \textbf{The speedup is for the replaced stage only.} End-to-end, including
+  the shared \(30\text{--}40\,\mathrm{min}\) Phase~2, it is \(\approx 23\times\)
+  (\(N{=}100\)) and \(\approx 31\times\) (\(N{=}300\)). Against the
+  structure-trigger PGD variant (\(34{,}967\,\mathrm{s}\)), the incumbent-best figure is
+  \(\approx 153\times\).
+\item \textbf{Neither trajectory is a converged optimum.} Both are at the
+  documented migration-cycling plateau. An earlier draft said ``B converged where
+  the control had not''; the sixth review resumed the control's own Phase~2 for
+  \textbf{20 further iterations and found no improvement} (best over all 40 remains
+  \(185.2546\) at iterate 20; the extension drifts up to \(\approx 185.30\)). B's
+  plateau is simply \(0.455\%\) lower. \emph{That extension is the review's
+  measurement and has not been independently reproduced by us.}
+\item \textbf{PGD's own seed variance is unmeasured.} Every \(N{=}100\) PGD run
+  across both working directories is seed 84172851, and every \(N{=}300\)
+  \(\lambda{=}11.5\) run is seed 61803399. Each anchor is a single trajectory.
+  ``B beats PGD by more than PGD's own seed lottery'' is \emph{not} established.
+\item \textbf{The \(N{=}300\) margin cannot be decomposed, even in principle.} The
+  readout costs \(+1.882\%\) in label-boundary length (\(189.7310\) raw \(\to\)
+  \(190.7114\) shifted \(\to\) \(193.3024\) repaired, the last being what the
+  anchor's Phase~2 consumed). B's raw boundary is \(187.2574\): shorter than the
+  repaired labels by \(3.127\%\) \emph{and} shorter than raw PGD's own invalid
+  labels by \(1.304\%\) --- the strong form, since imbalance can only make a
+  boundary artificially short. So the margin is not merely ``not paying the repair
+  bill''. But how much is un-erased repair residue cannot be separated, because
+  \textbf{no valid repair-free PGD partition exists at \(N{=}300\)}.
+\item \textbf{\(N{=}300\) rests on one Phase-2-scored seed.}
+\end{enumerate}
+
+\section{Result 2 --- validity, and which gate actually has content}
+\label{sec:gates}
+
+\begin{tcolorbox}[colback=red!3!white, colframe=red!45!black,
+                  title={``All three gates pass'' is true and misleading}, fontupper=\small]
+An earlier write-up of this result --- ours --- said B's raw labels pass all three
+validity gates. Phase~0's own findings say why that is the wrong emphasis:
+\begin{itemize}\itemsep1pt
+  \item \textbf{Dormant is vacuous} for any balanced-assignment arm. One-hot labels
+    give peak density \(1.0\) by construction; the gate cannot fail. The harness
+    already emitted \code{vacuous\_for\_arms: True}.
+  \item \textbf{Area is near-expected.} Equal area is precisely what B's assignment
+    step \emph{optimises}. Passing means the solver converged; Phase~0 defined it
+    as the \emph{solver-failure detector}, not a validity test.
+  \item \textbf{Connectivity is the only gate genuinely at risk.} Nothing in B
+    enforces it, and the source proposal states it is ``not per-step guaranteed''.
+\end{itemize}
+The defensible claim is narrower and still strong: \textbf{B produces 0 fragmented
+cells at \(N{=}300\), where raw PGD produces 2} (with 10 imbalanced cells, worst
+\(36.15\%\)) --- which is why PGD's baseline required the balanced readout and B
+required nothing.
+\end{tcolorbox}
+
+Re-verified through \codefile{testing/check\_fragmentation.py}, which shares no code
+with the driver's reporting: all four arm solutions pass, with \textbf{0 cells
+having more than one raw component including sub-threshold speckle}.
+
+\paragraph{Robustness.} Three further \(N{=}300\) MBO ladders at seeds 27182818,
+13131313 and 84172851 give \textbf{0 fragmented} in every case, with worst area
+\(1.2531/1.4467/1.3887\%\) and label boundaries \(186.08/186.55/186.90\) --- all
+\emph{shorter} than the scored seed's \(187.2574\). Ladder only, no Phase~2;
+\emph{review-produced, not independently reproduced by us}.
+
+\section{Result 3 --- attribution: is this B, or is it C's first step?}
+\label{sec:attribution}
+
+B is initialised from one balanced C-scores assignment --- farthest-point seeds,
+multi-source Dijkstra, scores \(-d^2\), balanced assignment --- which is literally
+approach~C's step~0 \cite{lloyd1982least, aurenhammer1998minkowski,
+degoes2012bluenoise}. If MBO barely improved on it, the number in
+\S\ref{sec:perimeter} would be a result about C reported under B's name, and
+\emph{nothing} in the gate suite would have detected that.
+
+\begin{center}\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+ & Phase 1 & label boundary & Phase 2 best & censored \\
+\midrule
+init only (C step 0) & \(67\,\mathrm{s}\) & 116.1989 & 189.6469917457051 (20/20) & \textbf{yes} \\
+\textbf{B (MBO)} & \(228\,\mathrm{s}\) & 107.6014 & \textbf{184.4117703525215} (18/20) & no \\
+control (PGD) & \(48{,}132\,\mathrm{s}\) & 107.3410 & 185.2546144718457 (20/20) & plateaued \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\[
+  \text{P13} \;=\; \frac{189.646992 - 184.411770}{189.646992} \;=\; \mathbf{+2.761\%}
+  \qquad\text{against a pre-registered threshold of } 0.3\%.
+\]
+
+Two disclosures. The measured \(2.761\%\) is an \textbf{upper bound} on MBO's
+contribution, because the init arm is censored: its converged value is
+\(\le 189.6470\), and a lower true value shrinks the gap. For attribution to fail
+the init would have to reach \(\approx 185.0\) --- another \(\approx 2.5\%\) on a
+trajectory gaining \(\approx 0.038\) per iterate and decelerating. And the
+init-only control was run on the \emph{finest} mesh, i.e.\ the \emph{strongest}
+member of the init family, which biases the test \emph{against} B.
+
+\paragraph{An unflattering free datum on C.} C's step~0 plus Phase~2 lands at
+\(+2.37\%\) above the PGD control --- a \textsc{partial} verdict under this
+project's own bands --- for \(67\,\mathrm{s}\) of Phase~1. Real C iterates Lloyd and
+would improve on this, so it is a \emph{lower bound} on C; but C's starting point
+is behind both B and PGD, which is directly relevant to whether C is worth building.
+Note also that C minimises a \emph{quantisation} energy, not perimeter; the two
+optima coincide only asymptotically and only in the plane
+\cite{hales2001honeycomb, gersho1979asymptotically}, and this torus has Gaussian
+curvature of both signs.
+
+\section{The mesh ladder, and \(\tau\)}
+\label{sec:tau}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\linewidth]{fig_ladder.pdf}
+\caption{Per-level behaviour. Left: worst cell area deviation improves monotonically
+down the ladder; the cross marks the one level carrying a fragmented cell. Middle:
+label churn decays within every level, so levels terminate on their own rather than
+at the iteration cap. Right: cost per level.}
+\end{figure}
+
+\(\tau = \min\!\big((c\,h_{\mathrm{mean}})^2,\ (\rho R_{\mathrm{cell}})^2\big)\)
+with \(c = 4\) and \(\rho = 1.0\), pinned before any run. \(c=4\) rather than
+\(c=2\): the latter is the freeze regime \cite{vangennip2014mean}. The cap is the
+over-merge side of a two-sided window, and it binds on exactly one level in use,
+\(N{=}300\) level 0.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.9\linewidth]{fig_tau_window.pdf}
+\caption{A fixed \(c\) does \emph{not} hold the window. \(\sqrt{\tau}/h_{\max}\)
+stays at 2.20 across every level of both ladders while \(\sqrt{\tau}/R_{cell}\)
+moves \(6\times\). Reporting on \(h_{\mathrm{mean}}\) alone flatters the coarse
+band: this mesh is \(1.81\times\) anisotropic.}
+\end{figure}
+
+\section{The headline null: an instrument that detected nothing}
+\label{sec:null}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{fig_overmerge_null.pdf}
+\caption{Fragmentation, per-cell isoperimetric ratio
+\(Q_k = P_k^2/(4\pi A_k)\), and core loss, swept over
+\(c \in \{2,4,8\}\) at two resolutions. Every measure is flat or \emph{improving};
+none registers an over-merge penalty anywhere, including at
+\(\sqrt{\tau}/R_{cell} = 2.99\), three times the pinned cap.}
+\end{figure}
+
+Assignment quality \emph{cannot} see over-merging --- the balanced assignment hits
+its area target by construction, so a smeared, non-local cell scores as well as a
+compact one. (An earlier draft of the plan cited a healthy assignment-quality
+fixture as evidence against over-merging; that was a measurement of a different
+quantity than the claim it supported, and it was withdrawn.) So three geometry
+instruments were built. Across a \(9\times\) span of \(\sqrt{\tau}/R_{cell}\) and
+two levels differing \(5\times\) in resolution, \textbf{not one of them registered
+anything}: core loss and fragmentation are 0 in all six configurations, and
+compactness moves monotonically the \emph{other} way.
+
+The instruments are demonstrably \emph{responsive} --- \(\bar{Q}\) moves 3.8\%,
+\(Q_{\mathrm{worst}}\) 8\%, boundary length 1.9\% --- they simply move toward
+improvement. What is established is therefore that \textbf{no damage is
+detectable}, \emph{not} that over-merging cannot occur.
+
+\begin{tcolorbox}[colback=yellow!6!white, colframe=orange!60!black,
+                  title={Standing limit}, fontupper=\small]
+The \(\rho\) question is \textbf{open}, and no future claim about \(c\) or \(\rho\)
+may lean on this report's evidence in either direction. The cap was retained
+because it is pre-registered and because it biases \emph{against} B --- it lowers
+\(c\) to 2.68 at \(N{=}300\) level 0, and \(c{=}2\) measures worse than \(c{=}4\).
+That is a discipline argument, not an empirical one. \textbf{Named follow-up:}
+\(c{=}8\) showed no penalty on any instrument \emph{and} a \(0.33\%\) shorter
+starting boundary --- a third of the entire \(+1\%\) success bar --- so the cap may
+be costing perimeter for no measured benefit. That is a separate arm, scored
+through the same harness.
+\end{tcolorbox}
+
+\section{Why there is no exactly-monotone energy, and what is gated instead}
+\label{sec:descent}
+
+Esedo\u{g}lu--Otto monotonicity is a minorise--maximise argument requiring (i)~the
+same symmetric positive semi-definite form in the energy and in the assignment
+objective, and (ii)~an \emph{exact} assignment. \textbf{Both fail here, for
+independent reasons.} The theorem's object is \(M A_\tau = M(M+\tau K)^{-1}M\),
+symmetric PSD; our step maximises \(\langle \chi', D y\rangle\) with
+\(D = \operatorname{diag}(v)\) \emph{lumped}, and \(D A_\tau\) is not symmetric.
+And Jacobs--Kim--L\'eger obtain a theorem because Bertsekas' auction is exact,
+whereas \code{solve\_dual\_offsets} is subgradient ascent returning its best
+iterate. \textbf{This is the price of a substitution made deliberately in Phase~0}
+--- where Sinkhorn \cite{cuturi2013sinkhorn} and auction were both measured and
+both lost to the incumbent on assignment quality --- paid here rather than there.
+
+What survives needs neither concavity nor exactness. Since
+\(\omega'(i) = \arg\max_k [y_{ik} + \psi_k]\), multiplying the pointwise optimality
+by \(v_i > 0\) and summing gives
+\[
+  \boxed{\ \langle \chi', D y\rangle - \langle \chi, D y\rangle
+    \;\ge\; \sum_k \psi_k\,(T_k - T'_k)\ }
+\]
+whose right-hand side is exactly the slack that inexactness costs; it vanishes at
+perfect balance. Measured slack runs \(1.7\times10^{-4}\) to
+\(5.5\times10^{-3}\) --- five to seven orders of magnitude above the
+\(10^{-9}\) tolerance an earlier draft proposed for energy monotonicity, so that
+tolerance was never defensible. \textbf{Real \(E_\tau\) increases do occur} (4 of
+96 active steps at \(N{=}300\)), and gate G4 therefore gates the inequality, whose
+measured violation is \(\le 6.13\times 10^{-8}\), while \(E_\tau\) is reported as a
+descriptive trend only.
+
+\section{Predictions, and what they caught}
+\label{sec:predictions}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{fig_predictions.pdf}
+\caption{Thirteen predictions committed in \code{9ffdefb} at 16:53, before the first
+scored run at 17:34:11.}
+\end{figure}
+
+\paragraph{P1 and P6 missed, and P1's \emph{reasoning} is refuted.} The rationale
+was that B sees perimeter only through a coarse-\(\tau\) surrogate while PGD saw
+the actual energy for \(13.4\,\mathrm{h}\). B also \emph{enters} Phase~2 from a
+\(0.243\%\) \emph{longer} boundary than the control and still finishes ahead --- a
+genuine crossover, so the advantage is not initial geometry. That it is
+combinatorial is a hypothesis consistent with these data, not established by them.
+P6 missed worse: its \(80\%\) interval's lower bound was the anchor itself, so
+essentially no probability was assigned to B beating PGD\,+\,A\,+\,E at
+\(N{=}300\).
+
+\paragraph{P8\('\) missed and invalidated its own model.} It predicted, from a
+log-linear interpolation of \(\Delta E/\text{tail}\) in the freeze ratio
+\(c/c_{\mathrm{lo}}\), that levels 2--4 would be flagged pinned. Measured,
+\(\Delta E/\text{tail}\) is \emph{flat} across the ladder --- 15.76, 21.62, 15.11,
+14.22, 16.49 against a threshold of 79.25 --- and level 4, sitting exactly at
+\(c/c_{\mathrm{lo}} = 0.999\), scores 16.49 where the model demanded \(\approx 260\).
+The freeze ratio does not predict pinning here.
+
+\section{The sixth artefact --- and it is ours}
+\label{sec:artefact}
+
+Report~07 catalogued five occasions on which a measurement artefact was read as a
+result about the method. This is the sixth, and it was produced in this work.
+
+The plan asserted \textbf{``0 fragmented at every level''} and, on that basis,
+scored P9 --- which predicted over-merge would appear as fragmentation rather than
+cell death, worst at level 0 --- as \textsc{untestable}, ``the predicted phenomenon
+never occurred''. \textbf{Until the sixth review, \code{LevelReport} carried no
+connectivity field at all.} Per-level fragmentation had never been computed. The
+claim was an inference presented as a result, and it was false.
+
+With the instrument added and the \(N{=}300\) ladder re-run to a bit-exact
+reproduction (worst areas \(6.7063/2.5394/1.4172\%\), steps \(16/21/66\), boundary
+\(187.2574\)):
+
+\begin{center}\small
+\textbf{level 0: 1 fragmented cell (cell 295). Levels 1 and 2: 0. No cell death.}
+\end{center}
+
+The phenomenon occurred, at exactly the level P9 named, in exactly the form P9
+predicted. \textbf{P9 is a hit, not untestable} --- ``untestable'' had absorbed a
+correct prediction on the strength of a measurement never taken. The stray is
+healed by level 1's MBO run, which is direct evidence for the mechanism the
+taxonomy predicted: stray islands are perimeter-inefficient and shrink under
+curvature flow, the opposite dynamic to the discrete-area trim that manufactured
+them.
+
+The fix is instrumentation --- \code{run\_gates} per level, seconds of cost, now
+committed --- not a resolution to be careful.
+
+\section{Threats to validity that no instrument here addresses}
+\label{sec:threats}
+
+\begin{enumerate}\itemsep2pt
+\item \textbf{PGD's seed variance} (\S\ref{sec:perimeter}, constraint 4). Both
+  anchors are single trajectories; the corpus was enumerated across \emph{both}
+  working directories, since \code{results/} is gitignored and each worktree has
+  its own.
+\item \textbf{Over-merging} (\S\ref{sec:null}). Not excluded, merely undetected.
+\item \textbf{Phase 2 budget as a confound.} B may start from geometry that lets
+  Phase~2 converge \emph{within} a budget PGD cannot use as well. The 40-iteration
+  control extension argues against this, but is review-produced.
+\item \textbf{Same-machine identity} of the July control and the August arms is
+  consistent with the recorded hardware but is not stamped in run metadata.
+\item \textbf{\(N{=}1000\)} is untouched. Nothing here establishes that B's
+  behaviour extrapolates.
+\end{enumerate}
+
+\section{Conclusions}
+\begin{enumerate}\itemsep2pt
+\item B replaces Phase~1 at \(211\text{--}319\times\) less wall time in the replaced
+  stage and reaches a \emph{shorter} Phase~2 perimeter than the best available PGD
+  pipeline at both \(N\), at equal Phase~2 budget.
+\item Its raw labels are connected at both \(N\) --- the one validity gate B could
+  have failed --- so the readout and repair stages are unnecessary for B.
+\item The advantage is attributable to the MBO dynamics, not to the balanced
+  geodesic initialisation, by \(+2.761\%\) against a \(0.3\%\) threshold.
+\item Three pre-registered predictions missed, all in B's favour, and one was
+  initially mis-scored in B's \emph{dis}favour by an instrument that did not exist.
+\end{enumerate}
+
+\section*{References we could not verify}
+Author given names for \cite{hu2024iterative} are \textbf{unverified}; the entry
+records ``Hu, Wei and Liu, Chong and Wang, Dong'' from a secondary description, not
+from the paper's title page. Volume and page numbers throughout
+\codefile{docs/math/shared/references.bib} carry an upstream note that they should
+be checked against published sources before external distribution, and that note
+still stands. Neither \cite{hu2024iterative} nor \cite{bogosel2021longest} was read
+by the report's author; both are summarised from a literature review supplied to
+this work, and the \emph{characterisation} of their scope (outer problem, flat
+Cartesian domains, small \(N\)) rests on that review.
+
+\section*{Related documents}
+\begin{itemize}\itemsep1pt
+\item Plan, pre-registration and full correction history:
+  \codefile{docs/plans/PHASE1\_BC\_REPLACEMENT\_PLAN.md}
+\item Taxonomy: \codefile{docs/reference/PHASE1\_HIGHN\_APPROACHES\_ABCDE.md}
+\item The instrument this report is scored through: \codefile{docs/experiments/07-phase0-shared-harness/}
+\item The gap B makes vacuous: \codefile{docs/reference/winner\_take\_all\_partition\_gap.md}
+\end{itemize}
+
+\bibliographystyle{plain}
+\bibliography{../../math/shared/references}
+
+\end{document}
