@@ -661,6 +661,55 @@ failed) and **§9b** (the local-operator test any replacement must pass). The
 derivation is kept at `docs/math/07-phase1-wta-balance/` (marked not-adopted) and the
 measurement at `docs/experiments/04-territory-aware-highn-validation/`.
 
+### Approach B — auction-dynamics MBO — BUILT AND MEASURED (2026-08-19)
+
+`src/partition/mbo_auction.py` + `scripts/run_mbo_arm.py`. A **replacement for
+Phase 1**, not an adjustment to it: the state is a hard labelling throughout, so
+there is never a continuous field whose winner-take-all readout can diverge.
+Measured on `feat/phase1-mbo-auction-dynamics` through the Phase 0 harness, against
+pre-registered thresholds committed before any run:
+
+| | Phase 1 wall | speedup | gates on RAW labels | Phase 2 best | vs anchor |
+|---|---|---|---|---|---|
+| N=100 s84172851 | 228 s | **210.9×** | 0 dead/weak, 0 imbalanced (0.1504%), **0 frag** | 184.4118 (it 18/20) | **−0.455%** |
+| N=100 s61803399 | 214 s | **225.2×** | 0 / 0 (0.1493%) / **0 frag** | 184.1615 (it 19/20) | **−0.590%** |
+| N=300 s61803399 | 248 s | **318.8×** | 0 / 0 (1.4172%) / **0 frag** | 319.9428 (it 16/19) | **−1.044%** |
+
+**Four things that matter more than the perimeter:**
+
+1. **B's raw labels pass all three validity gates at both N, with no readout and no
+   repair.** At N=300 raw PGD does *not* — it gives 10 imbalanced (worst 36.15%)
+   and 2 fragmented, which is why its baseline had to be PGD **+ balanced readout
+   (A + E)**. B doesn't close the continuous–discrete gap; **the category is
+   absent.** The "compose with E" lane went unused at both N.
+2. **The win is attributable to MBO, not to its init.** B is initialized from one
+   balanced C-scores assignment — literally approach C's step 0 — so the attribution
+   control was run: init alone + Phase 2 = **189.65**, against B's 184.41.
+   MBO contributes **+2.761% / +2.892%** against a 0.3% threshold. (That gap is an
+   *upper* bound: the init arm is censored.)
+3. **Seed spread is 0.136%**, 3.3× smaller than the margin over the control, so the
+   result is not seed noise.
+4. **The comparison is "at equal Phase 2 budget", not "B beats PGD".** Both PGD
+   anchors are **censored** (best iterate = last), so they were still improving;
+   B's bests are at iterates 18/20, 19/20 and 16/19, i.e. converged. Whether PGD
+   overtakes B given more Phase 2 iterations is **unmeasured** — a named follow-up.
+
+**Free datum on C:** its step 0 lands at **+2.38% above the PGD control** (PARTIAL)
+for 67 s. Real C iterates Lloyd, so that is a *lower bound* — but C starts behind
+both B and PGD. Relevant to whether C is worth building.
+
+⚠ **Do not use `E_τ` monotonicity as a gate.** The Esedoğlu–Otto theorem does not
+transfer: the step maximizes `⟨χ',Dy⟩` with **lumped** `D`, while the theorem's
+object `M A_τ` is the symmetric one, *and* Jacobs–Kim–Léger need an **exact**
+auction where `solve_dual_offsets` is an inexact subgradient dual. Real `E_τ`
+increases are observed (4 of 96 active steps at N=300). What holds by construction,
+and what `testing/test_mbo_auction.py` G4 gates, is
+`⟨χ',Dy⟩ − ⟨χ,Dy⟩ ≥ Σ_k ψ_k(T_k − T'_k)` — measured violation ≤ 6.1e-08.
+
+Full pre-registration, every prediction (three missed: P1, P6, P8′; one untestable:
+P9), and the negative controls are in `docs/plans/PHASE1_BC_REPLACEMENT_PLAN.md`
+Phase A.
+
 ### Structure-Based Refinement Trigger (`struct_trigger_enabled`) — experimental
 
 A **stuck detector**, not a second convergence test. The energy-plateau trigger
