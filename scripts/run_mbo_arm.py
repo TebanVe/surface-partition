@@ -288,7 +288,12 @@ def main():
             "tau_c": args.tau_c,
             "rho": args.rho,
             "seed": seed,
-            "anchor_run": anchor.name,
+            # HDF5 attrs cannot hold None, so exploratory runs record the config
+            # they came from instead of an anchor that does not exist.
+            "anchor_run": anchor.name if anchor is not None else "",
+            "provenance": (
+                anchor.name if anchor is not None else f"exploratory:{campaign.name}"
+            ),
         },
     )
 
