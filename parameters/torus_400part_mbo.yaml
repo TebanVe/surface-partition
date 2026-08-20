@@ -1,0 +1,78 @@
+# ============================================================================
+# N=400 via APPROACH B (auction-dynamics MBO) -- EXPLORATORY.
+#
+# There is NO PGD baseline at N=400, so this runs in the driver's --config mode:
+# the mesh-match assertion is skipped (nothing to match) and the resulting
+# perimeter is NOT scored against any anchor. It answers "does B produce a valid,
+# sensible N=400 partition, and how fast", not "is B better than PGD at N=400".
+#
+# LADDER. Same 5-level ladder as the validated N=100 config, which at N=400 gives
+# 24 -> 62 -> 119 -> 193 -> 285 verts/cell. The finest level's one-vertex
+# granularity floor is 0.561%, so the area gate's harness-fault bar is 1.121%;
+# expect the final worst-cell deviation somewhere under that. (Measured
+# comparators: N=300 at 158 v/cell finished at 1.4172% against a 2.0216% bar;
+# N=100 at 1141 v/cell finished at 0.1504% against 0.2803%.)
+#
+# TAU. The rule tau = min((4*h_mean)^2, (rho*R_cell)^2) with rho=1.0 means the
+# over-merge CAP BINDS ON LEVELS 0 AND 1 here (it bound on only one level at
+# N=300 and none at N=100), because cells are smaller relative to the coarse mesh.
+# That is the pre-registered rule doing its job, not a misconfiguration; the
+# driver reports c_eff per level so you can see it.
+#
+# COST. The diffusion step is N back-substitutions per MBO step, so cost scales
+# ~linearly in N at fixed mesh: expect roughly 1.3x the N=300 ladder per level at
+# equal V, and the finest level dominates. Peak memory is the (V x N) score
+# matrix, 365 MB at level 4, plus two transients of the same size inside the
+# assignment solver -- budget ~1.5 GB.
+#
+# SMOKE TEST FIRST (about a minute):
+#   python scripts/run_mbo_arm.py --config parameters/torus_400part_mbo.yaml --levels 2
+# ============================================================================
+
+experiment:
+  name: torus-400-mbo-exploratory
+  surface: torus
+
+relaxation:
+  n_partitions: 400
+  seed: 84172851                     # same seed family as the validated configs
+  refinement_levels: 5               # 100x96 ... 348x328 (114,144 verts)
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config, i.e. so the same mesh ladder can be run
+  # --- through PGD later if a real N=400 baseline is ever wanted.
+  lambda_penalty: 13.0               # UNCALIBRATED at N=400 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                     # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# Phase 2 settings. These ARE used: with --config, this same file is handed to
+# refine_perimeter.py as the campaign config unless --campaign overrides it.
+# Matched to the validated N=100/N=300 campaigns so the refinement path is the
+# one the harness was qualified on.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

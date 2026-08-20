@@ -102,6 +102,31 @@ def anchor_campaign(run_dir: Path) -> Path:
     return cands[0]
 
 
+def spec_from_config(path: Path) -> dict:
+    """Ladder / N / seed from a plain parameters/*.yaml, for a configuration that
+    has no baseline. Same fields and key names as ``anchor_spec``.
+
+    Used only in exploratory mode. With no anchor there is no mesh to match and
+    no perimeter to score against -- the run answers "does B produce a valid
+    partition here, and how fast", not "is B better".
+    """
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    relax = cfg.get("relaxation", cfg)
+    torus = cfg.get("surface", {}).get("torus", {})
+    return {
+        "n_partitions": int(relax["n_partitions"]),
+        "seed": int(relax["seed"]),
+        "levels": int(relax["refinement_levels"]),
+        "n_theta": int(torus["n_theta"]),
+        "n_phi": int(torus["n_phi"]),
+        "d_theta": int(torus["n_theta_increment"]),
+        "d_phi": int(torus["n_phi_increment"]),
+        "R": float(torus.get("R", 1.0)),
+        "r": float(torus.get("r", 0.6)),
+    }
+
+
 def build_ladder(spec: dict):
     meshes = []
     nt, nphi = spec["n_theta"], spec["n_phi"]
@@ -117,7 +142,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--anchor-run",
-        required=True,
+        default=None,
         help="glob for the anchor run directory; supplies the ladder, "
         "N, seed, the V assertion and the Phase 2 campaign",
     )
@@ -140,29 +165,68 @@ def main():
     ap.add_argument("--phase2", action="store_true")
     ap.add_argument("--out-root", type=str, default=str(ROOT / "results"))
     ap.add_argument("--tag", type=str, default="")
+    # --- exploratory mode: no baseline exists for this N ------------------
+    ap.add_argument(
+        "--config",
+        default=None,
+        help="parameters/*.yaml to run from when NO anchor run exists (e.g. a new "
+        "N). Mutually exclusive with --anchor-run. Perimeter is then NOT "
+        "scored against anything -- there is no baseline to score against.",
+    )
+    ap.add_argument(
+        "--campaign",
+        default=None,
+        help="refinement.yaml (or a config with a `refinement:` section) for "
+        "Phase 2. Defaults to the anchor's campaign, or to --config itself.",
+    )
+    ap.add_argument(
+        "--levels",
+        type=int,
+        default=None,
+        help="truncate the mesh ladder to this many levels (smoke tests)",
+    )
     args = ap.parse_args()
+    if bool(args.anchor_run) == bool(args.config):
+        ap.error("give exactly one of --anchor-run or --config")
 
     setup_logging(log_level="INFO")
-    anchor = resolve_anchor(args.anchor_run)
-    spec = anchor_spec(anchor)
+    if args.config:
+        # EXPLORATORY: no anchor, so no mesh-match assertion and no scored
+        # perimeter. The V assertion exists to stop an arm being compared against
+        # a baseline built on a different mesh; with no baseline there is nothing
+        # to protect, and nothing to claim either.
+        cfg_path = Path(args.config).resolve()
+        spec = spec_from_config(cfg_path)
+        anchor = None
+        anchor_V = None
+        campaign = Path(args.campaign).resolve() if args.campaign else cfg_path
+        print(f"config        : {cfg_path.name}   [EXPLORATORY -- no anchor]")
+    else:
+        anchor = resolve_anchor(args.anchor_run)
+        spec = anchor_spec(anchor)
+        anchor_V = anchor_solution_vertices(anchor)
+        campaign = (
+            Path(args.campaign).resolve() if args.campaign else anchor_campaign(anchor)
+        )
+        print(f"anchor run    : {anchor.name}")
+    if args.levels is not None:
+        spec["levels"] = int(args.levels)
     seed = args.seed if args.seed is not None else spec["seed"]
     N = spec["n_partitions"]
-    anchor_V = anchor_solution_vertices(anchor)
-    campaign = anchor_campaign(anchor)
-
-    print(f"anchor run    : {anchor.name}")
     print(
         f"ladder        : {spec['levels']} levels from {spec['n_theta']}x{spec['n_phi']} "
         f"(+{spec['d_theta']}/+{spec['d_phi']}), N={N}"
     )
-    print(f"anchor V      : {anchor_V}")
-    print(f"campaign      : {campaign.relative_to(anchor)}")
+    print(
+        f"anchor V      : {anchor_V if anchor_V is not None else 'n/a (exploratory)'}"
+    )
+    print(f"campaign      : {campaign}")
     print(f"arm seed      : {seed}{'  (overridden)' if args.seed is not None else ''}")
 
     meshes = build_ladder(spec)
     arm_V = len(meshes[-1].vertices)
     print(f"arm final V   : {arm_V}")
-    if arm_V != anchor_V:
+    if anchor_V is not None and arm_V != anchor_V:
         print(f"\nREFUSING TO SCORE: arm final V={arm_V} != anchor V={anchor_V}.")
         print("The ladder and the anchor disagree; scoring across meshes would put a")
         print(
@@ -230,8 +294,9 @@ def main():
 
     report = {
         "arm": mode,
-        "anchor_run": anchor.name,
+        "anchor_run": anchor.name if anchor is not None else None,
         "anchor_V": anchor_V,
+        "exploratory": anchor is None,
         "arm_final_V": arm_V,
         "n_partitions": N,
         "seed": seed,

@@ -68,6 +68,11 @@ python scripts/balanced_readout.py --solution <path_to_solution.h5> --no-repair 
 # arm's final vertex count does not match the anchor's.
 python scripts/run_mbo_arm.py --anchor-run 'results/run_20260709_081548*' --phase2
 python scripts/run_mbo_arm.py --anchor-run 'results/run_20260709_081548*' --init-only --phase2  # attribution control
+# EXPLORATORY mode -- a configuration with NO PGD baseline (e.g. a new N). The
+# mesh-match assertion is skipped because there is nothing to match, and the
+# perimeter is NOT scored against any anchor. --levels truncates for smoke tests.
+python scripts/run_mbo_arm.py --config parameters/torus_400part_mbo.yaml --levels 2
+python scripts/run_mbo_arm.py --config parameters/torus_400part_mbo.yaml --phase2
 python testing/test_mbo_auction.py                      # gates G1-G8
 python testing/test_mbo_auction.py --negative-controls   # NC1/NC4/NC5 + NC3-CAL
 
@@ -239,6 +244,7 @@ testing/
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/                       # (selected — see the directory for the full set)
+├── torus_400part_mbo.yaml        # N=400 via approach B, EXPLORATORY: no PGD baseline exists at N=400, so it runs in --config mode with no mesh-match assertion and no scored perimeter. Note the tau over-merge cap binds on levels 0 AND 1 here (one level at N=300, none at N=100) because cells are smaller relative to the coarse mesh
 ├── torus_100part_coarse_seeded.yaml      # ★ THE representative config: N=100, λ=5.1, seed 84172851, seeded, 5 levels (finest 348×328). Produced the validated deliverable run_20260709_081548 (all 3 gates pass, worst cell 0.78%, perimeter 185.2546). Phase 1 ≈ 13.4 h
 ├── torus_100part_coarse_seeded_3lvl.yaml # ★ Fast variant of the above for smoke tests: same λ/seed, 3 levels (finest 224×212)
 ├── torus_100part_coarse_seeded_softarea.yaml # A2 experiment arm: the ★ config + soft_area_constraint (control = run_20260709_081548, not re-run)
