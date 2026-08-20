@@ -1,8 +1,15 @@
 # Replacing Phase 1 at High N — Shared Harness, then B, then C
 
-**Status:** **Phase 0 COMPLETE** — 0a ✅ (gates 1, 2 12/12, 3) · 0b ✅ · 0c ✅ · 0d ✅ bitwise. **B and C are both unblocked.** No new assignment solver needed.
-**Revision:** v4 (2026-08-17), after three adversarial review rounds; see
-[Correction history](#correction-history).
+**Status:** **Phase 0 COMPLETE** · **Phase A (B) COMPLETE — B SUCCEEDS ON BOTH ANCHORS.**
+N=100: **184.4118 / 184.1615** vs the 185.2546 anchor (**−0.455% / −0.590%**), seed
+spread 0.136%, from **214–228 s** of Phase 1 against 48,132 s (**211–225×**).
+N=300: **319.9428** vs 323.3192 (**−1.044%**) from 248 s against 79,068.6 s
+(**318.8×**). **All three validity gates pass on B's RAW labels at both N, 0
+fragmented, no readout and no repair stage** — where raw PGD needs the balanced
+readout at N=300. Attribution confirmed: MBO beats its own init by **+2.761 /
++2.892%** (P13, threshold 0.3%). **Phase B (C) not started.**
+**Revision:** v5 (2026-08-19), after four adversarial review rounds and the Phase A
+runs; see [Correction history](#correction-history).
 
 ## Background
 
@@ -585,12 +592,12 @@ Three things this settles, beyond "the instrument works":
 ## Phase A — B: auction-dynamics MBO
 
 *(named to avoid colliding with the project's own "Phase 1 / Phase 2")*
-**Status:** **Prototype built** on `feat/phase1-mbo-auction-dynamics` —
-`src/partition/mbo_auction.py`, `scripts/run_mbo_arm.py`,
-`testing/test_mbo_auction.py`. Gates and negative controls run first; **no scored
-run until the pre-registration below is committed and NC3-CAL has pinned the
-pinning detector.** See [Phase A pre-registration](#phase-a--pre-registration-b)
-for the numbers committed in advance.
+**Status:** ✅ **COMPLETE — B succeeds on both anchors.** Built on
+`feat/phase1-mbo-auction-dynamics` (`src/partition/mbo_auction.py`,
+`scripts/run_mbo_arm.py`, `testing/test_mbo_auction.py`,
+`scripts/score_mbo_arm.py`). G1–G8 pass; NC1/NC2/NC3-CAL/NC4 pass; NC5/NC5b return
+the pre-registered null. Four scored runs, all SUCCESS. **Three predictions missed
+(P1, P6, P8′) and one is untestable (P9)** — see the results sections below.
 
 Threshold dynamics (Esedoğlu–Otto) with volume constraints by balanced assignment
 (Jacobs–Kim–Léger, JCP 2018). **B descends the project's actual objective** — the

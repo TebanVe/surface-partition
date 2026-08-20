@@ -35,8 +35,8 @@ above all: **rejecting A2 says nothing whatever about B or C.**
 |---|---|---|---|
 | **A** | Balanced readout via per-cell dual shifts (semi-discrete OT at extraction) | 1 | **Shipped** — `src/partition/balanced_readout.py` |
 | **A2** | *Extension of A*: soft continuous area constraint, delete the iterative projection | — | **Rejected, measured** — `docs/experiments/05-soft-area-constraint/`, three arms (soft, hybrid, adaptive switch) |
-| **B** | Volume-constrained multiphase threshold dynamics (auction-dynamics MBO) | 2 | **Never started.** Gate met — see below |
-| **C** | Capacity-constrained geodesic power diagram + Lloyd | 4 | **Never started** |
+| **B** | Volume-constrained multiphase threshold dynamics (auction-dynamics MBO) | 2 | ✅ **BUILT AND MEASURED (2026-08-19)** — `src/partition/mbo_auction.py`. Succeeds on both anchors: N=100 −0.455% / −0.590% at 211–225×, N=300 −1.044% at 318.8×. **All three gates pass on RAW labels at both N, 0 fragmented, no readout needed.** See `docs/plans/PHASE1_BC_REPLACEMENT_PLAN.md` Phase A |
+| **C** | Capacity-constrained geodesic power diagram + Lloyd | 4 | **Never started.** But its *step 0* was measured as B's attribution control: balanced geodesic init + Phase 2 = **189.65, i.e. +2.38% above the PGD control** (a PARTIAL verdict) for 67 s. Real C iterates Lloyd so that is a **lower bound** on C — but C's starting point sits behind both B and PGD |
 | **D** | Geometry/mesh policy — aspect ratio, spatially varying ε, coarse-level floor | 5 | **(iii) measured** — `docs/experiments/06-subfloor-ladder/`. (i) r/R sweep and (ii) hexagonal commensurability untested |
 | **E** | Discrete repair — connectivity-preserving relabeling | 3 | **Shipped** — the connectivity repair inside the balanced readout |
 
