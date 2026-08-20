@@ -1134,7 +1134,7 @@ topological repair.
 
 ### Phase A — SCORED RESULT 3 of 4: N=100 seed 61803399, and P2 (2026-08-19)
 
-`results/arm_mbo_20260819_184901_npart100_V114144_seed61803399` (ladder 214 s;
+`results/arm_mbo_20260819_185131_npart100_V114144_seed61803399` (ladder 214 s;
 L4: 11 steps, 11 active, worst 0.1493%, Q̄ 1.565; boundary 107.8595).
 
 | seed | Phase 1 wall | speedup | area worst | fragmented | Phase 2 best | vs anchor | censored |
@@ -1155,7 +1155,10 @@ than the better one. The win is not seed noise.
 Both seeds: **SUCCESS**, **0 fragmented** on raw labels (the only gate with content
 for B — dormant is vacuous, area is the solver check),
 uncensored (best at iterate 18 and 19 of 20, so both had plateaued while the
-control had not). P13 recomputes to **+2.892%** against seed 61803399.
+control had not). P13 recomputes to **+2.892%** for seed 61803399 — ⚠ **cross-seed**: the only
+init-only control that exists is seed **84172851**, so this compares one seed's B
+against another seed's init. Disclosed rather than quietly pooled; a matched
+control costs 67 s of Phase 1 plus one Phase 2.
 
 ### Phase A — how the N=300 secondary must be read
 
@@ -1261,6 +1264,46 @@ The N=300 control is 79,068.6 s and the true figure is **318.8×**. Fixed to a
 per-N table. The error understated B — but a headline number produced by dividing
 by the wrong constant is exactly the class of defect this programme keeps finding,
 and it survived until someone read the units.
+
+### Phase A — standing constraints on how these results may be stated
+
+From review 6, and binding on report 08.
+
+1. **Never pool the two anchors.** N=100's anchor is *raw* PGD; N=300's is PGD **+
+   balanced readout**, because raw PGD is invalid there. The margins −0.455% and
+   −1.044% are against **different baselines** and are not an N-trend. The valid
+   claim is *"B beats the best available PGD pipeline at each N, at equal Phase 2
+   budget"*.
+2. **The N=300 margin cannot be cleanly decomposed, and never will be.** The readout
+   costs **+1.882%** in label-boundary length (189.7310 raw → 190.7114 shifted →
+   **193.3024** repaired, the last being what the anchor's Phase 2 consumed). B's raw
+   boundary is **187.2574** — shorter than the repaired labels by 3.127% *and*
+   shorter than raw PGD's own invalid labels by 1.304%, which is the strong form,
+   since imbalance can only make a boundary artificially short. So the margin is
+   **not** merely "not paying the repair bill" — but how much is un-erased repair
+   residue cannot be separated, because **no valid repair-free PGD partition exists
+   at N=300**. *(Review-6 numbers; the 187.2574 and the gate figures are mine.)*
+3. **PGD's own seed variance is unmeasured.** Every N=100 PGD run across *both*
+   worktrees is seed 84172851; every N=300 λ=11.5 run is seed 61803399. Each anchor
+   is one trajectory. "B beats PGD by more than PGD's own seed lottery" is **not
+   established** and may not be written.
+4. **Speedup must be labelled.** 211× / 225× / 319× is **Phase-1 replacement only**.
+   End-to-end with the shared Phase 2 it is ≈23× / ≈31×; against the
+   structure-trigger incumbent (34,967 s) it is ≈153×. Also, seed 61803399's
+   speedup divides by the *seed 84172851* control's wall — no matched PGD run exists.
+5. **Do not say "B converged where the control had not."** Both are at the
+   migration-cycling plateau; B's is lower.
+6. **Gates:** only *0 fragmented* is load-bearing. Dormant is vacuous, area is the
+   solver-failure detector. Per level: **1 transient fragment at N=300 L0, healed by
+   L1**; 0 at every N=100 level.
+7. **Attribution:** the init-only control ran on the **finest** mesh, i.e. the
+   *strongest* member of the init family, which biases P13 **against** B —
+   conservative, and worth stating.
+8. **Seed robustness at N=300 rests on one Phase-2-scored seed.** Review 6 ran three
+   further N=300 MBO ladders (s27182818 / s13131313 / s84172851): **0 fragmented in
+   all three**, worst area 1.2531 / 1.4467 / 1.3887%, boundaries 186.08 / 186.55 /
+   186.90 — all *shorter* than the scored seed's 187.2574. Ladder-only, no Phase 2;
+   **review-produced and not self-reproduced.**
 
 #### Deferred, as a named follow-up
 
