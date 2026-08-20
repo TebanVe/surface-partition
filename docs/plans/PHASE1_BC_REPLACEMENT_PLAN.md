@@ -1305,12 +1305,14 @@ From review 6, and binding on report 08.
    186.90 — all *shorter* than the scored seed's 187.2574. Ladder-only, no Phase 2;
    **review-produced and not self-reproduced.**
 
-#### Deferred, as a named follow-up
+#### ✅ Deferral discharged — report 08 is written
 
-`docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
-and reviewed** — report 06's headline was refuted and report 07's corrected three
-times, twice in the arms' favour, so LaTeX at the moment of first result is the
-most expensive artifact to revise. **This is a deferral, not a cancellation.**
+`docs/experiments/08-mbo-auction-dynamics/` (commit `3926ef3`). The condition was
+*"once B's verdict is known **and** has survived a review"*, and both halves were
+met before a line of LaTeX was written: four scored runs, then the sixth
+adversarial review. The deferral earned its keep — the review caught a false
+per-level claim and a wrong censoring statement that would otherwise have been
+published, which is exactly the failure mode reports 06 and 07 exhibited.
 
 ## Phase B — C: capacity-constrained geodesic Lloyd
 

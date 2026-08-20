@@ -354,7 +354,17 @@ and the prepared Stage-2 config was *not* run. But a starved level 0 manufacture
 **permanent** runt: worst cell 46.80% → 15.92% across 37× more vertices, never
 crossing the 5% gate, vs the control's 0.78%. Also corrects the stall guard — see the
 "under-resolved level" gotcha below). and
-`07-phase0-shared-harness/` (measured: Phase 0 of the B/C replacement programme -- qualifying the measurement instrument. The harness reproduces the validated N=100 Phase 2 perimeter 185.2546144718457 **bitwise**, which simultaneously proves hardening an arm's labels costs nothing and that Phase 2 is bit-deterministic here; the shared assignment solver needed **no new algorithm** (the auction/Sinkhorn conclusion was a fixture artefact); gate 2 passes 18/18 and is shown to discriminate (the pre-0a solver scores identically to doing nothing); and at equal footing the arms sit at **parity +/-10%** with the incumbent, not clear of it. Also catalogues **five** occasions on which a measurement artefact was read as a result about the method, and the two practices that caught them). See
+`07-phase0-shared-harness/` (measured: Phase 0 of the B/C replacement programme -- qualifying the measurement instrument. The harness reproduces the validated N=100 Phase 2 perimeter 185.2546144718457 **bitwise**, which simultaneously proves hardening an arm's labels costs nothing and that Phase 2 is bit-deterministic here; the shared assignment solver needed **no new algorithm** (the auction/Sinkhorn conclusion was a fixture artefact); gate 2 passes 18/18 and is shown to discriminate (the pre-0a solver scores identically to doing nothing); and at equal footing the arms sit at **parity +/-10%** with the incumbent, not clear of it. Also catalogues **five** occasions on which a measurement artefact was read as a result about the method, and the two practices that caught them). and
+`08-mbo-auction-dynamics/` (measured: **approach B replaces Phase 1 and wins.**
+N=100 Phase 2 **184.4118 / 184.1615** vs the 185.2546 anchor (−0.455% / −0.590%,
+seed spread 0.136%) from 214–228 s vs 48,132 s; N=300 **319.9428** vs 323.3192
+(−1.044%) from 248 s vs 79,069 s. **0 fragmented on raw labels at both N** — the
+only gate with content for B — where raw PGD gives 2 at N=300 and needs the
+readout. Attribution confirmed: MBO beats its own init, which *is* approach C's
+step 0, by **+2.761%** against a 0.3% threshold. Also records the **sixth**
+measurement artefact, produced by this work: "0 fragmented at every level" was
+asserted with no per-level instrument in existence and was false. Figures rebuild
+byte-identically from a committed `data.yaml`). See
 `docs/experiments/README.md`. (Slot 03 is
 `03-dual-projection-verification`, on `feat/newton-projection`.)
 
