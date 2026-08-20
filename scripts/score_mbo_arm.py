@@ -22,7 +22,11 @@ import yaml
 N100_ANCHOR = 185.2546144718457  # CENSORED: best iterate is its last => a bound
 N300_ANCHOR = 323.319247087254  # V=47,488, plateaued => the safe anchor
 SUCCESS_REL, REFUTED_REL = 0.01, 0.05
-CONTROL_WALL_S = 48132.0  # N=100 PGD, from timing_profile total_wall_s
+# PGD Phase 1 wall per configuration, from timing_profile total_wall_s (never
+# metadata run_time_seconds). Keyed by N: using the N=100 figure for an N=300 arm
+# understates the speedup by 1.6x, which is how the first N=300 scorecard printed
+# 194x for a run that is actually 319x.
+CONTROL_WALL_S = {100: 48132.0, 300: 79068.6}
 NC3_K, NC3_F_MIN = 79.2482, 5.634e-3
 EXCURSION_FLOOR = 2e-3  # or 1.5 x the run's own slack, whichever larger
 P13_MIN_REL = 0.003
@@ -44,6 +48,11 @@ def perimeter_verdict(p, anchor):
     return rel, "REFUTED ON PERIMETER"
 
 
+def _speed(n_partitions, wall):
+    cw = CONTROL_WALL_S.get(n_partitions)
+    return f"{cw/max(wall,1e-9):.1f}x vs {cw:.0f}s PGD" if cw else "n/a (no PGD wall)"
+
+
 def score(path, r, init_p2=None):
     N, V = r["n_partitions"], r["arm_final_V"]
     anchor = N100_ANCHOR if N == 100 else N300_ANCHOR
@@ -63,7 +72,7 @@ def score(path, r, init_p2=None):
     )
     print(
         f"P5  ladder wall    : {r['wall_seconds']:.0f}s = {r['wall_seconds']/60:.1f} min"
-        f"   speedup vs PGD {CONTROL_WALL_S/max(r['wall_seconds'],1e-9):.1f}x"
+        f"   speedup {_speed(N, r['wall_seconds'])}"
     )
 
     # P10 -- descent inequality and E_tau excursions, ACTIVE steps only.

@@ -1166,6 +1166,61 @@ make — but it must be stated whichever way the number falls, and it means a B
 result at N=300 is not comparable in kind to the N=100 one, where the control
 needed no readout.
 
+### Phase A — SCORED RESULT 4 of 4: N=300 secondary (2026-08-19)
+
+`results/arm_mbo_20260819_192659_npart300_V47488_seed61803399`. Anchor
+`run_20260806_123326`, V=47,488 asserted equal, campaign `max_iterations: 19`.
+
+| level | V | v/cell | steps | active | worst area | Q̄ | wall |
+|---|---|---|---|---|---|---|---|
+| L0 | 9,600 | 32 | 16 | 13 | 6.7063% | 1.591 | 12.2 s |
+| L1 | 24,948 | 83 | 21 | 19 | 2.5394% | 1.579 | 46.0 s |
+| L2 | 47,488 | 158 | 66 | 64 | **1.4172%** | 1.573 | 171.9 s |
+
+**Phase 2: 319.9427628182375 at iterate 16 of 19, uncensored, 19 of 19, no abort.**
+Against the anchor 323.319247087254 that is **−1.044%**, from **248 s** against
+79,068.6 s — **318.8×**.
+
+> ## **The headline is not the perimeter. It is that B's RAW labels pass all three gates at N=300.**
+>
+> 0 dead / 0 weak · **0 imbalanced** (worst 1.4172%, bar 2.0216%, granularity
+> 1.0108%) · **0 fragmented**.
+>
+> **Raw PGD does not.** At this exact configuration it produces 10 imbalanced
+> cells, worst 36.15%, and 2 fragmented — which is why the baseline had to be
+> PGD **plus** the balanced readout (A + E). B needed no readout, no repair stage,
+> and no composition: the "compose with E" lane is unused at N=300 as well as at
+> N=100. The continuous–discrete gap that motivated approaches A through E is not
+> closed here; **the category is absent**, exactly as the taxonomy predicted for B.
+
+| # | Predicted | Actual | |
+|---|---|---|---|
+| P6 | 331.4 (+2.5%), 80% interval **[323.3, 341.0]** | **319.9428 (−1.044%)** | ❌ **MISS — below the entire interval** |
+| P7 | area ≤ 2.02% (point 1.5%); frag ≤ 6 (point 0–2); ≥ 88× | **1.4172%; 0; 318.8×** | ✅ (speed point again pessimistic) |
+| P9 | worst fragmentation at level 0 | **0 fragmented at every level** | ⚠ **UNTESTABLE — the predicted phenomenon never occurred** |
+| P10 | viol ≤ 1e-12; excursions ≤ ceiling on < 25% | viol **−6.13e-08**; **4** increases / 96 active (4.2%), max slack 5.505e-03, ceiling 8.258e-03 | ✅ |
+| P12 | 19 iterates, no abort | **19 of 19, no abort** | ✅ |
+
+**P6 missed worse than P1 did.** My 80% interval's *lower* bound was the anchor
+itself, so I assigned essentially no probability to B beating PGD+A+E at N=300 —
+and it did, by more than the whole +1% success band. Recorded as a miss.
+
+**P9 is untestable, not passed.** It predicted *where* fragmentation would appear;
+none appeared anywhere, so the prediction has no purchase. Reporting it as "held"
+would be scoring a vacuous truth.
+
+**P10's E_τ increases are real here** — 4 of 96 active steps, up to a bound of
+8.258e-03 set by the run's own 5.505e-03 slack. This is the third independent
+configuration confirming the review's mechanism, and under the withdrawn fixed
+2e-3 ceiling it would have **falsely failed**.
+
+⚠ **Scorecard defect, caught and fixed:** the first N=300 scorecard printed
+**194.0×** because `CONTROL_WALL_S` was hardcoded to the *N=100* control's 48,132 s.
+The N=300 control is 79,068.6 s and the true figure is **318.8×**. Fixed to a
+per-N table. The error understated B — but a headline number produced by dividing
+by the wrong constant is exactly the class of defect this programme keeps finding,
+and it survived until someone read the units.
+
 #### Deferred, as a named follow-up
 
 `docs/experiments/08-mbo-auction-dynamics/` is written **once B's verdict is known
