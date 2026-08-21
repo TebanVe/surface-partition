@@ -1,0 +1,604 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {The Balanced Readout},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{The Balanced Readout}\\[0.5em]
+  \large Why the winner-take-all territory diverges from the constrained mass,
+  and the dual-offset correction that removes the divergence}
+\author{}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Phase~1 minimises a $\Gamma$-convergence energy over continuous densities and
+enforces equal area as a constraint on the \emph{continuous masses}. The partition
+it delivers, however, is the \emph{winner-take-all territory} of those densities.
+This document derives the exact identity relating the two, shows why nothing in
+the variational problem controls their difference, and analyses the two artifacts
+that follow --- territory far from the equal-area target, and territory that
+splits into disconnected pieces. It then derives the correction implemented in
+\codefile{src/partition/balanced\_readout.py}: a per-cell additive offset obtained
+from the dual of a transportation problem. Three properties are proved: the
+corrected readout grows each cell \emph{monotonically outward from its own core}
+(the locality that in-flow corrections lacked); the attainable balance is bounded
+below by the one-vertex granularity, and this bound is a theorem rather than an
+observation, because the underlying linear program is \emph{not} integral; and the
+offsets control area but not connectivity, which is why a second, connectivity-preserving
+pass is required. Where an argument is a model rather than a derivation ---
+notably the worst-cell scaling in $N$, and the mechanism behind disconnection ---
+this is stated explicitly.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Overview}
+
+The method of Bogosel and Oudet \cite{bogosel2023partitions} represents a
+partition of a surface into $N$ cells by $N$ density functions and minimises a
+Modica--Mortola-type functional \cite{modica1977esempio, modica1987gradient} whose
+$\Gamma$-limit is the total interface length. Equal areas are imposed as
+constraints on the integrals of those densities.
+
+To hand a partition downstream one must convert the densities into a definite
+assignment of each mesh vertex to one cell. The natural choice, and the one used
+throughout this project, is pointwise \emph{winner-take-all}: each vertex joins
+whichever cell has the largest density there. We refer to this conversion step as
+the \emph{readout}, by analogy with instrumentation, where the internal state of a
+device and the value it reports are distinct objects and the conversion between
+them is a separate source of error.
+
+The central observation of this document is that the constrained quantity and the
+delivered quantity are \emph{different functionals of the same field}, and that
+their difference is exactly computable, is supported entirely on the diffuse
+interface band, and is referenced nowhere in the energy or the constraints. It is
+therefore free to drift, and it drifts further as the number of cells grows at
+fixed mesh resolution.
+
+\begin{remark}
+This is a statement about the readout at finite $\varepsilon$ and finite mesh. The
+$\Gamma$-convergence result concerns the limit of the \emph{energy} and is not in
+question. Nothing here contradicts \cite{bogosel2023partitions}; the readout is a
+practical choice whose error term had not been quantified.
+\end{remark}
+
+Related documents: \codefile{docs/math/06-phase1-energy-discretization/} derives
+the discrete energy itself; \codefile{docs/math/07-phase1-wta-balance/} derives a
+\emph{rejected} attempt to enforce balance inside the flow, and its Proposition~1
+is the identity restated as \eqref{eq:gap} below;
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md} is the standing
+prose account.
+
+\section{Notation and Setup}
+
+Let the surface be triangulated with vertex set $\{1,\dots,V\}$ and let
+$\Mmat$ be the P1 finite-element mass matrix. Write
+\begin{equation}
+  v_i \;=\; \sum_{j} \Mmat_{ij}
+  \label{eq:lumped}
+\end{equation}
+for the lumped mass of vertex $i$, so that $v_i > 0$ and
+$\sum_i v_i = |\Sigma|$, the total surface area. The densities are
+$u_{ik} \in [0,1]$ for vertex $i$ and cell $k \in \{1,\dots,N\}$, subject to the
+partition-of-unity and equal-area constraints
+\begin{equation}
+  \sum_{k=1}^{N} u_{ik} \;=\; 1 \quad \forall i,
+  \qquad
+  \sum_{i=1}^{V} v_i\, u_{ik} \;=\; \Atgt \;=\; \frac{|\Sigma|}{N}
+  \quad \forall k .
+  \label{eq:constraints}
+\end{equation}
+
+\begin{defn}[Readout and territory]
+The \emph{readout} is the map $\omega : \{1,\dots,V\} \to \{1,\dots,N\}$,
+\begin{equation}
+  \omega(i) \;=\; \argmax_k \, u_{ik},
+  \label{eq:wta}
+\end{equation}
+ties broken by lowest index. The \emph{territory} of cell $k$ is
+$\Omega_k = \{ i : \omega(i) = k \}$ and its \emph{discrete area} is
+\begin{equation}
+  T_k \;=\; \sum_{i \in \Omega_k} v_i .
+  \label{eq:territory}
+\end{equation}
+\end{defn}
+
+The constraint in \eqref{eq:constraints} fixes $\sum_i v_i u_{ik}$; validity is
+graded on $T_k$. These coincide only if every $u_{ik}$ is exactly $0$ or $1$.
+
+\section{The readout gap is exact}
+
+\begin{prop}[Territory--mass identity]
+For every cell $k$, with the constraint \eqref{eq:constraints} satisfied,
+\begin{equation}
+  T_k - \Atgt \;=\; \underbrace{\sum_{i \in \Omega_k} v_i\,(1 - u_{ik})}_{\textstyle \mathrm{gain}_k}
+  \;-\; \underbrace{\sum_{i \notin \Omega_k} v_i\, u_{ik}}_{\textstyle \mathrm{lost}_k} .
+  \label{eq:gap}
+\end{equation}
+\end{prop}
+
+\begin{proof}
+Split the constrained sum over the territory and its complement:
+\[
+  \Atgt \;=\; \sum_i v_i u_{ik}
+        \;=\; \sum_{i \in \Omega_k} v_i u_{ik} \;+\; \sum_{i \notin \Omega_k} v_i u_{ik}
+        \;=\; \Big( T_k - \sum_{i \in \Omega_k} v_i (1-u_{ik}) \Big) \;+\; \mathrm{lost}_k ,
+\]
+using $\sum_{i \in \Omega_k} v_i u_{ik} = T_k - \sum_{i \in \Omega_k} v_i(1-u_{ik})$
+from \eqref{eq:territory}. Rearranging gives \eqref{eq:gap}.
+\end{proof}
+
+The identity is exact: no linearisation, no assumption on $\varepsilon$ or on the mesh.
+Its two terms have a direct reading. $\mathrm{gain}_k$ is mass that cell $k$ \emph{owns
+but does not hold} --- vertices it wins while its density there is below one.
+$\mathrm{lost}_k$ is mass it \emph{holds but does not own} --- density deposited at
+vertices won by somebody else.
+
+\begin{remark}[The gap lives entirely in the interface band]
+Both terms vanish wherever the field is crisp. Deep inside cell $k$,
+$u_{ik} \approx 1$, so $1 - u_{ik} \approx 0$ and the vertex contributes nothing
+to $\mathrm{gain}_k$. Far outside, $u_{ik} \approx 0$ and it contributes nothing to
+$\mathrm{lost}_k$. Only vertices in the diffuse band, where $0 < u_{ik} < 1$, contribute
+to either. \emph{The readout gap is a band phenomenon}, and everything about how
+it scales follows from how much of a cell the band occupies.
+\end{remark}
+
+\subsection{Why nothing controls it}
+
+The energy is a function of $u$; the constraints \eqref{eq:constraints} are linear
+in $u$. Neither references $\omega$. Moreover the map $u \mapsto \omega$ is
+piecewise constant and therefore discontinuous: it is constant on each cell of the
+arrangement $\{u_{ik} - u_{il} = 0\}$ and jumps across it. Consequently
+\begin{itemize}\itemsep2pt
+  \item $T_k$ has zero gradient with respect to $u$ almost everywhere, so no
+    first-order optimality condition can constrain it;
+  \item adding $T_k$ to the objective is not possible without a surrogate, and the
+    surrogate used in \codefile{docs/math/07-phase1-wta-balance/} was measured and
+    rejected (see \S\ref{sec:locality});
+  \item the quantity $\mathrm{gain}_k - \mathrm{lost}_k$ is, from the optimiser's point of view,
+    an unobserved by-product.
+\end{itemize}
+
+\section{Artifact I: territory far from the equal-area target}
+\label{sec:artifact1}
+
+\subsection{The band fraction}
+
+Let $R_{\mathrm{cell}} = \sqrt{|\Sigma| / (\pi N)}$ be the radius of a disc of the
+target area and let $h$ be a representative edge length. In the discretisation
+used here the interface width parameter is tied to the mesh, $\varepsilon \sim h$
+(\codefile{docs/math/06-phase1-energy-discretization/}). A cell's band is a collar
+of width $O(\varepsilon)$ around a boundary of length $O(R_{\mathrm{cell}})$, so the
+fraction of a cell occupied by band is
+\begin{equation}
+  f_b \;\sim\; \frac{\varepsilon \cdot 2\pi R_{\mathrm{cell}}}{\pi R_{\mathrm{cell}}^2}
+     \;=\; \frac{2\varepsilon}{R_{\mathrm{cell}}}
+     \;\sim\; \frac{h}{R_{\mathrm{cell}}} .
+  \label{eq:bandfrac}
+\end{equation}
+With $h \sim \sqrt{|\Sigma|/V}$ this becomes
+\begin{equation}
+  f_b \;\sim\; \sqrt{\frac{N}{V}} \;=\; \Big(\frac{V}{N}\Big)^{-1/2},
+  \label{eq:bandscaling}
+\end{equation}
+i.e.\ \textbf{the band fraction is governed by vertices per cell alone.} This
+recovers, from geometry, the empirical form $f_b = 3.72 / \sqrt{2V/N}$ recorded in
+\codefile{docs/reference/winner\_take\_all\_partition\_gap.md}.
+
+\begin{remark}[The scaling trap]
+At \emph{fixed mesh}, raising $N$ shrinks $R_{\mathrm{cell}}$ and therefore
+\emph{raises} $f_b$: the band becomes a larger share of each cell precisely as the
+cells become the objects one cares about. Holding $f_b$ fixed requires
+$V \propto N$ --- constant vertices per cell --- so the mesh must grow linearly in
+the number of cells merely to keep the readout error from worsening.
+\end{remark}
+
+\subsection{The diffuse runt}
+
+Equation \eqref{eq:gap} permits a configuration that is feasible, low-energy, and
+useless: a cell whose density is spread as a broad halo, everywhere slightly below
+its neighbours'. It then satisfies $\sum_i v_i u_{ik} = \Atgt$ exactly while
+winning almost nothing, because $\mathrm{lost}_k$ is large and $\mathrm{gain}_k$ small. Such a
+cell is \emph{confidently in the right place and insufficiently loud}. Empirically
+at $N=300$ the worst cell reached $36.15\%$ below target while its continuous mass
+was exact.
+
+\subsection{Worst-of-$N$ --- a model, not a derivation}
+
+\begin{remark}[Explicitly not established]
+The following is the argument by which the project has explained why the problem
+sharpens with $N$. It is a \textbf{model}. The distribution of $\mathrm{gain}_k - \mathrm{lost}_k$
+across cells has never been measured, and the available data points differ in both
+$\lambda$ and mesh, so they cannot test it.
+\end{remark}
+
+If one models each cell's net exchange as a random variable with mean zero and
+standard deviation $\sigma \propto f_b$, roughly independent across cells, then
+validity --- which is graded on $\max_k |T_k - \Atgt|$ --- is an extreme-value
+statistic, and for light-tailed exchange the maximum of $N$ draws grows like
+$\sigma\sqrt{2\ln N}$. Two consequences follow \emph{if the model holds}: the worst
+cell degrades slowly but without bound as $N$ grows even at fixed $f_b$; and any
+mechanism that merely \emph{reduces the variance} of the exchange postpones the
+problem rather than removing it. Only a mechanism that makes the delivered
+representation balanced \emph{by construction} is immune to the tail. That
+prediction is consistent with every measured outcome in this project, which is
+evidence for the model but not a proof of it.
+
+\section{Artifact II: disconnected territory}
+\label{sec:artifact2}
+
+\begin{remark}[Weaker than \S\ref{sec:artifact1}, and deliberately so]
+The existence of this artifact is a theorem (\S\ref{sec:disc-possible}); its
+\emph{cause} in our runs is a hypothesis that has never been traced to a specific
+event. The two are separated below.
+\end{remark}
+
+\subsection{Nothing forbids it}
+\label{sec:disc-possible}
+
+The readout \eqref{eq:wta} is defined pointwise. $\Omega_k$ is a super-level set
+of the function $i \mapsto u_{ik} - \max_{l \neq k} u_{il}$, and a super-level set
+of an arbitrary function on a graph need not be connected. Neither the energy nor
+the constraints contain any term that is finite for connected territories and
+infinite otherwise. Disconnection is therefore \emph{admissible} and costs nothing
+directly; a split cell is a legitimate local minimiser of the relaxed problem.
+
+What makes it pathological is external: a minimal-perimeter cell is connected, so
+a split territory is a non-physical artifact of the representation, and Phase~2
+cannot consume it, since a split cell yields multi-loop contours.
+
+\begin{remark}[Why the other two gates are blind to it]
+A split cell's pieces sum to the correct area and each piece is crisp. It
+therefore passes a dormant-cell check (peak density $\approx 1$) and an
+area-imbalance check (total area correct). Connectivity is a third, independent
+validity dimension.
+\end{remark}
+
+\subsection{The mechanism --- hypothesis}
+
+The constraint $\sum_i v_i u_{ik} = \Atgt$ is enforced by an iterative projection
+onto the feasible set. The projection is a \emph{nonlocal} operator: correcting a
+deficit in cell $k$ adds a rank-one term spread across the whole free set,
+followed by renormalisation. Raising $u_{ik}$ everywhere by a near-uniform amount
+can therefore flip the argmax at vertices arbitrarily far from the cell's core ---
+wherever cell $k$ happened to be a close second --- and open a second basin.
+
+Three observations are consistent with this and none establishes it:
+\begin{enumerate}\itemsep2pt
+  \item Splits appear \emph{while balance is improving}. At $N=300$ they are born
+    mid-level-2, at the same time as the imbalanced count falls from 234 to 10:
+    balance is being bought with disconnection.
+  \item Mechanisms that push balance through the projection make it dramatically
+    worse. A discrete-area trim produced 14/200 split cells against a matched
+    control's 0/200; a soft area constraint produced 3--4/100.
+  \item The correction derived in \S\ref{sec:correction}, which is
+    \emph{local} by Proposition~\ref{prop:nested}, does not manufacture splits.
+\end{enumerate}
+
+\begin{remark}[What would settle it]
+Decompose the per-iteration update into its gradient and projection contributions
+at the iteration a split is born, and test whether the new component's vertices had
+$u_{ik}$ raised by the projection. This has not been done; it is recorded as future
+work in \codefile{docs/plans/PUBLICATION\_READINESS\_PLAN.md}.
+\end{remark}
+
+\section{The corrected readout}
+\label{sec:correction}
+
+\subsection{The assignment problem}
+
+Fix any per-vertex score matrix $s_{ik}$; the shipped readout uses
+$s_{ik} = \log u_{ik}$, with densities clipped from below so that exact zeros give
+a finite, very negative score. We seek a hard assignment maximising total score
+subject to every cell attaining its target area:
+\begin{equation}
+  \max_{x} \; \sum_{i,k} v_i\, s_{ik}\, x_{ik}
+  \quad\text{s.t.}\quad
+  \sum_k x_{ik} = 1 \;\; \forall i, \qquad
+  \sum_i v_i\, x_{ik} = \Atgt \;\; \forall k, \qquad
+  x_{ik} \ge 0 .
+  \label{eq:lp}
+\end{equation}
+This is a transportation problem: supplies $v_i$ at vertices, demands $\Atgt$ at
+cells, and both marginals sum to $|\Sigma|$, so it is feasible.
+
+\begin{remark}[Terminology]
+This project's prose has called \eqref{eq:lp} a \emph{semi-discrete} optimal
+transport problem. Strictly it is \emph{discrete-to-discrete}: $V$ weighted points
+to $N$ cells. The semi-discrete problem --- a continuous source measure
+transported to $N$ atoms, in the sense of
+\cite{aurenhammer1998minkowski, merigot2011multiscale, kitagawa2019convergence} ---
+is its continuum limit as the mesh refines. The offsets derived below are the
+discrete analogue of the power weights in that literature.
+\end{remark}
+
+\subsection{The dual, and where the offsets come from}
+
+Introduce multipliers $\varphi_i$ for the row constraints and $\psi_k$ for the
+column constraints. Stationarity of the Lagrangian in $x_{ik}$ gives
+$v_i s_{ik} - \varphi_i - v_i \psi_k \le 0$, with equality wherever $x_{ik} > 0$,
+so $\varphi_i = v_i \max_k (s_{ik} - \psi_k)$ and the dual is
+\begin{equation}
+  \min_{\psi \in \mathbb{R}^N} \; D(\psi), \qquad
+  D(\psi) \;=\; \sum_i v_i \max_k \big( s_{ik} - \psi_k \big) \;+\; \Atgt \sum_k \psi_k .
+  \label{eq:dual}
+\end{equation}
+$D$ is a sum of pointwise maxima of affine functions plus a linear term, hence
+\textbf{convex} and piecewise linear. Complementary slackness forces every vertex
+onto a maximising cell, so an optimal assignment is
+\begin{equation}
+  \omega_\psi(i) \;=\; \argmax_k \big( s_{ik} - \psi_k \big) .
+  \label{eq:shifted}
+\end{equation}
+
+\begin{remark}[Sign convention]
+The implementation stores $\psi^{\mathrm{code}} = -\psi$ and evaluates
+$\argmax_k ( s_{ik} + \psi^{\mathrm{code}}_k )$. All statements below use the code
+convention, in which \emph{raising} $\psi_k$ \emph{grows} cell $k$.
+\end{remark}
+
+\begin{prop}[The implemented update is the dual subgradient]
+\label{prop:subgrad}
+At any $\psi$ where the argmax is unique at every vertex, $D$ is differentiable
+with
+\begin{equation}
+  \frac{\partial D}{\partial \psi_k} \;=\; \Atgt - T_k(\psi),
+  \qquad T_k(\psi) = \sum_{i \,:\, \omega_\psi(i) = k} v_i ,
+  \label{eq:subgrad}
+\end{equation}
+and in general this is a subgradient. Hence gradient descent on $D$ is exactly
+``grow the cells that are too small, shrink the cells that are too large''.
+\end{prop}
+
+\begin{proof}
+Differentiating the first term of \eqref{eq:dual} at a point of uniqueness picks
+out, for each $i$, the maximising index $\omega_\psi(i)$, contributing $-v_i$ to
+the $\psi_k$ derivative precisely when $\omega_\psi(i) = k$; the second term
+contributes $\Atgt$. Summing gives \eqref{eq:subgrad}. At points where the argmax
+is non-unique, $D$ is a maximum of finitely many affine functions and the same
+expression is an element of the subdifferential for any measurable tie-breaking.
+\end{proof}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: dual ascent on the offsets}, fontupper=\small]
+\codefile{src/partition/balanced\_readout.py}: \code{solve\_dual\_offsets(scores, lumped\_mass, target, config)}\\[2pt]
+\code{psi -= (eta0 / (1 + decay*it)) * rel}, with
+\code{rel = (areas - target)/target} --- the normalised form of
+\eqref{eq:subgrad}. The routine returns its \emph{best} iterate, since $D$ is
+piecewise linear and subgradient descent is not monotone. Scores enter only
+through \code{argmax(scores + psi)}, so the routine is correct for any additive
+score matrix; only its step schedule is scale-dependent.
+\end{tcolorbox}
+
+\subsection{Locality: cells grow outward from their own cores}
+\label{sec:locality}
+
+\begin{prop}[Nested monotone growth]
+\label{prop:nested}
+Fix $\psi_{-k}$ and regard $\Omega_k(\psi_k)$ as a function of the single offset
+$\psi_k$. Define the \emph{margin} of vertex $i$ against cell $k$ as
+\begin{equation}
+  m_i \;=\; \max_{l \neq k} \big( s_{il} + \psi_l \big) \;-\; s_{ik} .
+  \label{eq:margin}
+\end{equation}
+Then $\Omega_k(\psi_k) = \{ i : m_i \le \psi_k \}$. Consequently
+$\psi_k < \psi_k'$ implies $\Omega_k(\psi_k) \subseteq \Omega_k(\psi_k')$, and
+vertices are acquired in nondecreasing order of $m_i$.
+\end{prop}
+
+\begin{proof}
+Immediate from \eqref{eq:shifted}: $i \in \Omega_k$ iff
+$s_{ik} + \psi_k \ge \max_{l\neq k}(s_{il} + \psi_l)$, i.e.\ iff $\psi_k \ge m_i$.
+The sets are sublevel sets of the fixed function $m$, hence nested.
+\end{proof}
+
+This is the property the in-flow corrections lacked, and it is worth stating
+plainly what it does and does not say.
+
+\begin{itemize}\itemsep3pt
+  \item \textbf{What it gives.} Growth is \emph{ordered by margin}. A cell claims
+    first the vertices where it was most nearly winning, which --- for a density
+    field that is unimodal about the cell's core --- are the vertices adjacent to
+    the territory it already holds. Correction proceeds outward through the
+    adjacent band rather than being deposited wherever the algebra puts it.
+  \item \textbf{What it does not give.} Proposition~\ref{prop:nested} is a
+    statement about the \emph{order} of acquisition, not about connectivity.
+    If the margin function $m$ has two separated basins --- exactly the situation
+    Artifact~II describes --- then nested growth will populate both. Locality
+    prevents the correction from \emph{manufacturing} new components; it cannot
+    repair components that the density field already possesses. Hence
+    \S\ref{sec:repair}.
+\end{itemize}
+
+Contrast this with enforcing balance inside the flow. There the correction reaches
+the field through the constraint projection, which is nonlocal
+(\S\ref{sec:artifact2}); measured outcomes were a net regression in both attempts
+(\codefile{docs/experiments/04-territory-aware-highn-validation/},
+\codefile{docs/experiments/05-soft-area-constraint/}).
+
+\subsection{The granularity floor is a theorem, not an observation}
+
+It is tempting to assert that \eqref{eq:lp} has an integral optimum because
+transportation problems do. That reasoning is unavailable here.
+
+\begin{prop}[Non-integrality]
+\label{prop:integrality}
+The classical integrality theorem for the transportation polytope requires
+integer supplies and demands. In \eqref{eq:lp} the supplies are the real lumped
+masses $v_i$ and the demands are $\Atgt = |\Sigma|/N$. Unless some subset
+$S \subseteq \{1,\dots,V\}$ satisfies $\sum_{i \in S} v_i = \Atgt$ exactly, no
+integral feasible point exists at all, and every vertex of the polytope splits at
+least one vertex's mass between cells. A basic feasible solution of a
+transportation problem with $V$ sources and $N$ sinks has at most $V + N - 1$
+nonzeros, so at most $N-1$ vertices are split.
+\end{prop}
+
+Consequently the exact optimum of \eqref{eq:lp} is in general \emph{fractional},
+and the readout \eqref{eq:shifted} is a rounding of it. The residue is bounded by
+the mass of the split vertices, which yields the floor
+\begin{equation}
+  \min_{\psi} \; \max_k \frac{\big| T_k(\psi) - \Atgt \big|}{\Atgt}
+  \;\ge\; \text{(generically)} \;\; \frac{\max_i v_i}{\Atgt}
+  \;\approx\; \frac{N}{V} \cdot \frac{\max_i v_i}{\bar v} ,
+  \label{eq:granularity}
+\end{equation}
+where $\bar v = |\Sigma|/V$. \textbf{A vertex is indivisible, so no assignment
+method whatever can do better.} This is why acceptance thresholds in this project
+are stated as multiples of $\max_i v_i / \Atgt$ rather than as absolute
+percentages: a bar below \eqref{eq:granularity} is not demanding, it is
+impossible.
+
+\begin{remark}[Measured values]
+$\max_i v_i / \Atgt$ is $1.011\%$ at $V=47{,}488$, $N=300$; $0.421\%$ at
+$V=114{,}144$, $N=300$; $0.140\%$ at $V=114{,}144$, $N=100$; and $0.561\%$ at
+$V=114{,}144$, $N=400$. The floor scales as $N/V$ --- inversely with vertices per
+cell --- for the same reason \eqref{eq:bandscaling} does.
+\end{remark}
+
+\section{Connectivity repair}
+\label{sec:repair}
+
+The offsets control area but, by the second bullet of \S\ref{sec:locality}, not
+connectivity. A second pass restores it. It operates on labels only.
+
+\paragraph{Stage 1 --- island absorption.} For each cell, compute the connected
+components of its territory in the mesh edge graph. Every non-largest component
+whose area exceeds a fixed fraction of $\Atgt$ is relabelled to the neighbouring
+cell with which it shares the longest boundary. This step is unconditionally safe:
+a component adjacent to cell $c$ can always be merged into $c$ without
+disconnecting $c$, since the merged set is connected through the shared boundary.
+On exit every cell is connected (or empty, which is reported).
+
+\paragraph{Stage 2 --- area restoration by boundary transfer.} Absorption
+perturbs the areas, so equal areas are restored by moving \emph{single boundary
+vertices} from richer cells to poorer ones. A move of vertex $i$ from donor $d$ to
+receiver $r$ is admitted only if
+\begin{equation}
+  T_d - T_r \;>\; v_i ,
+  \label{eq:improving}
+\end{equation}
+which guarantees that the transfer strictly reduces $|T_d - \Atgt| + |T_r - \Atgt|$
+rather than overshooting, and only if $\Omega_d \setminus \{i\}$ remains connected
+--- an exact articulation test, cheap because it is local to one cell. Candidates
+are ranked by the score margin $s_{ir} - s_{id}$, so the least costly transfers
+are taken first.
+
+\begin{remark}[What is and is not guaranteed]
+Both invariants --- every cell connected, and no admissible improving move
+remaining --- hold on exit \emph{by construction}. What is \textbf{not}
+guaranteed is that the exit state attains the granularity floor
+\eqref{eq:granularity}: stage 2 is a greedy local search over single-vertex moves,
+and a configuration can be locally optimal without being globally balanced,
+particularly when \eqref{eq:improving} blocks every candidate. The implementation
+therefore reports its own strain --- number of moves, moves blocked by the
+connectivity test, sweeps used, and whether the sweep cap was reached --- so that
+a run beyond what repair can fix says so rather than returning a degraded
+partition silently.
+\end{remark}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: the two-stage readout}, fontupper=\small]
+\codefile{src/partition/balanced\_readout.py}:
+\code{apply\_balanced\_readout(...)} orchestrates
+\code{solve\_dual\_offsets} $\to$ \code{reassign\_islands} $\to$
+\code{rebalance\_boundaries}; \code{\_stays\_connected} is the articulation test
+and \code{build\_vertex\_adjacency} the edge graph, built from \code{faces} so
+that it respects the true surface topology (e.g.\ the torus periodic wrap) rather
+than a flat parametrisation. CLI: \codefile{scripts/balanced\_readout.py}.
+\end{tcolorbox}
+
+\section{Relation to power diagrams}
+
+With scores $s_{ik} = -d^2(i, z_k)$ for sites $z_k$, \eqref{eq:shifted} reads
+$\omega(i) = \argmax_k ( -d^2(i,z_k) + \psi_k ) = \argmin_k ( d^2(i,z_k) - \psi_k )$,
+which is precisely a \emph{power diagram} (Laguerre tessellation) with weights
+$\psi_k$. That the weights can be chosen to prescribe the cell capacities is
+Aurenhammer, Hoffmann and Aronov's Minkowski-type theorem
+\cite{aurenhammer1998minkowski}; modern solvers for the continuous version are
+given by Mérigot \cite{merigot2011multiscale} and Kitagawa, Mérigot and Thibert
+\cite{kitagawa2019convergence}, and the construction is used for blue-noise
+sampling by de Goes \emph{et al.} \cite{degoes2012bluenoise}.
+
+The balanced readout is the same algebra applied to a different score. Two
+differences are worth recording:
+\begin{enumerate}\itemsep2pt
+  \item Our scores are $\log u$, a \emph{relaxation output}, not a distance. There
+    are no sites, and no geometric structure is assumed --- only that the score is
+    additive in $\psi$.
+  \item Our problem is finite-to-finite, so the damped Newton methods of
+    \cite{kitagawa2019convergence}, which exploit the smoothness of the
+    semi-discrete objective in the continuous-source setting, do not transfer
+    directly; $D$ in \eqref{eq:dual} is piecewise linear, hence nonsmooth.
+    Subgradient descent is used instead. Entropic regularisation
+    \cite{cuturi2013sinkhorn} is an alternative that was implemented and measured
+    for this problem, and lost to subgradient descent on five of six score
+    matrices (\codefile{docs/experiments/07-phase0-shared-harness/}).
+\end{enumerate}
+
+\begin{remark}[We are not aware of this being reported]
+Applying a capacity-constrained assignment as a \emph{readout correction for a
+$\Gamma$-convergence relaxation} --- as opposed to as a construction in its own
+right --- is not something we have found in the literature. Stated as a population
+claim, the corpus searched is this project's bibliography plus two full-text
+readings; that is not a systematic review, and the claim is phrased accordingly.
+\end{remark}
+
+\section{Measured effect}
+
+Recorded here for completeness; the study that measures them belongs in
+\codefile{docs/experiments/}, which does not yet contain one for this stage.
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+torus, $N=300$, $V=47{,}488$ & source & after readout & \\
+\midrule
+imbalanced cells (gate $5\%$) & 10 & \textbf{0} & \\
+worst cell deviation & $36.15\%$ & $\mathbf{1.63\%}$ & floor $1.011\%$ \\
+disconnected cells & 2 & \textbf{0} & \\
+label-boundary length & $189.73$ & $193.30$ & $+1.88\%$ \\
+wall time & --- & $\approx 17$\,s & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The $+1.88\%$ boundary cost is the price of the correction: territory is moved to
+meet the area target, and moved territory has a longer border. Phase~2 subsequently
+recovers most of it.
+
+\section*{Summary table}
+
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Quantity & Status & Where & Implementation \\
+\midrule
+Territory--mass identity \eqref{eq:gap} & derived, exact & \S3 & --- \\
+Band fraction \eqref{eq:bandscaling} & derived, scaling & \S\ref{sec:artifact1} & --- \\
+Worst-of-$N$ growth & \textbf{model, unmeasured} & \S\ref{sec:artifact1} & --- \\
+Disconnection admissible & derived & \S\ref{sec:disc-possible} & --- \\
+Disconnection \emph{mechanism} & \textbf{hypothesis, untraced} & \S\ref{sec:artifact2} & --- \\
+Dual \eqref{eq:dual}, subgradient \eqref{eq:subgrad} & derived & \S\ref{sec:correction} & \code{solve\_dual\_offsets} \\
+Nested growth (locality) & derived & \S\ref{sec:locality} & --- \\
+Granularity floor \eqref{eq:granularity} & derived from non-integrality & \S\ref{sec:correction} & \code{vertex\_granularity} \\
+Island absorption & derived, safe & \S\ref{sec:repair} & \code{reassign\_islands} \\
+Boundary transfer & greedy; invariants only & \S\ref{sec:repair} & \code{rebalance\_boundaries} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}
