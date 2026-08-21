@@ -83,9 +83,9 @@ prose account.
 \section{Notation and Setup}
 
 Let the surface be triangulated with vertex set $\{1,\dots,V\}$ and let
-$\Mmat$ be the P1 finite-element mass matrix. Write
+$M$ be the P1 finite-element mass matrix. Write
 \begin{equation}
-  v_i \;=\; \sum_{j} \Mmat_{ij}
+  v_i \;=\; \sum_{j} M_{ij}
   \label{eq:lumped}
 \end{equation}
 for the lumped mass of vertex $i$, so that $v_i > 0$ and
@@ -138,6 +138,21 @@ Split the constrained sum over the territory and its complement:
 using $\sum_{i \in \Omega_k} v_i u_{ik} = T_k - \sum_{i \in \Omega_k} v_i(1-u_{ik})$
 from \eqref{eq:territory}. Rearranging gives \eqref{eq:gap}.
 \end{proof}
+
+\begin{remark}[The unconstrained form, and when it matters]
+\label{rem:unconstrained}
+The proof uses the constraint only in the last step. Unconditionally,
+\[
+  T_k - \sum_i v_i u_{ik} \;=\; \mathrm{gain}_k - \mathrm{lost}_k ,
+\]
+so if the equal-area constraint holds only to a residual
+$\delta_k = \sum_i v_i u_{ik} - \Atgt$, then $T_k - \Atgt = \mathrm{gain}_k -
+\mathrm{lost}_k + \delta_k$. With the exact projection $\delta_k \sim 10^{-10}$
+and the distinction is immaterial. It is \emph{not} immaterial for the soft-area
+variant, which replaces the constraint by a penalty and therefore leaves $\delta_k$
+uncontrolled --- and that variant is precisely the one whose viability depends on
+this readout.
+\end{remark}
 
 The identity is exact: no linearisation, no assumption on $\varepsilon$ or on the mesh.
 Its two terms have a direct reading. $\mathrm{gain}_k$ is mass that cell $k$ \emph{owns
@@ -282,8 +297,9 @@ Three observations are consistent with this and none establishes it:
   \item Mechanisms that push balance through the projection make it dramatically
     worse. A discrete-area trim produced 14/200 split cells against a matched
     control's 0/200; a soft area constraint produced 3--4/100.
-  \item The correction derived in \S\ref{sec:correction}, which is
-    \emph{local} by Proposition~\ref{prop:nested}, does not manufacture splits.
+  \item The correction of \S\ref{sec:correction} does not \emph{leave} splits ---
+    but, contrary to what an earlier draft of this document claimed, it does not
+    avoid creating them either. See Remark~\ref{rem:shifts-fragment}.
 \end{enumerate}
 
 \begin{remark}[What would settle it]
@@ -344,8 +360,13 @@ onto a maximising cell, so an optimal assignment is
 
 \begin{remark}[Sign convention]
 The implementation stores $\psi^{\mathrm{code}} = -\psi$ and evaluates
-$\argmax_k ( s_{ik} + \psi^{\mathrm{code}}_k )$. All statements below use the code
-convention, in which \emph{raising} $\psi_k$ \emph{grows} cell $k$.
+$\argmax_k ( s_{ik} + \psi^{\mathrm{code}}_k )$, in which \emph{raising} $\psi_k$
+\emph{grows} cell $k$. \eqref{eq:dual}, \eqref{eq:subgrad} and
+Proposition~\ref{prop:subgrad} are stated in the \emph{math} convention
+($s - \psi$), where the derivative is $\Atgt - T_k$; \eqref{eq:margin} and
+\S\ref{sec:locality} use the code convention, where the corresponding quantity is
+$T_k - \Atgt$. Both describe the same descent --- grow the cells that are too
+small --- and the implemented update is descent in its own convention.
 \end{remark}
 
 \begin{prop}[The implemented update is the dual subgradient]
@@ -380,6 +401,15 @@ piecewise linear and subgradient descent is not monotone. Scores enter only
 through \code{argmax(scores + psi)}, so the routine is correct for any additive
 score matrix; only its step schedule is scale-dependent.
 \end{tcolorbox}
+
+\begin{remark}[Scope of the LP discussion]
+Everything said about \eqref{eq:lp} concerns its \emph{optimum}. The readout in
+practice uses the best iterate of a subgradient method, which need not be optimal;
+and the family $\{\omega_\psi\}$ explored is only the $N$-parameter
+shifted-argmax subfamily of all $N^V$ assignments. Both restrictions are
+deliberate --- the subfamily is what makes the correction local --- but neither is
+a consequence of the LP.
+\end{remark}
 
 \subsection{Locality: cells grow outward from their own cores}
 \label{sec:locality}
@@ -421,13 +451,34 @@ plainly what it does and does not say.
     \S\ref{sec:repair}.
 \end{itemize}
 
+\begin{remark}[Measured: the offsets increased fragmentation before repair removed it]
+\label{rem:shifts-fragment}
+Proposition~\ref{prop:nested} is comparative statics in a \emph{single} coordinate:
+it fixes $\psi_{-k}$. The algorithm moves all $N$ offsets jointly, so neither the
+trajectory nor the net change from the source labelling to the shifted labelling is
+nested, and no conclusion about connectivity follows.
+
+The recorded data confirm this concretely. In the $N=300$ run whose figures appear
+in \S\ref{sec:measured} (\code{run\_20260806\_123326}), the two fragmented cells go
+from \textbf{2 components each} in the source labelling to \textbf{4 components
+each} after the dual shifts, and cell 290's largest stray grows from $0.0032$ to
+$0.0183$ --- from below to well above the $1\%$-of-$\Atgt$ reporting threshold.
+The per-cell fragmented \emph{count} is unchanged at 2, which is why the summary
+figures do not show it. Repair then removes all of it.
+
+So the honest statement is: the offsets correct area, they can worsen connectivity
+en route, and the repair stage is not a tidying-up step but a necessary component.
+An earlier draft asserted the opposite from Proposition~\ref{prop:nested} alone,
+without consulting the metadata of the very run it was quoting.
+\end{remark}
+
 Contrast this with enforcing balance inside the flow. There the correction reaches
 the field through the constraint projection, which is nonlocal
 (\S\ref{sec:artifact2}); measured outcomes were a net regression in both attempts
 (\codefile{docs/experiments/04-territory-aware-highn-validation/},
 \codefile{docs/experiments/05-soft-area-constraint/}).
 
-\subsection{The granularity floor is a theorem, not an observation}
+\subsection{Exact balance is generically unattainable; the vertex mass is a scale, not a floor}
 
 It is tempting to assert that \eqref{eq:lp} has an integral optimum because
 transportation problems do. That reasoning is unavailable here.
@@ -441,23 +492,42 @@ $S \subseteq \{1,\dots,V\}$ satisfies $\sum_{i \in S} v_i = \Atgt$ exactly, no
 integral feasible point exists at all, and every vertex of the polytope splits at
 least one vertex's mass between cells. A basic feasible solution of a
 transportation problem with $V$ sources and $N$ sinks has at most $V + N - 1$
-nonzeros, so at most $N-1$ vertices are split.
+nonzeros, hence at most $N-1$ split vertices.
 \end{prop}
 
 Consequently the exact optimum of \eqref{eq:lp} is in general \emph{fractional},
-and the readout \eqref{eq:shifted} is a rounding of it. The residue is bounded by
-the mass of the split vertices, which yields the floor
+the readout \eqref{eq:shifted} is a rounding of it, and rounding the $\le N-1$
+split vertices perturbs the affected cells by at most $\max_i v_i$ each. Since
+exact subset-sum coincidences do not occur for generic masses, it follows that
 \begin{equation}
-  \min_{\psi} \; \max_k \frac{\big| T_k(\psi) - \Atgt \big|}{\Atgt}
-  \;\ge\; \text{(generically)} \;\; \frac{\max_i v_i}{\Atgt}
-  \;\approx\; \frac{N}{V} \cdot \frac{\max_i v_i}{\bar v} ,
+  \min_{\text{hard assignments}} \; \max_k \big| T_k - \Atgt \big| \;>\; 0 .
   \label{eq:granularity}
 \end{equation}
-where $\bar v = |\Sigma|/V$. \textbf{A vertex is indivisible, so no assignment
-method whatever can do better.} This is why acceptance thresholds in this project
-are stated as multiples of $\max_i v_i / \Atgt$ rather than as absolute
-percentages: a bar below \eqref{eq:granularity} is not demanding, it is
-impossible.
+
+\begin{remark}[What this does \emph{not} say --- a corrected claim]
+\label{rem:floor-correction}
+An earlier version of this document asserted the stronger statement
+$\min \max_k |T_k - \Atgt|/\Atgt \ge \max_i v_i / \Atgt$, and called it a theorem
+on the strength of Proposition~\ref{prop:integrality}. \textbf{That is a
+non-sequitur and it is false.} Rounding a split vertex costs \emph{at most}
+$\max_i v_i$ --- an upper bound on the damage --- which says nothing about how
+small the best achievable deviation is. A counterexample settles it: take $V=7$,
+$N=2$, masses $(4,1,1,1,1,1,1)$ perturbed generically so that no exact subset sum
+exists, so $\Atgt = 5$ and $\max_i v_i/\Atgt = 80\%$; the assignment placing the
+heavy vertex with one light vertex against the remaining five achieves a worst
+deviation of $3.4\times 10^{-6}\%$, smaller than the claimed ``floor'' by seven
+orders of magnitude. The same failure occurs in the near-uniform regime of the
+actual meshes, where the masses vary by less than a factor of two and
+count-quantization alone admits deviations well below $\max_i v_i/\Atgt$.
+
+What survives, and what the project actually uses, is weaker and still useful:
+$\max_i v_i / \Atgt$ is the natural \emph{quantum} of the problem --- a single
+vertex is indivisible, so balance is adjusted in steps of that size --- and it is
+therefore a sensible \emph{scale} against which to state acceptance bars. It is a
+calibration convention, not a bound. \emph{What the shipped subgradient method
+attains in practice is an empirical question, not a consequence of
+Proposition~\ref{prop:integrality}.}
+\end{remark}
 
 \begin{remark}[Measured values]
 $\max_i v_i / \Atgt$ is $1.011\%$ at $V=47{,}488$, $N=300$; $0.421\%$ at
@@ -473,9 +543,12 @@ The offsets control area but, by the second bullet of \S\ref{sec:locality}, not
 connectivity. A second pass restores it. It operates on labels only.
 
 \paragraph{Stage 1 --- island absorption.} For each cell, compute the connected
-components of its territory in the mesh edge graph. Every non-largest component
-whose area exceeds a fixed fraction of $\Atgt$ is relabelled to the neighbouring
-cell with which it shares the longest boundary. This step is unconditionally safe:
+components of its territory in the mesh edge graph. \emph{Every} non-largest
+component --- regardless of size --- is relabelled to the neighbouring cell with
+which it shares the longest boundary. (The \code{fragment\_rel\_threshold}
+parameter governs only what the validity \emph{gates} report as a genuine stray;
+absorption itself applies no threshold, and in the $N=300$ run it absorbed six
+components, two of them below that reporting threshold.) This step is unconditionally safe:
 a component adjacent to cell $c$ can always be merged into $c$ without
 disconnecting $c$, since the merged set is connected through the shared boundary.
 On exit every cell is connected (or empty, which is reported).
@@ -488,15 +561,23 @@ receiver $r$ is admitted only if
   T_d - T_r \;>\; v_i ,
   \label{eq:improving}
 \end{equation}
-which guarantees that the transfer strictly reduces $|T_d - \Atgt| + |T_r - \Atgt|$
-rather than overshooting, and only if $\Omega_d \setminus \{i\}$ remains connected
+which guarantees that the transfer strictly reduces the \emph{quadratic}
+imbalance $\sum_k (T_k - \Atgt)^2$, by $2 v_i (T_d - T_r - v_i) > 0$. (It does
+\emph{not} guarantee a strict decrease of $|T_d - \Atgt| + |T_r - \Atgt|$: with
+$\Atgt = 10$, $T_d = 10$, $T_r = 4$, $v_i = 5$ the move is admitted and that sum
+is unchanged.) The move is taken only if $\Omega_d \setminus \{i\}$ remains connected
 --- an exact articulation test, cheap because it is local to one cell. Candidates
 are ranked by the score margin $s_{ir} - s_{id}$, so the least costly transfers
 are taken first.
 
 \begin{remark}[What is and is not guaranteed]
-Both invariants --- every cell connected, and no admissible improving move
-remaining --- hold on exit \emph{by construction}. What is \textbf{not}
+Connectivity holds on exit unconditionally, since every move is gated by the
+articulation test. The second invariant --- no admissible improving move remaining
+--- holds \emph{unless the sweep cap was reached}, which the implementation
+reports as \code{hit\_sweep\_cap} and which has occurred in practice. Absent the
+cap, termination is guaranteed: each move strictly decreases
+$\sum_k (T_k - \Atgt)^2$, the label space is finite, so no state can repeat. What
+is \textbf{not}
 guaranteed is that the exit state attains the granularity floor
 \eqref{eq:granularity}: stage 2 is a greedy local search over single-vertex moves,
 and a configuration can be locally optimal without being globally balanced,
@@ -555,6 +636,7 @@ readings; that is not a systematic review, and the claim is phrased accordingly.
 \end{remark}
 
 \section{Measured effect}
+\label{sec:measured}
 
 Recorded here for completeness; the study that measures them belongs in
 \codefile{docs/experiments/}, which does not yet contain one for this stage.
@@ -574,8 +656,10 @@ wall time & --- & $\approx 17$\,s & \\
 \end{center}
 
 The $+1.88\%$ boundary cost is the price of the correction: territory is moved to
-meet the area target, and moved territory has a longer border. Phase~2 subsequently
-recovers most of it.
+meet the area target, and moved territory has a longer border. It is \emph{expected}
+that Phase~2 recovers most of it, but this is not measured and cannot be with the
+data available: the uncorrected source labelling fails validity and cannot be fed
+to Phase~2, so no counterfactual exists.
 
 \section*{Summary table}
 
@@ -591,7 +675,7 @@ Disconnection admissible & derived & \S\ref{sec:disc-possible} & --- \\
 Disconnection \emph{mechanism} & \textbf{hypothesis, untraced} & \S\ref{sec:artifact2} & --- \\
 Dual \eqref{eq:dual}, subgradient \eqref{eq:subgrad} & derived & \S\ref{sec:correction} & \code{solve\_dual\_offsets} \\
 Nested growth (locality) & derived & \S\ref{sec:locality} & --- \\
-Granularity floor \eqref{eq:granularity} & derived from non-integrality & \S\ref{sec:correction} & \code{vertex\_granularity} \\
+Exact balance unattainable \eqref{eq:granularity} & derived; the vertex mass is a \emph{scale}, \textbf{not} a floor & \S\ref{sec:correction} & \code{vertex\_granularity} (in \codefile{arm\_harness.py}) \\
 Island absorption & derived, safe & \S\ref{sec:repair} & \code{reassign\_islands} \\
 Boundary transfer & greedy; invariants only & \S\ref{sec:repair} & \code{rebalance\_boundaries} \\
 \bottomrule
