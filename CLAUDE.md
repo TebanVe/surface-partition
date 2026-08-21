@@ -305,7 +305,9 @@ docs/math/
 ├── 04-phase1-timing-profile/   ← empirical Phase 1 PGD timing profile (projection bottleneck)
 ├── 05-phase1-nregion-scaling/  ← empirical wall-time scaling with number of regions
 ├── 06-phase1-energy-discretization/  ← Phase 1 Γ-convergence energy: Dirichlet term, corrected double well (q=u(1-u)), Modica–Mortola limit, crispness penalty
-└── 07-phase1-wta-balance/  ← Phase 1 winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration. **NOT ADOPTED** — the term was implemented, measured, and removed (see "Territory-Aware Relaxation" below); the derivation is kept so the rejection is checkable
+├ 07-phase1-wta-balance/  ← Phase 1 winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration. **NOT ADOPTED** — the term was implemented, measured, and removed (see "Territory-Aware Relaxation" below); the derivation is kept so the rejection is checkable
+├── 08-dual-newton-projection/  ← the Phase 1 constraint-projection QP and its concave dual
+└── 09-balanced-readout/  ← **the readout correction that is actually shipped.** Exact territory–mass identity `T_k − Ā = gain_k − lost_k` (both terms supported only on the diffuse band); band fraction `f_b ~ √(N/V)`, so the error is governed by **verts-per-cell alone**; why disconnection is *admissible* (argmax super-level sets need not be connected); the transportation-LP dual whose subgradient **is** the implemented ψ update; nested monotone growth = the locality property, with what it does *not* give; and the granularity floor derived from **non-integrality** (real lumped masses ⇒ the LP optimum is fractional, splitting ≤ N−1 vertices). Marks the worst-of-N `√(2 ln N)` argument as a **model** and the disconnection *mechanism* as an **untraced hypothesis**. Also corrects the repo's "semi-discrete OT" wording: the problem is discrete-to-discrete; semi-discrete is its continuum limit
 ```
 
 Each `NN-slug/` directory holds `main.tex` and the compiled `main.pdf`.
