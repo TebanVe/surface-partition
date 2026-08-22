@@ -52,12 +52,54 @@ $\Gamma$-limit is the total interface length. Equal areas are imposed as
 constraints on the integrals of those densities.
 
 To hand a partition downstream one must convert the densities into a definite
-assignment of each mesh vertex to one cell. The natural choice, and the one used
-throughout this project, is pointwise \emph{winner-take-all}: each vertex joins
-whichever cell has the largest density there. We refer to this conversion step as
-the \emph{readout}, by analogy with instrumentation, where the internal state of a
+assignment of each mesh vertex to one cell. This step is \textbf{prescribed by the
+source paper itself}, whose equation~(5--1) defines
+\[
+  \phi_i(x) \;=\;
+  \begin{cases}
+    1 & \text{if } u_i(x) \ge \max_{j \neq i} u_j(x),\\
+    0 & \text{otherwise,}
+  \end{cases}
+\]
+i.e.\ pointwise \emph{winner-take-all}. We refer to this conversion as the
+\emph{readout}, by analogy with instrumentation, where the internal state of a
 device and the value it reports are distinct objects and the conversion between
 them is a separate source of error.
+
+\begin{remark}[What the source paper does and does not say about its own readout]
+\label{rem:what-paper-says}
+Read directly (\codefile{docs/papers/Partitions of Minimal Length on Manifolds.pdf}),
+\cite{bogosel2017partitions} \emph{does} discuss the readout and names two
+difficulties with it: a small void around each triple point, ``included in one of
+the triangles of the mesh, and can be dealt with''; and contours that ``pass
+through the middle of the edges'', producing zigzagged boundaries ``whose length is
+significantly larger than the optimal total perimeter''. The second is the stated
+motivation for the direct constrained optimization that follows --- our Phase~2 ---
+which re-imposes equal area \emph{on the discrete cells}.
+
+\textbf{Neither named difficulty is the one analysed here.} The paper's reported
+``Area tol.'' figures, $2$--$5\times10^{-7}$, are the residual of the
+\emph{continuous} constraint $\langle v, \phi_i\rangle = A/n$ --- the same
+constraint we use --- and not the deviation of the \emph{extracted} territory. That
+latter quantity is what \eqref{eq:gap} below computes, and it does not appear in
+the paper.
+
+\textbf{The reason is scale, and it is entirely reasonable.} The paper demonstrates
+$n \in \{2,\dots,24,32\}$ on the sphere, $n \in \{2,4,6\}$ on the double torus, and
+--- on the torus with exactly our parameters $R=1$, $r=0.6$ --- $n \in [2,11]$. This
+project works at $N = 100$ to $400$, i.e.\ \textbf{roughly $10$ to $36\times$ beyond
+the largest case the method was demonstrated on for this surface.} By
+\eqref{eq:bandscaling} the readout error grows like $\sqrt{N/V}$, so at $n \le 11$
+it is small enough that the subsequent constrained optimization absorbs it, and the
+question never arises. The contribution here is therefore a \emph{scaling} result,
+not the discovery of an oversight.
+
+One further observation, recorded neutrally: the paper notes that a cell's discrete
+contour ``may have one or more connected components''. That is a statement about the
+contour data structure accommodating several loops, not an analysis of cells
+fragmenting as a failure mode, and it should not be read as anticipating
+\S\ref{sec:artifact2}.
+\end{remark}
 
 The central observation of this document is that the constrained quantity and the
 delivered quantity are \emph{different functionals of the same field}, and that
@@ -69,8 +111,9 @@ fixed mesh resolution.
 \begin{remark}
 This is a statement about the readout at finite $\varepsilon$ and finite mesh. The
 $\Gamma$-convergence result concerns the limit of the \emph{energy} and is not in
-question. Nothing here contradicts \cite{bogosel2017partitions}; the readout is a
-practical choice whose error term had not been quantified.
+question. Nothing here contradicts \cite{bogosel2017partitions}: its readout is
+well suited to the range it was demonstrated on, and what follows quantifies an
+error term that only becomes binding an order of magnitude beyond that range.
 \end{remark}
 
 Related documents: \codefile{docs/math/06-phase1-energy-discretization/} derives

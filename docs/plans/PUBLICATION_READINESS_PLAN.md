@@ -46,6 +46,16 @@ The defensible claim is narrower, more precise, and accuses nobody:
 > finite-ε, finite-mesh minimizer is an equal-area partition. At finite ε these
 > two objects diverge, and the divergence grows with N.
 
+⚠ **Sharpened 2026-08-21 after reading the source paper directly.** The readout is
+**not** an unexamined choice of ours — it is the paper's own equation (5–1), and the
+paper *does* discuss it, naming a triple-point void and zigzag contour length as its
+difficulties. Its reported "Area tol." of 2–5×10⁻⁷ is the residual of the
+*continuous* constraint, not of the extracted territory. **The reason our artifacts
+do not appear there is range:** the method is demonstrated at **n ∈ [2, 11] on the
+torus with exactly our R=1, r=0.6**, and n ≤ 32 on the sphere. We work at N = 100–400
+— **10–36× beyond it**. So the honest claim is a *scaling* result, not an oversight,
+and any manuscript must say "beyond the demonstrated range", never "unnoticed".
+
 The divergence is exact, not statistical:
 
 ```
