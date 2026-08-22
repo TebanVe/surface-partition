@@ -335,14 +335,17 @@ transport problem. Strictly it is \emph{discrete-to-discrete}: $V$ weighted poin
 to $N$ cells. The semi-discrete problem --- a continuous source measure
 transported to $N$ atoms, in the sense of
 \cite{aurenhammer1998minkowski, merigot2011multiscale, kitagawa2019convergence} ---
-is its continuum limit as the mesh refines. The offsets derived below are the
+is its continuum limit as the mesh refines; see
+\cite[\S5]{peyre2019computational} for the distinction. The offsets derived below are the
 discrete analogue of the power weights in that literature.
 \end{remark}
 
 \subsection{The dual, and where the offsets come from}
 
 Introduce multipliers $\varphi_i$ for the row constraints and $\psi_k$ for the
-column constraints. Stationarity of the Lagrangian in $x_{ik}$ gives
+column constraints; this is Kantorovich duality for a finite transportation
+problem \cite{villani2003topics}, and the construction and its solvers are set out
+in \cite{peyre2019computational}. Stationarity of the Lagrangian in $x_{ik}$ gives
 $v_i s_{ik} - \varphi_i - v_i \psi_k \le 0$, with equality wherever $x_{ik} > 0$,
 so $\varphi_i = v_i \max_k (s_{ik} - \psi_k)$ and the dual is
 \begin{equation}
@@ -485,14 +488,15 @@ transportation problems do. That reasoning is unavailable here.
 
 \begin{prop}[Non-integrality]
 \label{prop:integrality}
-The classical integrality theorem for the transportation polytope requires
-integer supplies and demands. In \eqref{eq:lp} the supplies are the real lumped
+The classical integrality theorem for the transportation polytope
+\cite[Ch.~9]{ahuja1993network} requires integer supplies and demands. In \eqref{eq:lp} the supplies are the real lumped
 masses $v_i$ and the demands are $\Atgt = |\Sigma|/N$. Unless some subset
 $S \subseteq \{1,\dots,V\}$ satisfies $\sum_{i \in S} v_i = \Atgt$ exactly, no
 integral feasible point exists at all, and every vertex of the polytope splits at
 least one vertex's mass between cells. A basic feasible solution of a
-transportation problem with $V$ sources and $N$ sinks has at most $V + N - 1$
-nonzeros, hence at most $N-1$ split vertices.
+transportation problem with $V$ sources and $N$ sinks corresponds to a spanning
+forest of the bipartite graph and so has at most $V + N - 1$ nonzeros
+\cite[Ch.~11]{ahuja1993network}, hence at most $N-1$ split vertices.
 \end{prop}
 
 Consequently the exact optimum of \eqref{eq:lp} is in general \emph{fractional},
