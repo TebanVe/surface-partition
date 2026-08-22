@@ -252,6 +252,7 @@ testing/
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/                       # (selected — see the directory for the full set)
+├── torus_500part_mbo.yaml        # N=500 via approach B, EXPLORATORY. Deliberately the SAME 5-level ladder as N=400 (finest 348×328, V=114,144), so the fixed-mesh √N check applies: N=400's 368.6603 predicts **412.14**. 228 v/cell, granularity 0.7009% ⇒ bar 1.4017% — better resolved than the accepted N=300 deliverable. τ cap binds on levels 0–1 (as at N=400); the finest level's freeze margin is 1.109, *more* than the N=400 run that worked (1.049) — a 6th level would drop it to 1.022, which is why it stops at 5. Phase 1 ≈ 20 min; Phase 2 ≈ 2.5–3 h and is the long pole
 ├── torus_400part_mbo.yaml        # N=400 via approach B, EXPLORATORY: no PGD baseline exists at N=400, so it runs in --config mode with no mesh-match assertion and no scored perimeter. Note the tau over-merge cap binds on levels 0 AND 1 here (one level at N=300, none at N=100) because cells are smaller relative to the coarse mesh
 ├── torus_100part_coarse_seeded.yaml      # ★ THE representative config: N=100, λ=5.1, seed 84172851, seeded, 5 levels (finest 348×328). Produced the validated deliverable run_20260709_081548 (all 3 gates pass, worst cell 0.78%, perimeter 185.2546). Phase 1 ≈ 13.4 h
 ├── torus_100part_coarse_seeded_3lvl.yaml # ★ Fast variant of the above for smoke tests: same λ/seed, 3 levels (finest 224×212)

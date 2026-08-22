@@ -1,0 +1,160 @@
+# ============================================================================
+# N=500 via APPROACH B (auction-dynamics MBO) -- EXPLORATORY.
+#
+# There is NO PGD baseline at N=500, and none is possible: at the SAME finest
+# mesh used here (V=114,144), PGD needed 206,344 s at N=300 and still failed two
+# of the three validity gates (3 imbalanced / worst 24.81%, 2 fragmented). So
+# this runs in the driver's --config mode -- the mesh-match assertion is skipped
+# and the perimeter is scored against nothing. The claim it can support is
+# existence-and-validity, never a margin. See docs/experiments/08 Result 5.
+#
+# LADDER -- deliberately the SAME 5-level ladder as the N=400 run, giving
+# 19 -> 50 -> 95 -> 154 -> 228 verts/cell. Two reasons to hold the mesh fixed
+# rather than add a level:
+#
+#   (1) It buys a free cross-check. On a fixed mesh total perimeter should scale
+#       as sqrt(N), so the measured N=400 result predicts this one:
+#           368.6603 * sqrt(500/400) = 412.14
+#       Landing near that is independent evidence the partition is sane. (The
+#       same check at N=400 against N=100 came in at -0.044%.)
+#   (2) Phase 2 is now the bottleneck -- 7,326 s against Phase 1's 920 s at
+#       N=400, i.e. 89% of end-to-end -- and its cost grows with the variable
+#       point count, which a finer mesh raises directly.
+#
+# GRANULARITY. The finest level's one-vertex floor at N=500 on 348x328 is
+# 0.7009%, so the area gate's harness-fault bar is 1.4017%. Expect
+# the final worst cell somewhere under that. Comparators, all measured:
+# N=400 at 285 v/cell finished at 0.7773% (bar 1.1214%); N=300 at 158 v/cell
+# finished at 1.4172% (bar 2.0216%). 228 v/cell is BETTER resolved than the
+# accepted N=300 deliverable, so this is a comfortable regime, not a marginal one.
+#
+# TAU -- computed for this exact ladder before shipping the config:
+#
+#   lvl      res        V  v/cell   cap  c_eff  sqrt(tau)/h_max  c_lo_hmax  ratio
+#     0   100x96     9600    19.2  True  2.073            1.138      1.067  1.067
+#     1  162x154    24948    49.9  True  3.346            1.841      1.357  1.357
+#     2  224x212    47488    95.0 False  4.000            2.202      1.595  1.381
+#     3  286x270    77220   154.4 False  4.000            2.204      1.802  1.223
+#     4  348x328   114144   228.3 False  4.000            2.204      1.987  1.109
+#
+# The over-merge cap binds on levels 0 and 1, exactly as at N=400 -- the rule
+# doing its job, not a misconfiguration. The freeze side is the one to watch:
+# `ratio` is sqrt(tau)/h_max against the LOCAL non-freeze threshold on the
+# coarse-triangle band (this mesh is 1.81x anisotropic, so h_mean flatters it).
+# It shrinks monotonically as the mesh refines, because sqrt(tau)/h_max is pinned
+# at c/anisotropy = 2.204 while the threshold sqrt(R_cell/h_max) grows. The
+# finest level here sits at 1.109 -- MORE margin than the N=400 run that worked,
+# whose finest level ran at 1.049 and took 30 steps. Adding a 6th level (410x386)
+# would drop it to 1.022 and is the reason this config stops at 5.
+#
+# COST. Diffusion is N back-substitutions per MBO step, so cost is ~linear in N
+# at fixed mesh: expect ~1.25x the N=400 ladder, so roughly 1,100-1,300 s
+# (~20 min) for Phase 1. Peak memory is the (V x N) score matrix, 457 MB at the
+# finest level, plus two transients of the same size in the assignment solver --
+# budget ~1.4 GB. Phase 2 is the long pole: extrapolating N=400's 7,326 s by the
+# variable-point count (~29,300 -> ~32,700) puts it at roughly 2.5-3 h.
+#
+# SMOKE TEST FIRST (about a minute):
+#   python scripts/run_mbo_arm.py --config parameters/torus_500part_mbo.yaml --levels 2
+# ============================================================================
+
+experiment:
+  name: torus-500-mbo-exploratory
+  surface: torus
+
+relaxation:
+  n_partitions: 500
+  seed: 84172851                     # same seed family as the validated configs
+  refinement_levels: 5               # 100x96 ... 348x328 (114,144 verts)
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config, i.e. so the same mesh ladder could be run
+  # --- through PGD later if a real N=500 baseline is ever wanted.
+  lambda_penalty: 14.0               # UNCALIBRATED at N=500 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                     # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# ============================================================================
+# MBO constants. These are the values every measured run used -- leaving this
+# block exactly as it is reproduces the N=100 / N=300 / N=400 results. It is here
+# so the config is a COMPLETE recipe (CLI flags still override it); it is not an
+# invitation to tune. Precedence: CLI > this block > MBOConfig defaults.
+#
+# WHEN WOULD YOU CHANGE THEM? Only on a specific measured symptom. As of
+# 2026-08-22, across 18 levels in 4 runs (N=100 x2, N=300, N=400), every level
+# reported converged=true, hit_max_iters=false and n_anneals=0, and the most
+# steps any level ever took was 66. Nothing below has ever needed changing.
+#
+#   tau_c: 4.0
+#     The time step is tau = min((tau_c*h_mean)^2, (rho*R_cell)^2). tau_c sets a
+#     TWO-SIDED window: too small and the scheme FREEZES (per-step motion falls
+#     under one edge length); too large and it OVER-MERGES (the diffused
+#     indicator spreads over the whole cell).
+#     Symptom that would justify raising it: the finest level converges in very
+#     few steps and the partition looks under-relaxed -- freezing.
+#     ** PREFER DROPPING A LADDER LEVEL INSTEAD. ** Freezing appears when the
+#     mesh is too fine for the cell size, and the freeze margin is a property of
+#     the ladder. Raising tau_c walks toward the over-merge side of the same
+#     window, and 4.0 is pre-registered: changing it breaks comparability with
+#     every measured run and obliges you to re-run the over-merge instrument.
+#
+#   rho: 1.0
+#     The over-merge ceiling: the cap sqrt(tau) <= rho*R_cell. 1.0 is the
+#     LOOSEST DEFENSIBLE value -- at sqrt(tau) = R_cell the diffused indicator
+#     has spread across the whole cell, so there is no headroom above it.
+#     Symptom that would justify LOWERING it (e.g. 0.7): the over-merge
+#     instrument actually detects something. It never has -- it returned a null
+#     across a 9x span of sqrt(tau)/R_cell (report 08, "the headline null").
+#     Judge over-merge ONLY with geometry (fragmented count, per-cell
+#     isoperimetric ratio, core loss). Assignment quality is blind to it: a
+#     balanced assignment hits its area target by construction, so a smeared
+#     non-local cell scores exactly as well as a compact one.
+#
+#   max_iters: 200
+#     Per-level MBO step cap. Pure safety net -- 3x headroom over the worst
+#     level ever observed (66, at N=300 level 2).
+#     Symptom that would justify raising it: a level reports
+#     hit_max_iters: true in arm_report.yaml. Has never happened.
+#
+# NOT settable here, on purpose: churn_tol, patience, anneal_factor,
+# max_anneals, early_stop_in_loop, finalize_full_budget, the NC3 probe. Those
+# define the MEASUREMENT PROTOCOL rather than the answer. early_stop_in_loop
+# especially -- early stopping once flattered a result into looking good
+# (report 07, artefact 5), so it is deliberately not config-reachable.
+# ============================================================================
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 settings. These ARE used: with --config, this same file is handed to
+# refine_perimeter.py as the campaign config unless --campaign overrides it.
+# Matched to the validated N=100/N=300 campaigns and the N=400 run, so the
+# refinement path is the one the harness was qualified on.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
