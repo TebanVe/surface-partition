@@ -29,9 +29,11 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Optional, Tuple
 
 import h5py
 import numpy as np
@@ -127,6 +129,45 @@ def spec_from_config(path: Path) -> dict:
     }
 
 
+def mbo_overrides(path: Optional[Path]) -> dict:
+    """The optional ``mbo:`` block of a config, or ``{}``.
+
+    Only the three constants that change the ANSWER are read here. The rest of
+    ``MBOConfig`` -- churn_tol, patience, the anneal schedule, the early-stop
+    flags, the NC3 probe -- defines the measurement PROTOCOL rather than the
+    result, and stays a source constant on purpose: ``early_stop_in_loop`` in
+    particular exists because early stopping once flattered a result (report 07,
+    artefact 5), and is not something a config should be able to switch off.
+    """
+    if path is None:
+        return {}
+    try:
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    blk = cfg.get("mbo") or {}
+    return {k: blk[k] for k in ("tau_c", "rho", "max_iters") if k in blk}
+
+
+def resolve_mbo_params(args, overrides: dict) -> Tuple[dict, dict]:
+    """CLI > config ``mbo:`` > MBOConfig default. Returns (values, provenance)."""
+    defaults = MBOConfig()
+    out, src = {}, {}
+    for key, cli in (
+        ("tau_c", args.tau_c),
+        ("rho", args.rho),
+        ("max_iters", args.max_iters),
+    ):
+        if cli is not None:
+            out[key], src[key] = cli, "cli"
+        elif key in overrides:
+            out[key], src[key] = overrides[key], "config"
+        else:
+            out[key], src[key] = getattr(defaults, key), "default"
+    return out, src
+
+
 def build_ladder(spec: dict):
     meshes = []
     nt, nphi = spec["n_theta"], spec["n_phi"]
@@ -157,9 +198,12 @@ def main():
         action="store_true",
         help="SF-a: balanced geodesic init on the finest mesh, no MBO",
     )
-    ap.add_argument("--tau-c", type=float, default=4.0)
-    ap.add_argument("--rho", type=float, default=1.0)
-    ap.add_argument("--max-iters", type=int, default=200)
+    # Default None, NOT the numeric default: the resolver below has to be able to
+    # tell "user typed --tau-c 4.0" from "user typed nothing", or a config `mbo:`
+    # block could never override anything. Defaults live in MBOConfig alone.
+    ap.add_argument("--tau-c", type=float, default=None)
+    ap.add_argument("--rho", type=float, default=None)
+    ap.add_argument("--max-iters", type=int, default=None)
     ap.add_argument("--nc3-k", type=float, default=None)
     ap.add_argument("--nc3-f-min", type=float, default=None)
     ap.add_argument("--phase2", action="store_true")
@@ -234,10 +278,19 @@ def main():
         )
         return 2
 
+    # The ladder comes from the anchor's experiment.yaml (or the config in
+    # exploratory mode); the MBO constants come from the same file's `mbo:` block
+    # if it has one, and from the CLI above that.
+    mbo_src_yaml = cfg_path if args.config else (anchor / "experiment.yaml")
+    mbo_vals, mbo_from = resolve_mbo_params(args, mbo_overrides(mbo_src_yaml))
+    print(
+        "mbo params    : "
+        + "  ".join(f"{k}={mbo_vals[k]} ({mbo_from[k]})" for k in mbo_vals)
+    )
     cfg = MBOConfig(
-        tau_c=args.tau_c,
-        rho=args.rho,
-        max_iters=args.max_iters,
+        tau_c=mbo_vals["tau_c"],
+        rho=mbo_vals["rho"],
+        max_iters=mbo_vals["max_iters"],
         seed=seed,
         nc3_K=args.nc3_k,
         nc3_f_min=args.nc3_f_min,
@@ -249,6 +302,14 @@ def main():
         Path(args.out_root) / f"arm_{mode}_{stamp}_npart{N}_V{arm_V}_seed{seed}{tag}"
     )
     (run_root / "solution").mkdir(parents=True, exist_ok=True)
+    # Snapshot the file that determined the ladder, exactly as a PGD run does.
+    # `parameters/*.yaml` DRIFTS -- CLAUDE.md records a case where it did and a
+    # mesh comparison was built on the drifted version -- and an arm run used to
+    # store only a path to it, so it was MORE exposed to that than a PGD run, not
+    # less. The resolved MBO constants are in arm_report.yaml's `config` block;
+    # this is the input-side recipe.
+    if mbo_src_yaml is not None and Path(mbo_src_yaml).is_file():
+        shutil.copyfile(mbo_src_yaml, run_root / "experiment.yaml")
 
     t0 = time.perf_counter()
     labels, reports, info = run_mbo_ladder(meshes, N, cfg, init_only=args.init_only)
@@ -277,6 +338,16 @@ def main():
     print(f"  boundary len : {lbl:.4f}   arm wall {wall:.0f}s")
 
     sol = str(run_root / "solution" / f"arm_{mode}_part{N}_V{arm_V}_seed{seed}.h5")
+    # var1/var2 are the FINAL level's torus resolution. export_partition.py reads
+    # them off the base solution, so an arm run that omits them is refinable and
+    # viewable but not exportable -- the schema has to be complete, not nearly so.
+    final_nt = spec["n_theta"] + (spec["levels"] - 1) * spec["d_theta"]
+    final_nphi = spec["n_phi"] + (spec["levels"] - 1) * spec["d_phi"]
+    if final_nt * final_nphi != arm_V:
+        raise AssertionError(
+            f"resolution bookkeeping disagrees with the mesh: "
+            f"{final_nt}x{final_nphi}={final_nt * final_nphi} != V={arm_V}"
+        )
     write_arm_solution(
         sol,
         labels,
@@ -285,9 +356,12 @@ def main():
         N,
         extra_attrs={
             "arm": mode,
-            "tau_c": args.tau_c,
-            "rho": args.rho,
+            "tau_c": cfg.tau_c,
+            "rho": cfg.rho,
             "seed": seed,
+            "var1": int(final_nt),
+            "var2": int(final_nphi),
+            "completed_levels": int(spec["levels"]),
             # HDF5 attrs cannot hold None, so exploratory runs record the config
             # they came from instead of an anchor that does not exist.
             "anchor_run": anchor.name if anchor is not None else "",

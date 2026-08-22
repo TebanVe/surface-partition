@@ -188,6 +188,14 @@ def write_arm_solution(
     ``refine_perimeter.py``, ``visualize_partition_fast.py``,
     ``export_partition.py``, ``testing/check_fragmentation.py`` -- read an arm's
     output with no new flags and no special-casing.
+
+    ``export_partition.py`` additionally requires ``var1``/``var2`` (the final
+    level's surface resolution) and a truthful ``completed_levels``. This
+    function cannot derive them from ``vertices``/``faces`` alone, so the caller
+    supplies them through ``extra_attrs`` -- which is applied last and therefore
+    overrides the defaults set here. ``scripts/run_mbo_arm.py`` does this and
+    self-checks the product against the mesh; an arm writer that omits them
+    produces a solution that refines and renders but will not export.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     dens = labels_to_one_hot(labels, n_partitions)

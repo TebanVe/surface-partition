@@ -104,6 +104,14 @@ python scripts/export_partition.py \
  --config parameters/torus_100part_coarse_seeded.yaml \
  --output results/<run>/partition/torus_partition_<run-id>.h5 --force-finalised
 
+# Export an APPROACH B (arm) run — same command, arm directory instead of run_*.
+# The N=400 deliverable was produced exactly this way:
+python scripts/export_partition.py \
+ --solution results/arm_mbo_20260820_133709_npart400_V114144_seed84172851/refinement/ipopt_btol0.001_lbfgs30_hess_bestiter_partial/iteration_019_20260820_154446.h5 \
+ --config parameters/torus_400part_mbo.yaml \
+ --output results/arm_mbo_20260820_133709_npart400_V114144_seed84172851/partition/torus_partition_n400_s84172851.h5 \
+ --force-finalised
+
 # Analysis (auto-includes relaxation_timing_profile.png when --profile was used)
 python scripts/optimization_analyzer.py --results-dir results/<run_dir>
 
@@ -208,13 +216,13 @@ scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
 ├── balanced_readout.py           # Bridge CLI: balanced, connected readout of a Phase 1 solution
-├── run_mbo_arm.py                # Phase A CLI: run approach B and score it through arm_harness. Reads the mesh ladder from the ANCHOR RUN's experiment.yaml (never `parameters/`) and asserts `arm_final_V == anchor_V` before scoring
+├── run_mbo_arm.py                # Phase A CLI: run approach B and score it through arm_harness. Reads the mesh ladder from the ANCHOR RUN's experiment.yaml (never `parameters/`) and asserts `arm_final_V == anchor_V` before scoring. Writes `var1`/`var2`/`completed_levels` into the arm solution (asserting `var1*var2 == V`) so the output is exportable, not merely refinable, and snapshots the ladder-setting config to `experiment.yaml` at the run root. Reads `tau_c`/`rho`/`max_iters` from an optional `mbo:` config block, CLI overriding
 ├── optimization_analyzer.py      # Per-run analysis and plotting
 ├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized, neighbour-distinct cell colors)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
 ├── visualize_type1_vertex_collapse.py  # Type 1 migration debugging viewer
 ├── visualize_type2_triple_point.py     # Type 2 migration debugging viewer
-├── export_partition.py           # Export finalised partition to link-list-torus schema. `source_run_id` is taken from the nearest `run_*` ancestor of the checkpoint, not from `run_dir` — a readout-derived checkpoint sits one level deeper (`readout/{campaign}/refinement/{campaign}/`), so the old `parent.parent.parent` landed on the readout campaign name. `run_dir` itself is unchanged, so the default `--output` path still nests with the refinement output
+├── export_partition.py           # Export finalised partition to link-list-torus schema. `source_run_id` is taken from the nearest `run_*` ancestor of the checkpoint, not from `run_dir` — a readout-derived checkpoint sits one level deeper (`readout/{campaign}/refinement/{campaign}/`), so the old `parent.parent.parent` landed on the readout campaign name. `run_dir` itself is unchanged, so the default `--output` path still nests with the refinement output. Works on **arm** (approach B) runs too: there is no `run_*` ancestor there, so `source_run_id` falls back to the `arm_*` directory name — correct, no flag needed — but the base solution must carry `var1`/`var2` (see the arm layout section)
 └── debug_archive/                # Archived diagnostic scripts
 testing/
 ├── README_testing.md                    # Test registry documentation
@@ -497,6 +505,82 @@ differentiating parameters via `build_campaign_name()`:
 
 Each campaign contains a `refinement.yaml` config snapshot for reproducibility
 and a `refinement.log` with full Phase 2 logs.
+
+### Arm Run Output Layout (approach B / MBO) — a SECOND, DIFFERENT genre
+
+`scripts/run_mbo_arm.py` does **not** write the `run_*` layout above. Approach B
+replaces Phase 1, so it has no PGD ladder to record and its runs look different:
+
+```
+results/arm_{mbo|init}_{timestamp}_npart{N}_V{V}_seed{S}/
+├── experiment.yaml               # Verbatim copy of the config that set the ladder
+├── arm_report.yaml               # THE results record — see below
+├── solution/
+│   └── arm_{mode}_part{N}_V{V}_seed{S}.h5   # Phase 1 SCHEMA (one-hot densities)
+├── refinement/
+│   └── {campaign}/               # ordinary Phase 2 campaign, run as a subprocess
+└── partition/                    # only after scripts/export_partition.py
+```
+
+Differences that matter when looking for a run or writing a tool:
+
+| | `run_*` (PGD) | `arm_*` (approach B) |
+|---|---|---|
+| directory name encodes | surface, mesh schedule, **λ**, seed | npart, **V** (final vertex count), seed |
+| | | **no λ** — MBO has no crispness penalty — and no surface |
+| reproduction recipe | `experiment.yaml` | `experiment.yaml` (**since 2026-08-22**; earlier arm runs stored only a *path*, leaving them more exposed to the `parameters/` drift gotcha than PGD runs) |
+| results record | `solution/metadata.yaml` | **`arm_report.yaml`** at the run root |
+| also present | `traces/`, `logs/`, `analysis/`, `readout/` | none of them |
+
+**The optional `mbo:` config block (since 2026-08-22).** Approach B has far fewer
+free parameters than PGD — there is no `lambda_penalty` to calibrate per N,
+because the time step is *derived*: `tau = min((tau_c*h_mean)^2, (rho*R_cell)^2)`,
+computed per level from the mesh and N, never set by anyone. Only the three
+constants that change **the answer** are config-reachable:
+
+```yaml
+mbo:
+  tau_c: 4.0        # freeze <-> over-merge window; see the tau gotcha
+  rho: 1.0          # over-merge ceiling; loosest defensible value
+  max_iters: 200    # per-level step cap; 3x headroom over the worst ever seen (66)
+```
+
+Precedence is **CLI > `mbo:` block > `MBOConfig` defaults**, and the driver prints
+which source each value came from. The block is optional and the defaults are the
+values every measured run used, so **a config without it is bit-identical** to the
+pre-2026-08-22 behaviour (verified: N=400 `--levels 1` reproduces 30 imbalanced /
+worst 7.6979% / 0 fragmented / boundary 215.8804 across the change).
+
+The rest of `MBOConfig` — `churn_tol`, `patience`, `anneal_factor`, `max_anneals`,
+`early_stop_in_loop`, `finalize_full_budget`, the NC3 probe — is **deliberately
+not config-reachable**: it defines the measurement *protocol* rather than the
+result. `early_stop_in_loop` especially, because early stopping once flattered a
+result into looking good (report 07, artefact 5). **As of 2026-08-22 none of the
+three has ever needed changing**: across 18 levels in 4 runs every level reported
+`converged: true`, `hit_max_iters: false`, `n_anneals: 0`, and the most steps any
+level took was 66. The when-to-change-them note lives in
+`parameters/torus_500part_mbo.yaml`. ⚠ Prefer **dropping a ladder level** over
+raising `tau_c` when a level freezes — freezing is a property of the mesh/cell
+ratio, and raising `tau_c` walks toward the over-merge side of the same two-sided
+window.
+
+`arm_report.yaml` is the single source for everything measured: the `config`
+block, `init` (quality bar, wall), per-`levels` entries with the full **τ
+diagnostics** (`cap_active`, `sqrt_tau_over_h_max`, `c_lo_hmax_local`, …),
+`gates_raw` (all three gates with `vacuous_for_arms` on dormant),
+`label_boundary_length`, and the `phase2` block with the whole perimeter
+trajectory, `best_iteration` and `censored`.
+
+**The solution is written in the Phase 1 schema on purpose** so
+`refine_perimeter.py`, `visualize_partition_fast.py`, `export_partition.py` and
+`testing/check_fragmentation.py` consume it unchanged. That schema includes
+`var1`/`var2` (final level resolution) and `completed_levels`, which
+`export_partition.py` requires; `run_mbo_arm.py` supplies them via `extra_attrs`
+and asserts `var1*var2 == V`. **Arm runs produced before 2026-08-22 lack them and
+will fail export with `KeyError: 'var1'`** — backfill the two attrs (and
+`completed_levels`) on the solution file rather than re-running. Since an `arm_*`
+directory has no `run_*` ancestor, `export_partition.py` falls back to the arm
+directory name for `source_run_id`, which is correct and needs no flag.
 
 Layout detection (`detect_run_layout()` in `src/pipeline/io.py`) supports
 both this structured layout and the legacy flat layout for backward
