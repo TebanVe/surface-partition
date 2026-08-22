@@ -89,8 +89,8 @@ with a pointwise reassignment, and interfaces move by approximate mean curvature
 Esedo\u{g}lu and Otto \cite{esedoglu2015threshold} placed the multiphase case on a
 variational footing with a Lyapunov functional that \(\Gamma\)-converges to a
 weighted perimeter --- the same limit this project's own energy targets
-\cite{bogosel2023partitions, modica1977esempio, modica1987gradient}. Jacobs, Kim
-and L\'eger \cite{jacobs2018auction} impose \emph{exact volume constraints} by
+\cite{bogosel2023partitions, modica1977esempio, modica1987gradient}. Jacobs, Merkurjev
+and Esedo\u{g}lu \cite{jacobs2018auction} impose \emph{exact volume constraints} by
 replacing the pointwise threshold with a balanced assignment solved by Bertsekas'
 auction algorithm \cite{bertsekas1988auction}. \textbf{None of this is invented
 here.}
@@ -348,7 +348,8 @@ objective, and (ii)~an \emph{exact} assignment. \textbf{Both fail here, for
 independent reasons.} The theorem's object is \(M A_\tau = M(M+\tau K)^{-1}M\),
 symmetric PSD; our step maximises \(\langle \chi', D y\rangle\) with
 \(D = \operatorname{diag}(v)\) \emph{lumped}, and \(D A_\tau\) is not symmetric.
-And Jacobs--Kim--L\'eger obtain a theorem because Bertsekas' auction is exact,
+And Jacobs, Merkurjev and Esedo\u{g}lu obtain a theorem because Bertsekas'
+auction is exact,
 whereas \code{solve\_dual\_offsets} is subgradient ascent returning its best
 iterate. \textbf{This is the price of a substitution made deliberately in Phase~0}
 --- where Sinkhorn \cite{cuturi2013sinkhorn} and auction were both measured and

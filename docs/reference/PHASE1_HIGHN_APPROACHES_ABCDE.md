@@ -108,12 +108,31 @@ relaxation retired above N≈200"* — was written before four arms failed to ma
 N=300 ladder cheaper and before D(iii) was measured. Every result since has
 pointed the same way.
 
+## ⚠ A citation error that originated in the archived proposal
+
+The proposal attributes auction dynamics to **"Jacobs–Kim–Léger"**. That is
+**wrong**. The paper — *Auction Dynamics: A Volume Constrained MBO Scheme*, J.
+Comput. Phys. **354** (2018) 288–310, doi 10.1016/j.jcp.2017.10.036 — is by
+**Matt Jacobs, Ekaterina Merkurjev and Selim Esedoğlu**. Verified 2026-08-21
+against dblp (`journals/jcphy/JacobsME18`) and ScienceDirect; volume, pages and
+year were correct all along.
+
+The archived proposal is **left verbatim**, because it is a record of what was
+said. But the error propagated from it into seven downstream documents — the two
+experiment reports, the B/C plan, this file, `CLAUDE.md`, and the arm's own module
+docstring — and survived roughly two weeks and six adversarial reviews before
+anyone checked an author list. Two things worth taking from that. Every review so
+far attacked *measurements*; none attacked *citations*. And the correct attribution
+is materially more informative: **Esedoğlu is an author of both the
+threshold-dynamics paper and the auction-dynamics paper**, so approach B is one
+group extending its own work, not two independent lineages meeting.
+
 ## What B and C actually are
 
 Both **replace Phase 1 outright** rather than adjusting it. Full mechanisms,
 costs, and falsifiers are in the archived original; the essentials:
 
-**B — auction-dynamics MBO** (Esedoğlu–Otto threshold energies; Jacobs–Kim–Léger,
+**B — auction-dynamics MBO** (Esedoğlu–Otto threshold energies; Jacobs–Merkurjev–Esedoğlu,
 JCP 2018, published for exactly this problem class). Iterate: (1) diffuse each
 indicator for time τ by solving `(M + τK) y_k = M χ_k`, one prefactorized sparse
 Cholesky per level; (2) reassign every vertex by *balanced* thresholding —

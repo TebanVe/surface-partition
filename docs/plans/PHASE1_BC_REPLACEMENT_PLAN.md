@@ -601,7 +601,7 @@ the pre-registered null. Four scored runs, all SUCCESS. **Three predictions miss
 (P1, P6, P8′) and one is untestable (P9)** — see the results sections below.
 
 Threshold dynamics (Esedoğlu–Otto) with volume constraints by balanced assignment
-(Jacobs–Kim–Léger, JCP 2018). **B descends the project's actual objective** — the
+(Jacobs–Merkurjev–Esedoğlu, JCP 2018). **B descends the project's actual objective** — the
 thresholding energy Γ-converges to perimeter — which is why the taxonomy ranks it
 2, above C at 4.
 
@@ -691,7 +691,7 @@ Esedoğlu–Otto monotonicity is a minorize–maximize argument needing (i) the 
 symmetric PSD form in the energy and the assignment objective, and (ii) an *exact*
 assignment. **Both fail here, for independent reasons.** The theorem's object is
 `M A_τ = M(M+τK)⁻¹M`, symmetric PSD; our step maximizes `⟨χ',Dy⟩` with `D = diag(v)`
-**lumped**, and `D A_τ` is not symmetric. And Jacobs–Kim–Léger get a theorem because
+**lumped**, and `D A_τ` is not symmetric. And Jacobs–Merkurjev–Esedoğlu get a theorem because
 Bertsekas' auction is *exact*, whereas `solve_dual_offsets` is subgradient ascent
 returning its best iterate. **This is the price of Phase 0's substitution**, made
 correctly (Sinkhorn and auction both lost to the incumbent on assignment quality) —

@@ -752,7 +752,7 @@ both B and PGD. Relevant to whether C is worth building.
 
 ⚠ **Do not use `E_τ` monotonicity as a gate.** The Esedoğlu–Otto theorem does not
 transfer: the step maximizes `⟨χ',Dy⟩` with **lumped** `D`, while the theorem's
-object `M A_τ` is the symmetric one, *and* Jacobs–Kim–Léger need an **exact**
+object `M A_τ` is the symmetric one, *and* Jacobs–Merkurjev–Esedoğlu need an **exact**
 auction where `solve_dual_offsets` is an inexact subgradient dual. Real `E_τ`
 increases are observed (4 of 96 active steps at N=300). What holds by construction,
 and what `testing/test_mbo_auction.py` G4 gates, is

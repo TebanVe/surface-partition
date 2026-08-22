@@ -13,7 +13,7 @@ readout can diverge from what was constrained, which is the gap
 
 Provenance: threshold dynamics is Merriman-Bence-Osher; the multiphase variational
 footing is Esedoglu-Otto; the volume-constrained "auction dynamics" variant is
-Jacobs-Kim-Leger (JCP 2018), and Hu-Liu-Wang 2024 (arXiv 2405.16040) apply
+Jacobs-Merkurjev-Esedoglu (JCP 2018), and Hu-Liu-Wang 2024 (arXiv 2405.16040) apply
 thresholding + auction to minimal-length partitions. **Every published
 implementation of this machinery convolves on a uniform Cartesian grid via FFT, on
 a flat domain, at small N, for Polya's *outer* problem.** This is the *inner*
@@ -304,7 +304,7 @@ def descent_slack(
        minorize-maximize step. Our assignment maximizes ``<chi', D y>`` with
        ``D = diag(v)`` LUMPED, and ``D A_tau`` is not symmetric. Tracking one form
        while maximizing the other is simply the wrong pairing.
-    2. Jacobs-Kim-Leger get a theorem because Bertsekas' auction solves the
+    2. Jacobs-Merkurjev-Esedoglu get a theorem because Bertsekas' auction solves the
        assignment EXACTLY. ``solve_dual_offsets`` is subgradient ascent on the
        dual and returns its best iterate, with a residual area error.
 
