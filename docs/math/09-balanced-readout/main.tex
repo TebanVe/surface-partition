@@ -355,6 +355,32 @@ work in \codefile{docs/plans/PUBLICATION\_READINESS\_PLAN.md}.
 \section{The corrected readout}
 \label{sec:correction}
 
+\subsection{The idea, before the algebra}
+
+\begin{tcolorbox}[colback=olive!4!white, colframe=olive!55!black,
+                  title={Intuition: one handicap per cell}, fontupper=\small]
+The failure of \S\ref{sec:artifact1} is a cell that is \emph{everywhere second
+place}. Its density is spread as a wide, low halo: the total is exactly right, but
+at no vertex is it the largest, so it wins almost nothing.
+
+The remedy is to stop comparing the raw densities. Give each cell a single number
+of its own --- a handicap --- added to its density \emph{everywhere}, and compare
+the adjusted values instead. Raise cell $k$'s handicap and it begins to win
+vertices it had been narrowly losing.
+
+The essential detail is the \emph{order} in which it wins them. The first vertices
+to flip are those where $k$ was losing by the smallest margin, and for a density
+that is largest near the cell's own core those are the vertices just outside the
+territory it already holds. The cell therefore grows outward from where it is
+already strong, rather than acquiring territory wherever the arithmetic happens to
+put it. That is the property this whole construction is chosen for; it is made
+precise in Proposition~\ref{prop:nested}.
+
+That leaves one question, which the rest of this section answers: \emph{how does
+one choose the $N$ handicaps so that every cell ends up with exactly its target
+area?}
+\end{tcolorbox}
+
 \subsection{The assignment problem}
 
 Fix any per-vertex score matrix $s_{ik}$; the shipped readout uses
@@ -372,6 +398,23 @@ subject to every cell attaining its target area:
 This is a transportation problem: supplies $v_i$ at vertices, demands $\Atgt$ at
 cells, and both marginals sum to $|\Sigma|$, so it is feasible.
 
+\begin{tcolorbox}[colback=olive!4!white, colframe=olive!55!black,
+                  title={Intuition: why this is a \emph{transport} problem},
+                  fontupper=\small]
+The classical transport problem is literally about moving goods: there are
+supplies in some places, demands in others, and a cost per unit moved from each
+supply to each demand; one seeks the cheapest matching. It dates to Monge and was
+put into its modern form by Kantorovich \cite{villani2003topics}.
+
+Here the \emph{supplies} are the mesh vertices, each carrying its piece of surface
+area $v_i$. The \emph{demands} are the $N$ cells, each requiring exactly $\Atgt$.
+The \emph{cost} of giving vertex $i$ to cell $k$ is how poor a fit that is, and
+with $s_{ik} = \log u_{ik}$ the cost $-s_{ik}$ is small exactly where cell $k$'s
+density is large. So ``assign every vertex somewhere, give every cell its target
+area, and prefer assignments the relaxation already likes'' is a transport
+problem, and nothing more exotic is needed to state it.
+\end{tcolorbox}
+
 \begin{remark}[Terminology]
 This project's prose has called \eqref{eq:lp} a \emph{semi-discrete} optimal
 transport problem. Strictly it is \emph{discrete-to-discrete}: $V$ weighted points
@@ -385,6 +428,43 @@ discrete analogue of the power weights in that literature.
 
 \subsection{The dual, and where the offsets come from}
 
+\begin{tcolorbox}[colback=olive!4!white, colframe=olive!55!black,
+                  title={Intuition: the dual is a pricing problem},
+                  fontupper=\small]
+Every minimisation of this kind has a partner problem --- its \emph{dual} --- that
+looks quite different but has the same answer. For transport, the dual is a
+question about \textbf{prices}, and that is where the intuition lives.
+
+Instead of planning the assignment centrally, let each cell post a
+\emph{subsidy}. Every vertex then independently takes whichever cell offers it the
+best deal: strongest density \emph{plus} that cell's subsidy. The dual problem is
+to \textbf{find the subsidies such that, when every vertex acts purely in its own
+interest, the resulting demand comes out exactly right} --- each cell receiving
+precisely $\Atgt$.
+
+Those subsidies are the handicaps of \S6.1, and $\psi$ below is exactly them. Two
+consequences are worth drawing out explicitly, because the algebra states them
+without remarking on them.
+
+\textbf{Why $N$ numbers are enough.} The dual has one unknown per \emph{cell},
+not one per vertex --- $N$ of them, whether the mesh carries ten thousand vertices
+or a hundred thousand. That is the structural reason a correction this small can
+fix the readout at all, and it is why the cost of the correction is seconds rather
+than comparable to the relaxation it repairs.
+
+\textbf{Why a naive iteration finds them.} $D$ below is convex: bowl-shaped, with
+no false bottoms to be trapped in. So the obvious rule --- raise the subsidy of any
+cell that came out too small, lower it for any that came out too large, repeat ---
+is not a heuristic that happens to work, but descent on that bowl. That is the
+content of Proposition~\ref{prop:subgrad}.
+
+The economic reading is not merely decorative. Adjusting prices until every
+bidder is satisfied and every item allocated is precisely Bertsekas' \emph{auction}
+algorithm \cite{bertsekas1988auction}, and the same idea drives the
+volume-constrained scheme of \cite{jacobs2018auction}. What follows is that idea
+in its convex-duality form.
+\end{tcolorbox}
+
 Introduce multipliers $\varphi_i$ for the row constraints and $\psi_k$ for the
 column constraints; this is Kantorovich duality for a finite transportation
 problem \cite{villani2003topics}, and the construction and its solvers are set out
@@ -397,7 +477,8 @@ so $\varphi_i = v_i \max_k (s_{ik} - \psi_k)$ and the dual is
   \label{eq:dual}
 \end{equation}
 $D$ is a sum of pointwise maxima of affine functions plus a linear term, hence
-\textbf{convex} and piecewise linear. Complementary slackness forces every vertex
+\textbf{convex} and piecewise linear --- the bowl of the preceding box, with flat
+facets and no local minimum that is not global. Complementary slackness forces every vertex
 onto a maximising cell, so an optimal assignment is
 \begin{equation}
   \omega_\psi(i) \;=\; \argmax_k \big( s_{ik} - \psi_k \big) .
@@ -542,8 +623,11 @@ forest of the bipartite graph and so has at most $V + N - 1$ nonzeros
 \cite[Ch.~11]{ahuja1993network}, hence at most $N-1$ split vertices.
 \end{prop}
 
-Consequently the exact optimum of \eqref{eq:lp} is in general \emph{fractional},
-the readout \eqref{eq:shifted} is a rounding of it, and rounding the $\le N-1$
+In plain terms: a vertex is indivisible --- one cannot give a cell 40\% of one ---
+so balance can only ever be adjusted in steps of about one vertex's area, and a
+target that falls between two steps cannot be hit exactly. Consequently the exact
+optimum of \eqref{eq:lp} is in general \emph{fractional}, the readout
+\eqref{eq:shifted} is a rounding of it, and rounding the $\le N-1$
 split vertices perturbs the affected cells by at most $\max_i v_i$ each. Since
 exact subset-sum coincidences do not occur for generic masses, it follows that
 \begin{equation}
@@ -587,7 +671,11 @@ cell --- for the same reason \eqref{eq:bandscaling} does.
 \label{sec:repair}
 
 The offsets control area but, by the second bullet of \S\ref{sec:locality}, not
-connectivity. A second pass restores it. It operates on labels only.
+connectivity: a single number per cell can say \emph{how much} that cell wins, and
+nothing at all about whether what it wins is in one piece. Nor is this hypothetical
+--- Remark~\ref{rem:shifts-fragment} records the offsets doubling the component
+count of two cells on the run whose figures appear in \S\ref{sec:measured}. A
+second pass therefore restores connectivity. It operates on labels only.
 
 \paragraph{Stage 1 --- island absorption.} For each cell, compute the connected
 components of its territory in the mesh edge graph. \emph{Every} non-largest
