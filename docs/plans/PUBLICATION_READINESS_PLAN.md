@@ -1,8 +1,9 @@
 # Publication Readiness — the high-N partition pipeline as an independent project
 
 **Status:** Mostly Not Started. This document is an **assessment and a proposed
-programme**. One item has since been done: **Phase 3's N=400 point** (run
-2026-08-20, re-verified and exported 2026-08-22). Everything else — S1/S2/S3, the
+programme**. Two items have since been done: **Phase 3's N=400 and N=500 points** (run
+2026-08-20 and 2026-08-22, both verified and exported), and **Phase 4 is
+partially measured — its original premise turned out to be wrong.** Everything else — S1/S2/S3, the
 literature search, N=500/1000, the Phase 2 profile, the breadth work — is
 unstarted. Per-phase status lines below are authoritative.
 **Date:** 2026-08-20.
@@ -98,7 +99,9 @@ Each item is measured and reproducible in this repository.
 | B produces a valid N=400 partition in ~15 min | 0 fragmented, worst area 0.7773% (bar 1.1214%), perimeter 368.660323; re-verified 2026-08-22 with `check_fragmentation.py` (all three gates) and at the Phase 2 best iterate (max equal-area violation **8.18e-07**, 400 cells, 29,287 VPs) |
 | At **matched mesh** V=114,144, PGD is both slower and invalid with *fewer* cells | PGD N=300: 206,344 s, 3 imbalanced (worst 24.81%), 2 fragmented → invalid raw. B N=400: 920 s, all gates pass. **224×** |
 | The N=400 deliverable is exported and finalised | `arm_mbo_20260820_133709.../partition/torus_partition_n400_s84172851.h5`, `finalised=True`, iterate 19 |
-| The N=400 partition obeys √N scaling | on a fixed mesh, N=100 × 2 = 368.8235 vs measured 368.6603 — **0.044%** after Phase 2, 0.111% before |
+| √N scaling holds across **three** N on a fixed mesh | N=100→400 −0.044%, **N=400→500 −0.015%**, N=100→500 −0.059%, all after Phase 2. The N=500 value was predicted in `parameters/torus_500part_mbo.yaml` *before* the run |
+| B produces a valid N=500 partition in 22 min | all three gates on raw labels; 0 fragmented; worst cell 1.0993% (bar 1.4017%); Phase 2 **412.1138** at iterate 10/20, max equal-area violation 1.10e-06; exported and finalised |
+| Phase 2's cost is **not** the solver | N=500: IPOPT 459 s of an 8,829 s campaign = **5.2%**; 201 solver iters per topology iteration, i.e. capped every time |
 | The WTA gap has an exact accounting identity | `docs/math/07-phase1-wta-balance/`, Prop. 1 |
 | Where the N=300 damage happens | levels 0–1 do no work (L0 flips *zero* labels); L2 does all of it, reaching 36.15%; splits are born mid-L2 while imbalance falls 234 → 10 |
 
@@ -208,9 +211,9 @@ this under different vocabulary? **Phrase any result as "we are not aware of",
 never "first", and name the corpus and how it was enumerated.**
 
 ## Phase 3 — Scaling to N = 500 and N = 1000
-**Status:** **N=400 done** (exploratory `--config` mode, valid, exported,
-2026-08-20/22); N=500 and N=1000 Not Started. This is the practical headline and
-the original goal.
+**Status:** **N=400 and N=500 done** (exploratory `--config` mode, both valid,
+both exported and finalised, 2026-08-20/22); **N=1000 Not Started.** This is the
+practical headline and the original goal.
 
 A curve of wall time and validity versus N, out to where PGD cannot follow, is a
 stronger argument than any perimeter margin. Use the exploratory `--config` mode
@@ -224,18 +227,46 @@ vertex-granularity floor rising (0.56% at N=400/V=114,144) until the finest mesh
 must grow; and peak memory, which is the dense `V × N` score matrix plus two
 same-size transients inside the assignment solver (~1.5 GB at N=400).
 
-## Phase 4 — Phase 2 is becoming the bottleneck
-**Status:** Not Started. Likely the most consequential engineering finding.
+## Phase 4 — Phase 2 is the bottleneck, and the solver is not why
+**Status:** **Partially measured — and this phase's original premise is REFUTED.**
+The N=500 Phase 2 campaign was profiled (2026-08-22).
 
 Measured Phase 2 wall: ~33 min at N=100 (≈14,900 variable points), ~50 min at
 N=300, **122 min at N=400** (29,244 variable points). It scales worse than
 linearly in variable points, and B has already made Phase 1 only **11%** of
 end-to-end cost at N=400.
 
-At N=1000 this plausibly dominates completely. Before investing further in Phase 1,
-profile Phase 2 at N=400 (`--profile`) and decide whether the next target is the
-IPOPT/exact-Hessian path rather than the relaxation. **This reverses the project's
+At N=1000 this plausibly dominates completely. **This reverses the project's
 standing assumption that Phase 1 is the expensive stage.**
+
+**What the profile actually showed, and it is not what this phase assumed.** This
+section used to say: profile Phase 2 and "decide whether the next target is the
+IPOPT/exact-Hessian path". Measured at N=500 (`timing_profile.yaml`, campaign
+`ipopt_btol0.001_lbfgs30_hess_bestiter_partial`):
+
+| | wall | share |
+|---|---|---|
+| whole Phase 2 campaign | **8,829 s** (2.45 h, from iterate timestamps) | 100% |
+| inside `optimizer.optimize()` | **459 s** | **5.2%** |
+| everything else | ~8,370 s | ~95% |
+
+IPOPT ran 4,023 solver iterations across the 20 topology iterations — **201 per
+topology iteration**, so it hits `max_opt_iter: 200` every time, and reaching that
+cap costs 23 s. **Optimising the solver can buy at most 5%.** The exact-Hessian
+path is the wrong target.
+
+⚠ **What is established is the solver's share, not the composition of the other
+95%.** The candidates are contour rebuild, Steiner setup, migration detection, and
+checkpoint export with its roundtrip verification — none of them measured. **The
+revised Phase 4 task is to decompose that remainder**, which needs instrumentation
+that does not currently exist (the profiler only wraps `optimize()`).
+
+⚠ **`timing_profile.yaml`'s `summary.total_wall_s` is NOT campaign wall** — it is
+the accumulated `optimize()` time, so it reads 459 s against the campaign's
+8,829 s, a **19× under-report**. Same class as the `run_time_seconds` trap in
+Phase 1 metadata (3.6×), which is already documented. Take campaign wall from
+iterate timestamps. Any prior reasoning that used this field as campaign wall
+should be re-checked.
 
 ## Phase 5 — Breadth of the evidence base
 **Status:** Not Started. Required for a paper, not for a decision.

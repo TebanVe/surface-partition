@@ -33,6 +33,7 @@ RUNS = {
     # recorded for its gates, cost and absolute perimeter only. It is deliberately
     # absent from every figure that plots a margin against a control.
     "n400_s84172851": "results/arm_mbo_20260820_133709_npart400_V114144_seed84172851",
+    "n500_s84172851": "results/arm_mbo_20260822_120646_npart500_V114144_seed84172851",
 }
 
 # Anchors, from the runs named in the report's provenance block.
