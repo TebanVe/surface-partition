@@ -29,6 +29,10 @@ RUNS = {
     "n100_s61803399": "results/arm_mbo_20260819_185131_npart100_V114144_seed61803399",
     "n300_s61803399": "results/arm_mbo_20260819_192659_npart300_V47488_seed61803399",
     "init_n100": "results/arm_init_20260819_181203_npart100_V114144_seed84172851",
+    # EXPLORATORY: no anchor exists at N=400 and none is planned, so this run is
+    # recorded for its gates, cost and absolute perimeter only. It is deliberately
+    # absent from every figure that plots a margin against a control.
+    "n400_s84172851": "results/arm_mbo_20260820_133709_npart400_V114144_seed84172851",
 }
 
 # Anchors, from the runs named in the report's provenance block.

@@ -593,7 +593,12 @@ Three things this settles, beyond "the instrument works":
 ## Phase A — B: auction-dynamics MBO
 
 *(named to avoid colliding with the project's own "Phase 1 / Phase 2")*
-**Status:** ✅ **COMPLETE — B succeeds on both anchors.** Built on
+**Status:** ✅ **COMPLETE — B succeeds on both anchors**, and has since been
+carried past the point where an anchor can exist: **N=400 (2026-08-20/22)** is
+valid on raw labels, exported and finalised, from 920 s — against PGD needing
+206,344 s on the *same* V=114,144 mesh at N=300 while failing two of three gates.
+Recorded in report 08 §Result 5 as existence-and-validity, with no perimeter
+margin claimed. Built on
 `feat/phase1-mbo-auction-dynamics` (`src/partition/mbo_auction.py`,
 `scripts/run_mbo_arm.py`, `testing/test_mbo_auction.py`,
 `scripts/score_mbo_arm.py`). G1–G8 pass; NC1/NC2/NC3-CAL/NC4 pass; NC5/NC5b return

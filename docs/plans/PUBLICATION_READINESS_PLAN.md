@@ -1,7 +1,10 @@
 # Publication Readiness — the high-N partition pipeline as an independent project
 
-**Status:** Not Started. This document is an **assessment and a proposed
-programme**; none of its studies has been run.
+**Status:** Mostly Not Started. This document is an **assessment and a proposed
+programme**. One item has since been done: **Phase 3's N=400 point** (run
+2026-08-20, re-verified and exported 2026-08-22). Everything else — S1/S2/S3, the
+literature search, N=500/1000, the Phase 2 profile, the breadth work — is
+unstarted. Per-phase status lines below are authoritative.
 **Date:** 2026-08-20.
 **Audience:** future agents/developers, and the author deciding whether this is a
 paper.
@@ -71,6 +74,15 @@ is the contribution.
 you are reporting a property of the *readout*, so you do not need PGD to have
 converged — which matters, because we cannot show that it did (see below).
 
+**And it disposes of the "where is your N=400 baseline?" objection.** Requiring a
+PGD anchor at every N asks the incumbent to do exactly what the new method exists
+because it cannot do. The absence of an N=400 anchor is not a hole in the
+evidence — it is the motivation, and it is measured: on the same mesh, one
+hundred cells *fewer*, PGD needed 224× the wall time and still failed two of the
+three validity gates. At N=400 the honest claim is existence and validity, which
+is stronger than a margin because nothing on the other side survives to compare
+against.
+
 ## What is ESTABLISHED
 
 Each item is measured and reproducible in this repository.
@@ -83,7 +95,9 @@ Each item is measured and reproducible in this repository.
 | B needs no readout and no repair stage | raw PGD at N=300 gives 10 imbalanced (worst 36.15%) + 2 fragmented and requires A+E; B requires nothing |
 | The win is not the initialisation | init-only (approach C's step 0) reaches 189.6470 vs B's 184.4118 — MBO contributes +2.761% |
 | The win is not seed noise | N=100 seed spread 0.136%, 3.3× smaller than the margin |
-| B produces a valid N=400 partition in ~15 min | 0 fragmented, worst area 0.7773% (bar 1.1214%), perimeter 368.660323 |
+| B produces a valid N=400 partition in ~15 min | 0 fragmented, worst area 0.7773% (bar 1.1214%), perimeter 368.660323; re-verified 2026-08-22 with `check_fragmentation.py` (all three gates) and at the Phase 2 best iterate (max equal-area violation **8.18e-07**, 400 cells, 29,287 VPs) |
+| At **matched mesh** V=114,144, PGD is both slower and invalid with *fewer* cells | PGD N=300: 206,344 s, 3 imbalanced (worst 24.81%), 2 fragmented → invalid raw. B N=400: 920 s, all gates pass. **224×** |
+| The N=400 deliverable is exported and finalised | `arm_mbo_20260820_133709.../partition/torus_partition_n400_s84172851.h5`, `finalised=True`, iterate 19 |
 | The N=400 partition obeys √N scaling | on a fixed mesh, N=100 × 2 = 368.8235 vs measured 368.6603 — **0.044%** after Phase 2, 0.111% before |
 | The WTA gap has an exact accounting identity | `docs/math/07-phase1-wta-balance/`, Prop. 1 |
 | Where the N=300 damage happens | levels 0–1 do no work (L0 flips *zero* labels); L2 does all of it, reaching 36.15%; splits are born mid-L2 while imbalance falls 234 → 10 |
@@ -127,7 +141,16 @@ Each item is measured and reproducible in this repository.
 3. **"B is 211–319× faster."** True only of the replaced stage. End-to-end it is
    ≈23× (N=100), ≈31× (N=300), ≈9× (N=400). Against the structure-trigger PGD
    variant the incumbent-best figure is ≈153×.
-4. **Anything comparative at N=400.** That run is exploratory and has no anchor.
+4. **A perimeter comparison at N=400.** No PGD anchor exists there, so no
+   margin may be quoted. ⚠ **This is narrower than the earlier wording**
+   ("anything comparative at N=400"), which was wrong: the *matched-mesh*
+   statement is legitimate and is not a perimeter comparison. At the identical
+   finest mesh V=114,144, PGD at **N=300** took 206,344 s and produced 3
+   imbalanced (worst 24.81%) + 2 fragmented cells — an invalid partition needing
+   the readout — while B at **N=400** took 920 s and passed all three gates
+   (worst 0.78%, 0 fragmented). Stating that is a claim about *validity and
+   cost*, both measured on both sides. What may not be said is anything of the
+   form "B's N=400 perimeter beats PGD's".
 5. **Novelty.** Our literature check was two PDFs (title pages, abstracts, keyword
    counts) plus the standing bibliography. That is **not** a literature review.
 
@@ -185,7 +208,9 @@ this under different vocabulary? **Phrase any result as "we are not aware of",
 never "first", and name the corpus and how it was enumerated.**
 
 ## Phase 3 — Scaling to N = 500 and N = 1000
-**Status:** Not Started. This is the practical headline and the original goal.
+**Status:** **N=400 done** (exploratory `--config` mode, valid, exported,
+2026-08-20/22); N=500 and N=1000 Not Started. This is the practical headline and
+the original goal.
 
 A curve of wall time and validity versus N, out to where PGD cannot follow, is a
 stronger argument than any perimeter margin. Use the exploratory `--config` mode

@@ -380,7 +380,11 @@ readout. Attribution confirmed: MBO beats its own init, which *is* approach C's
 step 0, by **+2.761%** against a 0.3% threshold. Also records the **sixth**
 measurement artefact, produced by this work: "0 fragmented at every level" was
 asserted with no per-level instrument in existence and was false. Figures rebuild
-byte-identically from a committed `data.yaml`). See
+byte-identically from a committed `data.yaml`. **§ Result 5 adds N=400**: valid,
+connected, equal-area in 920 s with **no anchor and none possible** — on the same
+V=114,144 mesh PGD needed 206,344 s at N=300 and failed two of three gates, so
+the missing baseline is the finding. Includes the √N self-check at −0.044% and
+the note that Phase 2 is now 89% of end-to-end cost). See
 `docs/experiments/README.md`. (Slot 03 is
 `03-dual-projection-verification`, on `feat/newton-projection`.)
 
@@ -407,6 +411,27 @@ produced in the sibling worktree and **copied into this checkout on 2026-08-15**
 worktree has its own and none of it is in version control** — enumerate *both*
 working directories before claiming a run does not exist. The plan's v1 got this
 wrong and built its central section on the mistake.
+
+**Exported deliverables (the files downstream repos consume).** `finalised=True`
+is what downstream gates on; every high-N export needs `--force-finalised`
+because the migration-cycling plateau leaves `pending_migration=True` on the best
+iterate. Verified 2026-08-22:
+
+| N | file (under the run's `partition/`) | iter | perimeter |
+|---|---|---|---|
+| 50 | `torus_partition_run_20260625_113015_...h5` | 19 | 130.1020 |
+| 100 | `torus_partition_run_20260709_081548_...h5` ★ | 20 | 185.2546 |
+| 150 | `torus_partition_run_20260711_165615_...h5` | 20 | 228.1566 |
+| 200 | `torus_partition_n200_s61803399.h5` | 16 | 262.1096 |
+| 300 | `torus_partition_run_20260806_123326_..._balanced.h5` | 18 | 323.3192 |
+| 300 | `torus_partition_n300_s61803399_5lvl.h5` ★ | 19 | **322.9622** |
+| **400** | `torus_partition_n400_s84172851.h5` ★ **(approach B)** | 19 | **368.6603** |
+
+★ = the best available at that N. All seven are `finalised=True`. The N=10 and
+N=30 exports are legacy smoke tests and are `finalised=False` — not deliverables.
+The N=400 file lives under the **arm** run
+`results/arm_mbo_20260820_133709_npart400_V114144_seed84172851/partition/`, so
+its `source_run_id` is that arm directory (see the arm layout section).
 
 **`docs/reference/`** — permanent explanatory documents: topology-switch
 methodology, scalability analysis, the optimization-methods primer, and
@@ -782,6 +807,40 @@ pre-registered thresholds committed before any run:
 | N=100 s84172851 | 228 s | **210.9×** | dormant vacuous; area 0.1504% (solver check); **0 frag** | 184.4118 (it 18/20) | **−0.455%** |
 | N=100 s61803399 | 214 s | **225.2×** | vacuous; 0.1493%; **0 frag** | 184.1615 (it 19/20) | **−0.590%** |
 | N=300 s61803399 | 248 s | **318.8×** | vacuous; 1.4172%; **0 frag** | 319.9428 (it 16/19) | **−1.044%** |
+| N=400 s84172851 | 920 s | *(no anchor — see below)* | vacuous; 0.7773%; **0 frag** | 368.6603 (it 19/20) | — |
+
+**N=400 is an EXISTENCE-AND-VALIDITY result, and its lack of an anchor is the
+finding, not a gap.** No PGD run at N=400 exists or is planned: the incumbent is
+not merely slow there, it has already stopped producing valid partitions at lower
+N on the same mesh. At the **matched** finest mesh V=114,144:
+
+| | PGD, **N=300** (`run_20260808_191030`) | B, **N=400** (`arm_mbo_20260820_133709`) |
+|---|---|---|
+| Phase 1 wall | **206,344 s = 57.3 h** | **920 s = 15.3 min** |
+| dead / weak | 0 / 0 | 0 / 0 |
+| area imbalance | **3 imbalanced, worst 24.81%** | 0 imbalanced, worst **0.78%** |
+| fragmented | **2** | **0** |
+| valid on raw labels? | **no** — requires the balanced readout | **yes** |
+
+So PGD, on the identical mesh with **one hundred fewer cells**, took 224× longer
+and produced an invalid partition. Demanding a PGD anchor at N=400 asks the
+incumbent to do the thing B exists because it cannot do. The defensible claim is
+therefore not comparative and does not need to be:
+
+> Approach B produces a valid, equal-area, fully connected 400-cell partition on
+> a 114,144-vertex torus from 15 minutes of Phase 1, in a regime where the
+> incumbent has already ceased to produce valid partitions at N=300 on the same
+> mesh.
+
+Independently re-verified on 2026-08-22 with `testing/check_fragmentation.py`
+(0 dead / 0 weak / min peak 1.0000; 0 imbalanced, worst cell 190 at 0.78%;
+**0 fragmented, 0 cells with even sub-threshold speckle**) and at the Phase 2
+best iterate (400 cells, 29,287 VPs, **max equal-area constraint violation
+8.18e-07** — converged to tolerance, genuinely equal-area). Internal
+cross-check: on a fixed mesh perimeter should scale as √N, and B's own N=100
+result × 2 = 368.8236 against measured **368.6603**, i.e. **−0.044%**.
+⚠ Phase 2 cost 7,326 s against Phase 1's 920 s, so **Phase 1 is now only 11% of
+end-to-end** — see `docs/plans/PUBLICATION_READINESS_PLAN.md` Phase 4.
 
 **Four things that matter more than the perimeter:**
 

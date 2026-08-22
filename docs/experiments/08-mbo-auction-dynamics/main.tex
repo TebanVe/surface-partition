@@ -40,7 +40,11 @@ for B, and it is the one B could have failed. (3)~The win is attributable to the
 MBO dynamics and not to the balanced geodesic initialisation B starts from ---
 which is approach~C's first step --- by \(+2.761\%\) against a pre-registered
 \(0.3\%\) threshold. (4)~Of thirteen predictions committed before any run, nine
-held, three missed and one was initially mis-scored. The methodological content is
+held, three missed and one was initially mis-scored. (5)~At \(N{=}400\), where no
+PGD anchor exists \emph{or is possible}, B yields a valid, connected, equal-area
+partition from \(920\,\mathrm{s}\) --- while on the \emph{same} mesh the
+incumbent needed \(206{,}344\,\mathrm{s}\) at \(N{=}300\) and still failed two
+of the three gates; the absent baseline is the finding, not a gap. The methodological content is
 again larger than the technical: a \textbf{three-part over-merge instrument was
 built and detected nothing}, and a per-level claim entered the record having never
 been measured --- the sixth instance of this project's signature artefact.
@@ -50,7 +54,8 @@ been measured --- the sixth instance of this project's signature artefact.
                   title={Provenance}, fontupper=\small]
 \begin{tabular}{@{}l@{\hspace{1.5em}}p{0.70\linewidth}@{}}
 Status & \textbf{measured} \\
-Date & 2026-08-19 \\
+Date & 2026-08-19 (scored results); 2026-08-20 (\(N{=}400\), exploratory);
+  2026-08-22 (\(N{=}400\) re-verification and export) \\
 Surface & torus \(T(R{=}1.0,\, r{=}0.6)\) throughout \\
 Branch & \code{feat/phase1-mbo-auction-dynamics} \\
 Code & \codefile{src/partition/mbo\_auction.py} (the arm);
@@ -61,6 +66,9 @@ Scored runs & \code{results/arm\_mbo\_20260819\_173411\_npart100\_V114144\_seed8
   \code{results/arm\_mbo\_20260819\_185131\_npart100\_V114144\_seed61803399},
   \code{results/arm\_mbo\_20260819\_192659\_npart300\_V47488\_seed61803399},
   \code{results/arm\_init\_20260819\_181203\_npart100\_V114144\_seed84172851} \\
+Exploratory run & \code{results/arm\_mbo\_20260820\_133709\_npart400\_V114144\_seed84172851}
+  --- \(N{=}400\), \textbf{no anchor}, and none possible (\S\ref{sec:n400}).
+  Scored against nothing; reported for gates, cost and absolute perimeter. \\
 Anchors & \(N{=}100\): \code{run\_20260709\_081548}, Phase~2 best
   \(\mathbf{185.2546144718457}\) (iterate 20 of 20), \emph{raw} PGD, Phase~1
   \(48132.12\,\mathrm{s}\). \(N{=}300\): \code{run\_20260806\_123326}, Phase~2 best
@@ -429,6 +437,109 @@ them.
 
 The fix is instrumentation --- \code{run\_gates} per level, seconds of cost, now
 committed --- not a resolution to be careful.
+
+\section{Result 5 --- \(N{=}400\): existence where the anchor cannot exist}
+\label{sec:n400}
+
+The three results above are all \emph{margins}: B against a control, at a pinned
+Phase~2 budget. That design has a ceiling built into it. It can only be run where
+a control exists, and the control is the method whose cost is the reason B was
+built. Pushed far enough in \(N\), the comparison stops being expensive and starts
+being impossible.
+
+\(N{=}400\) is past that point, and this section reports it as what it is: an
+\textbf{existence-and-validity} result with no anchor, no margin, and no
+comparison of perimeters. The run is
+\code{arm\_mbo\_20260820\_133709\_npart400\_V114144\_seed84172851}, executed in the
+driver's exploratory \code{-{}-config} mode, where the mesh-match assertion is
+skipped because there is nothing to match.
+
+\subsection*{The result}
+
+Phase~1 replacement wall: \(\mathbf{920\,\mathrm{s}}\) (15.3 min) over the 5-level
+ladder to \(V = 114{,}144\). All three validity gates pass on the \emph{raw}
+labels, re-verified on 2026-08-22 with \codefile{testing/check\_fragmentation.py}
+independently of \code{arm\_report.yaml}:
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+gate & result & note \\
+\midrule
+dormant & 0 dead, 0 weak, min peak \(1.0000\) & vacuous for arms (one-hot) \\
+area imbalance & 0 imbalanced, worst cell 190 at \(\mathbf{0.78\%}\) & bar \(1.1214\%\), granularity \(0.5607\%\) \\
+connectivity & \(\mathbf{0}\) fragmented, \(\mathbf{0}\) cells with speckle & \emph{the only gate with content} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Phase~2 reaches \(\mathbf{368.6603}\) at iterate 19 of 20, with 400 cells, 29{,}287
+variable points, and a maximum equal-area constraint violation of
+\(\mathbf{8.18\times10^{-7}}\) --- converged to tolerance, so the partition is
+genuinely equal-area rather than approximately so. The deliverable is exported and
+\code{finalised=True} at
+\code{partition/torus\_partition\_n400\_s84172851.h5}.
+
+One internal cross-check, which is not a gate. On a \emph{fixed} mesh, total
+perimeter should scale as \(\sqrt{N}\). B's own \(N{=}100\) result on the same
+\(V = 114{,}144\) mesh, doubled, predicts \(368.8236\) against the measured
+\(\mathbf{368.6603}\): a deviation of \(\mathbf{-0.044\%}\) between two
+independent runs at different \(N\).
+
+\subsection*{Why the missing anchor is the finding}
+
+The obvious objection is that a result without a baseline is weak. Here it is the
+reverse, and the reason is measurable rather than rhetorical. Compare at the
+\textbf{matched} finest mesh \(V = 114{,}144\) --- the same mesh, so no
+refinement effect enters:
+
+\begin{center}\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & PGD, \(N{=}300\) & B, \(N{=}400\) \\
+ & \code{run\_20260808\_191030} & \code{arm\_mbo\_20260820\_133709} \\
+\midrule
+Phase~1 wall & \(206{,}344\,\mathrm{s}\) \((57.3\,\mathrm{h})\) & \(\mathbf{920\,\mathrm{s}}\) \\
+dead / weak & 0 / 0 & 0 / 0 \\
+area imbalance & \textbf{3 imbalanced, worst \(24.81\%\)} & 0, worst \(\mathbf{0.78\%}\) \\
+fragmented & \textbf{2} & \(\mathbf{0}\) \\
+valid on raw labels? & \textbf{no} --- requires the readout & \textbf{yes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+On the identical mesh, with \emph{one hundred fewer cells}, the incumbent took
+\(\mathbf{224\times}\) the wall time and failed two of the three gates. Requiring
+a PGD anchor at \(N{=}400\) therefore asks the incumbent to do precisely the thing
+whose absence motivated B. The honest claim needs no margin:
+
+\begin{quote}
+Approach~B produces a valid, equal-area, fully connected 400-cell partition on a
+114{,}144-vertex torus from 15 minutes of Phase~1, in a regime where the incumbent
+has already ceased to produce valid partitions at \(N{=}300\) on the same mesh.
+\end{quote}
+
+\subsection*{What this section does \emph{not} claim}
+
+The \(-0.455\%\) and \(-1.044\%\) margins of \S\ref{sec:perimeter} are not
+extended to \(N{=}400\), and no perimeter here is compared against PGD. The
+matched-mesh table above is a statement about \emph{validity and cost}, both
+measured on both sides at the same \(V\); it is not a perimeter comparison, and
+the two must not be blurred. The \(\sqrt{N}\) check is B against B, so it tests
+internal consistency, not correctness against an independent method.
+
+\subsection*{The cost centre has moved}
+
+Phase~2 took \(\mathbf{7{,}326\,\mathrm{s}}\) at \(N{=}400\) against Phase~1's
+920\,s, so the stage this report replaces is now \(\mathbf{11\%}\) of end-to-end
+cost. The \(211\text{--}319\times\) of \S\ref{sec:perimeter} was always a
+statement about the replaced stage; at \(N{=}400\) the remainder dominates. Two
+consequences worth recording: the \(\tau\) over-merge cap binds on \emph{two}
+levels here (against one at \(N{=}300\) and none at \(N{=}100\)) as cells shrink
+relative to the coarse mesh, and the vertex-granularity floor has risen to
+\(0.5607\%\), which will eventually force a finer finest mesh. Further Phase~1
+optimisation is now the wrong target; see
+\codefile{docs/plans/PUBLICATION\_READINESS\_PLAN.md} Phase~4.
 
 \section{Threats to validity that no instrument here addresses}
 \label{sec:threats}
