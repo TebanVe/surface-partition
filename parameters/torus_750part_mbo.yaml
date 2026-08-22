@@ -1,0 +1,139 @@
+# ============================================================================
+# N=750 via APPROACH B (auction-dynamics MBO) -- EXPLORATORY.
+#
+# No PGD baseline exists at N=750 and none is possible: at V=114,144 PGD needed
+# 206,344 s at N=300 and still failed two of three gates. Runs in --config mode;
+# the perimeter is scored against nothing. Claim available: existence-and-validity.
+#
+# ** THE LADDER STARTS ONE RUNG UP (162x154), AND THAT IS THE POINT. **
+# Every config so far began at 100x96. At N=750 that level is unusable, and the
+# tau diagnostics say so before the run rather than after:
+#
+#     100x96 at N=750:  12.8 verts/cell,  sqrt(tau)/h_max = 0.929
+#                       vs local non-freeze threshold 0.964  ->  RATIO 0.964
+#
+# A ratio below 1.0 means the coarse-triangle band is BELOW its freeze threshold:
+# per-step motion there falls under one edge length and the level cannot move.
+# Every measured run has been above 1.0 at every level (N=400 min 1.049, N=500 min
+# 1.067), so a starved-and-frozen level 0 is untested territory for B, and there
+# is no reason to enter it for a level worth 12.8 verts/cell. Dropping it costs
+# ~20 s of compute and removes the risk. Levels 1-5 of the old ladder are kept
+# verbatim, so this is the SAME ladder with the dead rung removed:
+#
+#   lvl      res        V  v/cell   cap  sqrt(tau)/h_max  c_lo_hmax  ratio
+#     0  162x154    24948    33.3  True            1.503      1.226  1.226
+#     1  224x212    47488    63.3  True            2.077      1.441  1.441
+#     2  286x270    77220   103.0 False            2.204      1.628  1.353
+#     3  348x328   114144   152.2 False            2.204      1.796  1.227
+#     4  410x386   158260   211.0 False            2.205      1.949  1.131
+#
+# The finest level's freeze margin is 1.131 -- MORE than N=500's 1.109 and
+# N=400's 1.049, both of which ran clean. The cap binds on levels 0-1, as at
+# N=400/N=500. Nothing here is in an untested regime.
+#
+# GRANULARITY. 0.7582% at the finest level, so the area-gate harness-fault bar is
+# 1.5165%. Measured comparators, worst cell as a multiple of the granularity
+# floor: N=400 1.39x, N=500 1.57x, both against a 2.0x bar. Expect roughly
+# 1.15-1.25% here. 211 v/cell is comparable to N=500's 228 and better than the
+# accepted N=300 deliverable's 158-at-level-2 history.
+#
+# ** THE sqrt(N) CROSS-CHECK IS WEAKER HERE, AND THAT IS A DELIBERATE TRADE. **
+# That check requires a FIXED mesh; N=400 and N=500 share V=114,144 and agree to
+# better than 0.06%. This run uses V=158,260, so there is no sharp prediction.
+# What remains is directional: the fixed-mesh value implied by N=500 is
+#     412.1138 * sqrt(750/500) = 504.73
+# and a finer mesh should land slightly BELOW it, since all three fixed-mesh
+# deviations measured so far were negative (-0.044%, -0.015%, -0.059%). So treat
+# ~504.7 as a soft upper expectation, not a prediction to score against.
+# The alternative -- 5 levels from 100x96, keeping V=114,144 and the sharp check
+# -- was rejected: it gives 152 v/cell and granularity 1.0513%, a real quality
+# drop below every delivered partition, and it keeps the frozen level 0.
+#
+# COST -- ** MEASURED, and worse than V*N. Read this before budgeting time. **
+# A --levels 1 smoke test was run before shipping this file. At the MATCHED mesh
+# V=24,948, per-step cost across the three N we have is:
+#
+#     N=400   3.24 s/step   (62.4 v/cell)
+#     N=500   5.09 s/step   (49.9 v/cell)
+#     N=750  24.61 s/step   (33.3 v/cell)
+#
+# That is x1.57 for x1.25 cells (exponent 2.0), then x4.83 for x1.50 cells
+# (exponent 3.9). Cost is NOT ~V*N; it degrades sharply, and the likely driver is
+# verts-per-cell rather than N itself: the balanced-assignment dual needs more
+# subgradient iterations when each cell owns fewer vertices, and the three points
+# above fall 62 -> 50 -> 33 v/cell. If that reading is right the blow-up is
+# confined to the COARSE levels, since the finest level here has 211 v/cell,
+# comparable to N=500's 228 -- but this is an inference from three points, not a
+# measurement, and it has not been tested.
+#
+# Budget on that basis: level 0 measured at 320 s (13 steps) plus a 95 s init;
+# the finer levels should behave closer to ~V*N, giving very roughly
+# ** 1.5-2.5 h for Phase 1 ** with real uncertainty on the upper end. An earlier
+# draft of this file said 50-70 min, extrapolating V*N; the smoke test refuted it.
+#
+# Peak memory is the (V x N) score matrix at 0.95 GB plus two transients --
+# budget ~2.9 GB. The solution file will be ~1.9 GB (dense one-hot x_opt + x0).
+# ** Phase 2 is the long pole and is now the majority of end-to-end cost: **
+# extrapolating N=500's 8,829 s by variable-point count (~32,700 -> ~47,000)
+# gives roughly 3.5-4.5 h. Note the IPOPT solver is only 5.2% of that; the cost
+# is in the surrounding loop (see the timing_profile gotcha in CLAUDE.md).
+#
+# SMOKE TEST FIRST (about two minutes):
+#   python scripts/run_mbo_arm.py --config parameters/torus_750part_mbo.yaml --levels 2
+# ============================================================================
+
+experiment:
+  name: torus-750-mbo-exploratory
+  surface: torus
+
+relaxation:
+  n_partitions: 750
+  seed: 84172851                     # same seed family as the validated configs
+  refinement_levels: 5               # 162x154 ... 410x386 (158,260 verts)
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config, i.e. so the same mesh ladder could be run
+  # --- through PGD later if a real N=750 baseline is ever wanted.
+  lambda_penalty: 16.0               # UNCALIBRATED at N=750 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 162                     # levels: 162x154, 224x212, 286x270, 348x328, 410x386
+    n_phi: 154
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults -- the values every measured run used.
+# See parameters/torus_500part_mbo.yaml for the full note on when each would need
+# changing. Short version: none ever has, and on freezing prefer changing the
+# LADDER (as this config does) over raising tau_c.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 settings. These ARE used: with --config, this same file is handed to
+# refine_perimeter.py as the campaign config unless --campaign overrides it.
+# Matched to the validated N=100/N=300 campaigns and the N=400/N=500 runs.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
