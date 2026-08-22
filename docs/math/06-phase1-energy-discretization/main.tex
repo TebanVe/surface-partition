@@ -52,7 +52,7 @@ $\sum_k u_k \equiv 1$ and an equal-area constraint $\int_S u_k \,dA = |S|/N$ for
 each $k$ (both enforced by projection; \codefile{src/optimization/projection.py}).
 As the interface width $\varepsilon \to 0$ the relaxed energy $\Gamma$-converges to
 the partition perimeter, so its minimizers approximate minimal-perimeter partitions
-\cite{bogosel2023partitions,modica1987gradient}.
+\cite{bogosel2017partitions,modica1987gradient}.
 
 This document derives, from the $P_1$ finite-element discretization, the three
 additive pieces of $E$ and their gradients \emph{as implemented}. It is the formal
@@ -228,7 +228,7 @@ where $\odot$ is the Hadamard (elementwise) product.
 \begin{remark}[The discretization bug this form corrects]
 \label{rem:bug}
 Earlier code set \code{interface\_vec = u**2 * (1-u)**2}, i.e.\ $q_k \mapsto q_k^2$.
-That transcribes a \emph{typo} in the source paper \cite{bogosel2023partitions}
+That transcribes a \emph{typo} in the source paper \cite{bogosel2017partitions}
 (\S3), whose printed definition of the discretized field has an extra squaring, while
 its prose target integral $\int u^2(1-u)^2$ and its printed gradient
 $2Mv\odot(1-2u)$ both require $v=u(1-u)$. The buggy energy computed

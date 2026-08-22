@@ -262,7 +262,7 @@ Current entries:
 
 | Key | Reference |
 |---|---|
-| `bogosel2023partitions` | Bogosel & Oudet — the foundational paper for Phase 1 and Phase 2 |
+| `bogosel2017partitions` | Bogosel & Oudet — the foundational paper for Phase 1 and Phase 2 |
 | `wachter2006ipopt` | Wächter & Biegler — IPOPT algorithm |
 | `nocedal2006numerical` | Nocedal & Wright — Numerical Optimization textbook |
 | `modica1977esempio` | Modica & Mortola — the original Γ-convergence example |
