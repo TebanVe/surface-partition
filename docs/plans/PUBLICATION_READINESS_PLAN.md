@@ -101,6 +101,9 @@ Each item is measured and reproducible in this repository.
 | The N=400 deliverable is exported and finalised | `arm_mbo_20260820_133709.../partition/torus_partition_n400_s84172851.h5`, `finalised=True`, iterate 19 |
 | √N scaling holds across **three** N on a fixed mesh | N=100→400 −0.044%, **N=400→500 −0.015%**, N=100→500 −0.059%, all after Phase 2. The N=500 value was predicted in `parameters/torus_500part_mbo.yaml` *before* the run |
 | B produces a valid N=500 partition in 22 min | all three gates on raw labels; 0 fragmented; worst cell 1.0993% (bar 1.4017%); Phase 2 **412.1138** at iterate 10/20, max equal-area violation 1.10e-06; exported and finalised |
+| B produces a valid N=750 partition in 60 min | all three gates; **0 fragmented at every level** (a first at high N); worst cell 1.2569% (bar 1.5165%); Phase 2 **504.9214** at iterate 14/20, max violation 4.68e-07; exported and finalised |
+| Phase 1 cost tracks **verts-per-cell**, not N | at matched V=24,948: 3.24 / 5.09 / 24.61 s per step for N=400/500/750 (62 / 50 / 33 v/cell). At the *finest* levels, where v/cell stays 200+, cost is within **+8.9%** of plain V·N, and per-step cost is *flat* across N=750's levels 0–2 while V triples |
+| Phase 2 scales superlinearly in variable points | 0.250 → 0.270 → 0.389 s/VP at N=400/500/750; exponents 1.69 then 2.00 |
 | Phase 2's cost is **not** the solver | N=500: IPOPT 459 s of an 8,829 s campaign = **5.2%**; 201 solver iters per topology iteration, i.e. capped every time |
 | The WTA gap has an exact accounting identity | `docs/math/07-phase1-wta-balance/`, Prop. 1 |
 | Where the N=300 damage happens | levels 0–1 do no work (L0 flips *zero* labels); L2 does all of it, reaching 36.15%; splits are born mid-L2 while imbalance falls 234 → 10 |
@@ -211,9 +214,20 @@ this under different vocabulary? **Phrase any result as "we are not aware of",
 never "first", and name the corpus and how it was enumerated.**
 
 ## Phase 3 — Scaling to N = 500 and N = 1000
-**Status:** **N=400 and N=500 done** (exploratory `--config` mode, both valid,
-both exported and finalised, 2026-08-20/22); **N=1000 Not Started.** This is the
-practical headline and the original goal.
+**Status:** **N=400, N=500 and N=750 done** (exploratory `--config` mode, all
+valid, all exported and finalised, 2026-08-20/23); **N=1000 Not Started.** This is
+the practical headline and the original goal.
+
+**Two things N=750 settled that change how N=1000 should be approached.**
+
+1. **The ladder must be re-based as N grows, and the τ diagnostics say when.** At
+   N=750 the standard `100x96` base gives 12.8 v/cell and a freeze ratio of
+   **0.964 — below 1.0**, i.e. the coarse-triangle band cannot move. Dropping that
+   rung (base `162x154`) fixed it *and* produced the first high-N run with **0
+   fragmented cells at every level**, where N=300 and N=500 each had one at level
+   0. Check the ratio before choosing a ladder; never fix a freeze by raising
+   `tau_c`, which walks into the over-merge wall opposite.
+2. **Phase 1 is no longer the constraint; Phase 2 is, and steeply.** See Phase 4.
 
 A curve of wall time and validity versus N, out to where PGD cannot follow, is a
 stronger argument than any perimeter margin. Use the exploratory `--config` mode
@@ -228,8 +242,9 @@ must grow; and peak memory, which is the dense `V × N` score matrix plus two
 same-size transients inside the assignment solver (~1.5 GB at N=400).
 
 ## Phase 4 — Phase 2 is the bottleneck, and the solver is not why
-**Status:** **Partially measured — and this phase's original premise is REFUTED.**
-The N=500 Phase 2 campaign was profiled (2026-08-22).
+**Status:** **Partially measured — and this phase's original premise is REFUTED,
+now at two values of N.** The N=500 and N=750 Phase 2 campaigns were profiled
+(2026-08-22/23).
 
 Measured Phase 2 wall: ~33 min at N=100 (≈14,900 variable points), ~50 min at
 N=300, **122 min at N=400** (29,244 variable points). It scales worse than
@@ -244,16 +259,31 @@ section used to say: profile Phase 2 and "decide whether the next target is the
 IPOPT/exact-Hessian path". Measured at N=500 (`timing_profile.yaml`, campaign
 `ipopt_btol0.001_lbfgs30_hess_bestiter_partial`):
 
-| | wall | share |
+| | N=500 | N=750 |
 |---|---|---|
-| whole Phase 2 campaign | **8,829 s** (2.45 h, from iterate timestamps) | 100% |
-| inside `optimizer.optimize()` | **459 s** | **5.2%** |
-| everything else | ~8,370 s | ~95% |
+| whole Phase 2 campaign (iterate timestamps) | **8,829 s** (2.45 h) | **18,323 s** (5.09 h) |
+| inside `optimizer.optimize()` | 459 s | 659 s |
+| **solver share** | **5.2%** | **3.6%** |
 
-IPOPT ran 4,023 solver iterations across the 20 topology iterations — **201 per
-topology iteration**, so it hits `max_opt_iter: 200` every time, and reaching that
-cap costs 23 s. **Optimising the solver can buy at most 5%.** The exact-Hessian
-path is the wrong target.
+IPOPT ran 201 solver iterations per topology iteration at *both* N, so it hits
+`max_opt_iter: 200` every time, and the internal callback split is essentially
+identical (Hessian 40.4% vs 40.7% of solver time). **The solver is a shrinking
+share of a growing problem — optimising it buys at most 5%, and less as N rises.**
+The exact-Hessian path is the wrong target.
+
+**Phase 2 scales superlinearly in variable points, and that is now the binding
+constraint on N:**
+
+| | variable points | wall | s/VP | exponent |
+|---|---|---|---|---|
+| N=400 | 29,287 | 7,326 s | 0.250 | — |
+| N=500 | 32,704 | 8,829 s | 0.270 | 1.69 |
+| N=750 | 47,088 | 18,323 s | 0.389 | **2.00** |
+
+Three points cannot fit a law and the two exponents differ, so the defensible
+statement is **superlinear and steepening**, not "quadratic". Either way,
+extrapolating to N=1000 gives a Phase 2 of roughly **7–9 h** against a Phase 1
+still under an hour. **Any N=1000 attempt should budget Phase 2 first.**
 
 ⚠ **What is established is the solver's share, not the composition of the other
 95%.** The candidates are contour rebuild, Steiner setup, migration detection, and

@@ -42,9 +42,11 @@ which is approach~C's first step --- by \(+2.761\%\) against a pre-registered
 \(0.3\%\) threshold. (4)~Of thirteen predictions committed before any run, nine
 held, three missed and one was initially mis-scored. (5)~At \(N{=}400\), where no
 PGD anchor exists \emph{or is possible}, B yields valid, connected, equal-area
-partitions at \(N{=}400\) and \(N{=}500\) from \(920\,\mathrm{s}\) and
-\(1{,}322\,\mathrm{s}\), agreeing with \(\sqrt{N}\) scaling on a fixed mesh to
-better than \(0.06\%\) across three points --- while on the \emph{same} mesh the
+partitions at \(N{=}400\), \(500\) and \(750\) from \(920\text{--}3{,}614\,\mathrm{s}\),
+agreeing with \(\sqrt{N}\) scaling on a fixed mesh to better than \(0.06\%\)
+across three points; at \(N{=}750\) the coarsest ladder rung falls \emph{below}
+the freeze threshold and has to be dropped, which also removes the level-0
+fragmentation seen at \(N{=}300\) and \(N{=}500\) --- while on the \emph{same} mesh the
 incumbent needed \(206{,}344\,\mathrm{s}\) at \(N{=}300\) and still failed two
 of the three gates; the absent baseline is the finding, not a gap. The methodological content is
 again larger than the technical: a \textbf{three-part over-merge instrument was
@@ -69,11 +71,14 @@ Scored runs & \code{results/arm\_mbo\_20260819\_173411\_npart100\_V114144\_seed8
   \code{results/arm\_mbo\_20260819\_192659\_npart300\_V47488\_seed61803399},
   \code{results/arm\_init\_20260819\_181203\_npart100\_V114144\_seed84172851} \\
 Exploratory runs & \code{results/arm\_mbo\_20260820\_133709\_npart400\_V114144\_seed84172851}
-  and \code{results/arm\_mbo\_20260822\_120646\_npart500\_V114144\_seed84172851}
-  --- \(N{=}400\) and \(N{=}500\), \textbf{no anchor}, and none possible
+  \code{results/arm\_mbo\_20260822\_120646\_npart500\_V114144\_seed84172851} and
+  \code{results/arm\_mbo\_20260822\_182903\_npart750\_V158260\_seed84172851}
+  --- \(N{=}400\), \(500\) and \(750\), \textbf{no anchor}, and none possible
   (\S\ref{sec:n400}). Scored against nothing; reported for gates, cost and
-  absolute perimeter. The \(N{=}500\) Phase~2 campaign was run with
-  \code{-{}-profile}. \(N{=}500\) predates the arm \code{experiment.yaml}
+  absolute perimeter. The \(N{=}500\) and \(N{=}750\) Phase~2 campaigns were run
+  with \code{-{}-profile}. \(N{=}750\) uses a \emph{different} ladder
+  (\(162\times154 \to 410\times386\), \(V{=}158{,}260\)) and is therefore outside
+  the fixed-mesh \(\sqrt{N}\) comparison. \(N{=}500\) predates the arm \code{experiment.yaml}
   snapshot, so it carries none; its config is
   \codefile{parameters/torus\_500part\_mbo.yaml} as of commit \code{e8b8b60},
   which added an \code{mbo:} block after the run at the values the run used. \\
@@ -446,7 +451,7 @@ them.
 The fix is instrumentation --- \code{run\_gates} per level, seconds of cost, now
 committed --- not a resolution to be careful.
 
-\section{Result 5 --- \(N{=}400\) and \(N{=}500\): existence where the anchor cannot exist}
+\section{Result 5 --- \(N{=}400\), \(500\), \(750\): existence where the anchor cannot exist}
 \label{sec:n400}
 
 The three results above are all \emph{margins}: B against a control, at a pinned
@@ -455,46 +460,44 @@ a control exists, and the control is the method whose cost is the reason B was
 built. Pushed far enough in \(N\), the comparison stops being expensive and starts
 being impossible.
 
-\(N{=}400\) and \(N{=}500\) are past that point, and this section reports them as
-what they are: \textbf{existence-and-validity} results with no anchor, no margin,
-and no comparison of perimeters. The runs are
-\code{arm\_mbo\_20260820\_133709\_npart400\_V114144\_seed84172851} and
-\code{arm\_mbo\_20260822\_120646\_npart500\_V114144\_seed84172851}, both executed
-in the driver's exploratory \code{-{}-config} mode, where the mesh-match assertion
-is skipped because there is nothing to match. \(N{=}500\) deliberately reuses
-\(N{=}400\)'s ladder unchanged, which converts the \(\sqrt{N}\) argument below
-from a single check into a three-point one.
+\(N{=}400\), \(500\) and \(750\) are past that point, and this section reports
+them as what they are: \textbf{existence-and-validity} results with no anchor, no
+margin, and no comparison of perimeters. All three ran in the driver's exploratory
+\code{-{}-config} mode, where the mesh-match assertion is skipped because there is
+nothing to match. \(N{=}500\) deliberately reuses \(N{=}400\)'s ladder unchanged,
+which converts the \(\sqrt{N}\) argument below from a single check into a
+three-point one; \(N{=}750\) could not, for a reason that is itself a result
+(\S\ref{sec:ladder750}).
 
 \subsection*{The results}
 
-Both ladders run to \(V = 114{,}144\) in five levels. Phase~1 replacement wall is
-\(\mathbf{920\,\mathrm{s}}\) (15.3 min) at \(N{=}400\) and
-\(\mathbf{1{,}322\,\mathrm{s}}\) (22.0 min) at \(N{=}500\). All three validity
-gates pass on the \emph{raw} labels at both, re-verified with
-\codefile{testing/check\_fragmentation.py} independently of \code{arm\_report.yaml}:
+\(N{=}400\) and \(N{=}500\) run to \(V = 114{,}144\); \(N{=}750\) runs to
+\(V = 158{,}260\). All three validity gates pass on the \emph{raw} labels at every
+\(N\), re-verified with \codefile{testing/check\_fragmentation.py} independently
+of \code{arm\_report.yaml}:
 
 \begin{center}\small
-\begin{tabular}{@{}llll@{}}
+\begin{tabular}{@{}lrrr@{}}
 \toprule
-gate & \(N{=}400\) & \(N{=}500\) & note \\
+ & \(N{=}400\) & \(N{=}500\) & \(N{=}750\) \\
 \midrule
-dormant & 0 dead, 0 weak & 0 dead, 0 weak & vacuous for arms (one-hot) \\
-area imbalance & 0, worst \(\mathbf{0.7773\%}\) & 0, worst \(\mathbf{1.0993\%}\) & bars \(1.1214\%\) / \(1.4017\%\) \\
-connectivity & \(\mathbf{0}\) fragmented & \(\mathbf{0}\) fragmented & \emph{the only gate with content} \\
+Phase~1 wall & \(920\,\mathrm{s}\) & \(1{,}322\,\mathrm{s}\) & \(3{,}614\,\mathrm{s}\) \\
+dormant & 0 / 0 & 0 / 0 & 0 / 0 \\
+area imbalance (bar) & 0, \(\mathbf{0.7773\%}\) (1.1214) & 0, \(\mathbf{1.0993\%}\) (1.4017) & 0, \(\mathbf{1.2569\%}\) (1.5165) \\
+connectivity & \(\mathbf{0}\) & \(\mathbf{0}\) & \(\mathbf{0}\) at \emph{every} level \\
+Phase~2 perimeter & \(\mathbf{368.6603}\) & \(\mathbf{412.1138}\) & \(\mathbf{504.9214}\) \\
+ & (it.\ 19/20) & (it.\ 10/20) & (it.\ 14/20) \\
+variable points & 29{,}287 & 32{,}704 & 47{,}088 \\
+max area violation & \(8.18\mathrm{e}{-7}\) & \(1.10\mathrm{e}{-6}\) & \(4.68\mathrm{e}{-7}\) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Phase~2 reaches \(\mathbf{368.6603}\) (iterate 19 of 20, 29{,}287 variable points,
-max equal-area violation \(8.18\times10^{-7}\)) and \(\mathbf{412.1138}\)
-(iterate 10 of 20, 32{,}704 variable points, \(1.10\times10^{-6}\)) --- both
-converged to tolerance, so the partitions are genuinely equal-area rather than
-approximately so. Note the \(N{=}500\) best is \emph{mid-trajectory}, so it is not
-censored: the run descends to 412.1138 by iterate 10 and then oscillates up to
-\(\approx412.14\), the migration-cycling plateau. Both deliverables are exported
-and \code{finalised=True}, at
-\code{partition/torus\_partition\_n400\_s84172851.h5} and
-\code{...n500\_s84172851.h5}.
+All three Phase~2 constraint residuals are converged to tolerance, so the
+partitions are genuinely equal-area rather than approximately so, and the
+\(N{=}500\) and \(N{=}750\) bests are \emph{mid-trajectory} --- not censored; both
+descend and then oscillate in the migration-cycling plateau. All three
+deliverables are exported with \code{finalised=True}.
 
 \subsection*{The \(\sqrt{N}\) cross-check, three points}
 
@@ -520,6 +523,43 @@ to make this test available, and its predicted value was recorded in
 Three independent runs at three values of \(N\) agree with the scaling to better
 than \(0.06\%\). All three deviations are negative, which is a consistent slight
 shortfall rather than scatter; with three points we do not attempt to say why.
+
+\(N{=}750\) is \emph{not} in that table, because it runs on a different mesh and
+the test is only sharp at fixed \(V\). Recorded for completeness and scored
+against nothing: the fixed-mesh value implied by \(N{=}500\) is \(504.7342\) and
+the measurement is \(504.9214\), \(+0.037\%\). Two points worth stating plainly.
+The magnitude is small, but the \emph{sign} is opposite to all three fixed-mesh
+checks, and the pre-registered expectation in
+\codefile{parameters/torus\_750part\_mbo.yaml} was that a finer mesh should land
+slightly \emph{below} --- so the stated direction was wrong. Nothing is concluded
+from a single unscored point; it is noted so the error is on the record.
+
+\subsection*{The ladder had to change at \(N{=}750\), and the diagnostics said so first}
+\label{sec:ladder750}
+
+Every earlier config began at \(100\times96\). At \(N{=}750\) that rung is
+unusable, and this is visible \emph{before} running: it gives 12.8 verts/cell and
+\(\sqrt{\tau}/h_{\max} = 0.929\) against a local non-freeze threshold of
+\(0.964\) --- a ratio of \(\mathbf{0.964}\), \textbf{below 1}, so the
+coarse-triangle band cannot move at all. Every measured run had been above 1 at
+every level (\(N{=}400\) min 1.049, \(N{=}500\) min 1.067).
+
+The mechanism is a squeeze that tightens with \(N\): more cells means smaller
+cells, the over-merge cap holds \(\sqrt{\tau} \le R_{\mathrm{cell}}\), so the
+diffusion length shrinks --- while the coarse mesh's triangles do not. Past some
+\(N\) the diffusion no longer reaches across one triangle and the level freezes.
+\textbf{The remedy is the ladder, not \(\tau\)}: raising \(\tau_c\) walks toward
+the over-merge wall on the other side of the same two-sided window. The config
+therefore keeps levels 1--5 verbatim and drops the dead rung, running
+\(162\times154 \to 410\times386\). Every level then sits at ratio \(\ge 1.131\),
+and the finest level's margin (1.131) is better than \(N{=}500\)'s (1.109) and
+\(N{=}400\)'s (1.049), both of which ran clean.
+
+It worked, and it bought something beyond avoiding the freeze: \(N{=}750\) is the
+first high-\(N\) run with \textbf{zero fragmented cells at every level}, where
+\(N{=}300\) and \(N{=}500\) each produced one at level 0 that later levels had to
+heal. Starting at 33 verts/cell instead of 12.8 or 19.2 removes the defect rather
+than repairing it.
 
 \subsection*{Two mechanisms recur at a third \(N\)}
 
@@ -590,24 +630,48 @@ independent in the mesh or the initialisation, only in the run.
 
 \subsection*{The cost centre has moved --- and it is not the solver}
 
-Phase~2 took \(\mathbf{7{,}326\,\mathrm{s}}\) at \(N{=}400\) and
-\(\mathbf{8{,}829\,\mathrm{s}}\) (2.45\,h) at \(N{=}500\), against Phase~1's
-920\,s and 1{,}322\,s. The stage this report replaces is therefore
-\(\mathbf{11\%}\) and \(\mathbf{13\%}\) of end-to-end cost. The
+Phase~2 took \(7{,}326\,\mathrm{s}\), \(8{,}829\,\mathrm{s}\) and
+\(\mathbf{18{,}323\,\mathrm{s}}\) (5.09\,h) at \(N{=}400/500/750\), against
+Phase~1's 920\,s, 1{,}322\,s and 3{,}614\,s. The stage this report replaces is
+therefore \(11\%\), \(13\%\) and \(16.5\%\) of end-to-end cost --- the last rising
+only because \(N{=}750\) was given an extra ladder level. The
 \(211\text{--}319\times\) of \S\ref{sec:perimeter} was always a statement about
 the replaced stage; past \(N{=}400\) the remainder dominates.
 
-The \(N{=}500\) campaign was run with \code{-{}-profile}, and the breakdown is
-not what the forward plan assumed. \textbf{The IPOPT solver accounts for
-\(459\,\mathrm{s}\), or \(5.2\%\) of the campaign} --- 4{,}023 solver iterations
-across the 20 topology iterations, i.e.\ 201 per topology iteration, so it hits
-\code{max\_opt\_iter: 200} every time and reaching that cap costs only 23\,s.
-Roughly \(95\%\) of Phase~2 is spent \emph{outside} \code{optimize()}: contour
+The \(N{=}500\) and \(N{=}750\) campaigns were run with \code{-{}-profile}, and
+the breakdown is not what the forward plan assumed. \textbf{The IPOPT solver
+accounts for \(5.2\%\) of the campaign at \(N{=}500\) and \(3.6\%\) at
+\(N{=}750\)} --- a \emph{shrinking} share of a growing problem. At both, IPOPT
+runs 201 solver iterations per topology iteration, hitting
+\code{max\_opt\_iter: 200} every time, and the internal callback split is
+essentially identical (Hessian \(40.4\%\) vs \(40.7\%\) of solver time). So
+\(95\text{--}96\%\) of Phase~2 is spent \emph{outside} \code{optimize()}: contour
 rebuild, Steiner setup, migration detection and checkpoint export with its
 roundtrip verification. \textbf{We establish the solver's share, not the
 composition of the remainder} --- decomposing that is the measurement
 \codefile{docs/plans/PUBLICATION\_READINESS\_PLAN.md} Phase~4 should now make,
 in place of its original premise that the exact-Hessian path was the target.
+
+\textbf{Phase~2 also scales superlinearly in variable points, close to
+quadratically.} Campaign wall against variable-point count:
+
+\begin{center}\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+ & variable points & wall & s/VP & exponent \\
+\midrule
+\(N{=}400\) & 29{,}287 & \(7{,}326\,\mathrm{s}\) & 0.250 & \\
+\(N{=}500\) & 32{,}704 & \(8{,}829\,\mathrm{s}\) & 0.270 & 1.69 \\
+\(N{=}750\) & 47{,}088 & \(18{,}323\,\mathrm{s}\) & 0.389 & \textbf{2.00} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three points cannot fit a law, and the two exponents are not equal, so the
+defensible statement is \emph{superlinear and steepening}, not ``quadratic''.
+Either way it is the binding constraint on \(N\): at this trend \(N{=}1000\)
+implies a Phase~2 of roughly \(7\text{--}9\,\mathrm{h}\), against a Phase~1 that
+remains under an hour.
 
 \begin{tcolorbox}[colback=red!3!white, colframe=red!45!black,
                   title={A reporting trap in \code{timing\_profile.yaml}},

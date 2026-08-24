@@ -34,6 +34,9 @@ RUNS = {
     # absent from every figure that plots a margin against a control.
     "n400_s84172851": "results/arm_mbo_20260820_133709_npart400_V114144_seed84172851",
     "n500_s84172851": "results/arm_mbo_20260822_120646_npart500_V114144_seed84172851",
+    # N=750 is the first run on a DIFFERENT ladder (base 162x154, V=158,260), so
+    # it is outside the fixed-mesh sqrt(N) comparison the others share.
+    "n750_s84172851": "results/arm_mbo_20260822_182903_npart750_V158260_seed84172851",
 }
 
 # Anchors, from the runs named in the report's provenance block.
