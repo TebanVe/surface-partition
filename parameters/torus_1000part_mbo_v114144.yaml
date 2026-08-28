@@ -1,0 +1,118 @@
+# ============================================================================
+# N=1000 via APPROACH B -- ON THE COMMON MESH V=114,144 (348x328).
+#
+# PURPOSE: mesh-matched deliverables for downstream use. The exported partition
+# carries the Phase 1 mesh, so N=100/150/200/300/400/500 all hand downstream the
+# SAME 114,144-vertex / 228,288-face torus, while the production N=750 and N=1000
+# runs do not (158,260 and 209,568). A downstream Monte-Carlo study that measures
+# per-cell quantities on the mesh cannot compare across N when the mesh changes
+# under it. This config puts N=1000 back on the common mesh.
+#
+# It is a COMPANION to parameters/torus_1000part_mbo.yaml, not a replacement.
+# That config remains the better partition; this one is the comparable one.
+#
+# ** THE OUTCOME IS ALREADY KNOWN, TO 4 DECIMAL PLACES. **
+# The production N=1000 run (arm_mbo_20260823_235918) used the ladder
+# 224 -> 286 -> 348 -> 410 -> 472. This config is the SAME base and the SAME
+# increments, stopped at 3 levels -- so its levels 0-2 are that run's levels 0-2,
+# vertex for vertex and step for step, and MBO is deterministic given the seed.
+# Its final state is therefore that run's level-2 state, which was measured:
+#
+#     level 0  V= 47,488   47.5 v/cell  30 steps  worst 5.6333%  0 fragmented
+#     level 1  V= 77,220   77.2 v/cell  42 steps  worst 3.3944%  0 fragmented
+#     level 2  V=114,144  114.1 v/cell  30 steps  worst 2.1457%  0 fragmented   <-- FINAL
+#
+# Predicted: ** worst cell 2.1457%, 0 fragmented, all three gates pass, Phase 1
+# about 3,441 s (57 min) ** including the 243 s init. If the run returns anything
+# materially different, something is wrong with determinism, not with the config.
+#
+# QUALITY -- the trade, stated plainly. At V=114,144 each cell owns 114 vertices
+# instead of 210, so the one-vertex granularity floor rises to 1.4017% and the
+# harness-fault bar to 2.8035%.
+#
+#     run                     v/cell   worst    granularity   worst/floor
+#     N=1000 production        209.6   1.3473%    0.7635%        1.765x
+#     N=1000 THIS CONFIG       114.1   2.1457%    1.4017%        1.531x
+#
+# So the absolute equal-area error is 1.6x WORSE (2.15% vs 1.35%) while the
+# error RELATIVE to what the mesh can represent is BETTER (1.531x vs 1.765x).
+# Both statements are true and they answer different questions: use the
+# production run if you want the best N=1000 partition, use this one if you want
+# an N=1000 partition commensurable with the N<=500 deliverables. 2.1457% is
+# still well inside the 5% Phase 1 area gate and inside the 2.8035% solver bar.
+#
+# NO FREEZE RISK -- there is MORE margin here, not less, because the ladder stops
+# before the fine levels where the margin narrows:
+#     L0 224x212  V= 47,488  cap=True   freeze ratio 1.341
+#     L1 286x270  V= 77,220  cap=False  freeze ratio 1.454
+#     L2 348x328  V=114,144  cap=False  freeze ratio 1.319
+# The finest level here sits at 1.319 against the production run's 1.133.
+#
+# COST. Phase 1 ~57 min (the three levels are already measured, above). Phase 2
+# extrapolates to ** 4.5-5 h ** at roughly 46,000 variable points, against the
+# production run's 8.32 h at 62,472 -- the mesh is coarser, so there is less
+# boundary to refine. Memory: score matrix 0.91 GB, ~2.7 GB peak; solution file
+# ~1.83 GB. All comfortably below the production run's footprint.
+#
+# NOTE ON "SAME ITERATIONS": Phase 2 keeps the same 20-iteration budget as every
+# other campaign (refinement.max_iterations below), so the refinement path is
+# identical. Phase 1 step counts are NOT fixed -- MBO runs each level to its own
+# churn-based convergence, and the counts above (30/42/30) are what that produced.
+#
+# SMOKE TEST (optional here -- the answer is already known from the production
+# run, and levels 0-1 will reproduce 5.6333% and 3.3944% exactly):
+#   python scripts/run_mbo_arm.py --config parameters/torus_1000part_mbo_v114144.yaml --levels 1
+# ============================================================================
+
+experiment:
+  name: torus-1000-mbo-common-mesh
+  surface: torus
+
+relaxation:
+  n_partitions: 1000
+  seed: 84172851                     # SAME seed as the production run -- required
+                                     # for levels 0-2 to reproduce it exactly
+  refinement_levels: 3               # 224x212, 286x270, 348x328 (114,144 verts)
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config for a possible PGD run on the same ladder.
+  lambda_penalty: 18.0               # UNCALIBRATED at N=1000 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 224                     # levels: 224x212, 286x270, 348x328
+    n_phi: 212
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults -- identical to the production N=1000
+# config, which is what makes levels 0-2 reproduce bit for bit.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 settings -- identical to every validated campaign, including the same
+# 20-iteration budget, so the refinement path is the qualified one.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

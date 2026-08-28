@@ -37,6 +37,12 @@ RUNS = {
     # N=750 is the first run on a DIFFERENT ladder (base 162x154, V=158,260), so
     # it is outside the fixed-mesh sqrt(N) comparison the others share.
     "n750_s84172851": "results/arm_mbo_20260822_182903_npart750_V158260_seed84172851",
+    # MESH-MATCHED companions: N=750 and N=1000 re-run on the COMMON V=114,144
+    # mesh via the standard 100x96 five-level ladder, so that every deliverable
+    # from N=50 to N=1000 hands downstream the identical 114,144-vertex torus.
+    # Both have a level 0 BELOW the tau freeze threshold -- the first such runs.
+    "n750_v114144":  "results/arm_mbo_20260827_114016_npart750_V114144_seed84172851",
+    "n1000_v114144": "results/arm_mbo_20260827_095843_npart1000_V114144_seed84172851",
 }
 
 # Anchors, from the runs named in the report's provenance block.

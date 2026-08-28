@@ -1,0 +1,125 @@
+# ============================================================================
+# N=1000 via APPROACH B -- THE STANDARD LADDER, UNCHANGED.
+#
+# PURPOSE: run N=1000 through EXACTLY the procedure used for N=100/400/500 --
+# base 100x96, five levels, ending at 348x328 (V=114,144) -- changing nothing but
+# n_partitions. This is the like-for-like comparison. A downstream Monte-Carlo
+# study measuring per-cell quantities on the mesh needs both the same final mesh
+# AND the same procedure that produced it; matching only the endpoint is not the
+# same experiment, because in a multi-level scheme the coarse levels do the
+# structural work and the fine levels refine it.
+#
+# It is the COMPANION EXPERIMENT to parameters/torus_1000part_mbo_v114144.yaml,
+# which reaches the same final mesh in 3 levels from a 224x212 base. Same
+# endpoint, different procedure. Run both; they answer different questions.
+#
+# ** THIS RUN IS EXPECTED TO BE INFORMATIVE WHETHER IT SUCCEEDS OR FAILS. **
+# It enters a regime no previous run has: its level 0 is below the tau freeze
+# threshold. Nothing here is safe by precedent, and that is the point.
+#
+#   lvl      res       V  v/cell   cap  sqrt(tau)/h_max  c_lo  RATIO  granularity
+#     0   100x96    9600     9.6  True            0.805 0.897  0.897     16.6663%  <-- BELOW 1.0
+#     1  162x154   24948    24.9  True            1.302 1.141  1.141      6.4133%
+#     2  224x212   47488    47.5  True            1.799 1.341  1.341      3.3693%
+#     3  286x270   77220    77.2 False            2.204 1.515  1.454      2.0720%
+#     4  348x328  114144   114.1 False            2.204 1.671  1.319      1.4017%
+#
+# TWO INDEPENDENT REASONS LEVEL 0 MAY CONTRIBUTE LITTLE, and they are different
+# problems that happen to coincide here:
+#
+#  (1) PARTIAL FREEZE. The ratio is 0.897, below 1.0, where every measured run has
+#      been above it (N=400 min 1.049, N=500 min 1.067). Concretely the diffusion
+#      length reaches only 0.805 of the LARGEST edge, but 1.46 of the MEAN edge
+#      (this mesh is 1.81x anisotropic). So the fine-triangle regions can still
+#      evolve while the coarse band cannot -- a partial, SPATIALLY BIASED freeze,
+#      not paralysis. The risk is not a dead level; it is a level that moves in
+#      some regions of the torus and not others, seeding a distorted partition
+#      that later levels inherit.
+#
+#  (2) REPRESENTATIONAL FLOOR. At 9.6 verts/cell the one-vertex granularity is
+#      16.6663%. Even a PERFECT solver cannot balance better than ~17% there.
+#      This is a property of the mesh, not of the method, and it holds regardless
+#      of whether the freeze matters.
+#
+# WHAT COULD GO RIGHT: B has healed every level-0 defect observed so far. At
+# N=500 a starved level 0 (19.2 v/cell) produced a fragmented cell and an 11.2%
+# worst-cell error, and levels 1-4 repaired all of it. The documented case where a
+# starved coarse level does PERMANENT damage is from PGD (docs/experiments/06),
+# not from B, and that distinction has never been tested at this depth.
+#
+# ** THE DIAGNOSTIC, AVAILABLE IN THE FIRST FEW MINUTES. ** Compare level 0's
+# reported `worst` against the init's `worst_rel_dev` in arm_report.yaml:
+#   - barely moved, and few steps  -> the freeze is real; this is the first
+#     measured point below ratio 1.0, which is itself a result
+#   - moved substantially          -> ratio < 1.0 is survivable at this v/cell,
+#     also a first
+# Either way the finding arrives before any expensive level runs.
+#
+# COST. Roughly 70-80 min for Phase 1 -- levels 2/3/4 here are the production
+# N=1000 run's levels 0/1/2 by mesh (measured 20.87 / 27.11 / 47.78 s per step),
+# and levels 0-1 are small. Phase 2 extrapolates to ~4.5-5 h at roughly 46,000
+# variable points. Memory ~2.7 GB peak; solution file ~1.83 GB. Note these are
+# extrapolations across a DIFFERENT ladder history, so treat them loosely -- and
+# note the standing rule that per-step cost rises sharply as verts-per-cell falls,
+# which is exactly the regime levels 0-1 sit in.
+#
+# RUN IT:
+#   python scripts/run_mbo_arm.py --config parameters/torus_1000part_mbo_v114144_5lvl.yaml
+# ============================================================================
+
+experiment:
+  name: torus-1000-mbo-standard-ladder
+  surface: torus
+
+relaxation:
+  n_partitions: 1000                 # the ONLY parameter that differs from the
+                                     # N=400/N=500 configs on this ladder
+  seed: 84172851                     # same seed family as every validated config
+  refinement_levels: 5               # 100x96, 162x154, 224x212, 286x270, 348x328
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config for a possible PGD run on the same ladder.
+  lambda_penalty: 18.0               # UNCALIBRATED at N=1000 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                     # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults. DELIBERATELY UNCHANGED despite level 0
+# sitting below the freeze threshold: raising tau_c would walk into the
+# over-merge wall on the other side of the same two-sided window, and would also
+# stop this being the same procedure as the N<=500 runs, which is the whole point.
+# The remedy for a freeze is the ladder -- and the companion config is that
+# remedy, run as a separate experiment rather than folded in here.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 settings -- identical to every validated campaign, same 20-iteration
+# budget, so the refinement path is the qualified one.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

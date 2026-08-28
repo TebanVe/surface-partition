@@ -582,6 +582,100 @@ reports \(\text{core loss} = 0\) at every level, \(q_{\mathrm{worst}}\) falling
 a tighter cap, and the same null of \S\ref{sec:null}. Still undetected rather
 than excluded.
 
+\subsection*{The mesh-matched companions, and a level 0 below the freeze threshold}
+\label{sec:meshmatched}
+
+The runs above each use the finest ladder their \(N\) can support, so \(N{=}750\)
+and \(N{=}1000\) end at \(V{=}158{,}260\) and \(209{,}568\) while every earlier
+deliverable ends at \(114{,}144\). The exported partition carries the Phase~1
+mesh, so a downstream study measuring per-cell quantities cannot compare across
+\(N\) when the mesh changes underneath it. Both were therefore re-run on the
+\emph{common} mesh --- and not merely to the same endpoint. Matching only the
+endpoint would be a different algorithm: in a multi-level scheme the coarse levels
+do the structural work and the fine levels refine it. The companions use the
+\textbf{identical ladder, seed and \(\tau\) constants as the \(N{=}400/500\)
+configs}, changing only \code{n\_partitions}.
+
+That forces \(100\times96\) as the base rung, where the two large \(N\) sit
+\emph{below} the freeze threshold --- a regime no previous run had entered:
+
+\begin{center}\small
+\begin{tabular}{@{}lrrrrl@{}}
+\toprule
+ & level-0 ratio & v/cell & level-0 floor & final worst & bar \\
+\midrule
+\(N{=}750\)  & \(0.964\) & 12.8 & \(12.4997\%\) & \(\mathbf{1.6928\%}\) & \(2.1026\%\) \\
+\(N{=}1000\) & \(0.897\) & \phantom{0}9.6 & \(16.6663\%\) & \(\mathbf{2.2560\%}\) & \(2.8035\%\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Both pass all three gates: 0 dead, 0 weak, 0 imbalanced, 0 fragmented.}
+So a sub-threshold level 0 is \emph{survivable} under B. Three observations, the
+first two of which were not predicted:
+
+\textbf{(1) It is a partial, not total, freeze --- and it costs real work.}
+Scoring each level by the fraction of the improvement available to it that it
+actually captured (its floor being the target it cannot pass), level 0 captures
+\(18\%\) at \(N{=}750\) and \(26\%\) at \(N{=}1000\), where every healthy level
+in both runs captures \(55\text{--}89\%\). About a third of normal. This matches
+the mechanism: the diffusion reaches past the mean edge but not the largest, so
+fine-triangle regions evolve while the anisotropic coarse band does not.
+
+\textbf{(2) The freeze ratio does not predict how much a sub-threshold level
+accomplishes.} \(N{=}750\) has the \emph{better} ratio (0.964 vs 0.897) and more
+verts/cell, and was predicted to fare at least as well; it captured \emph{less}
+(18\% vs 26\%). With two points no mechanism is offered, but the ratio alone is
+evidently not the controlling variable below 1.0.
+
+\textbf{(3) The damage is manufactured at level 0 and fully healed.} Level 0
+produced 2 fragmented cells at \(N{=}750\) and 3 at \(N{=}1000\) --- more than any
+run above threshold --- and the chains clear completely:
+\(2 \to 0 \to 0 \to 0 \to 0\) and \(3 \to 2 \to 1 \to 0 \to 0\). This is the
+distinction from PGD, where \codefile{docs/experiments/06-subfloor-ladder/}
+measured a starved level 0 leaving a \emph{permanent} runt (46.80\% \(\to\)
+15.92\% across 37\(\times\) more vertices). Under B the same insult is transient.
+
+\subsection*{Two properties of the common mesh worth recording}
+
+\textbf{Worst-cell error saturates at \(\approx 1.61\times\) the granularity
+floor.} On the fixed \(V{=}114{,}144\) mesh:
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & worst & floor & ratio \\
+\midrule
+\(N{=}400\)  & \(0.7773\%\) & \(0.5607\%\) & \(1.386\) \\
+\(N{=}500\)  & \(1.0993\%\) & \(0.7009\%\) & \(1.568\) \\
+\(N{=}750\)  & \(1.6928\%\) & \(1.0513\%\) & \(\mathbf{1.610}\) \\
+\(N{=}1000\) & \(2.2560\%\) & \(1.4017\%\) & \(\mathbf{1.609}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+It rises and then plateaus. If that holds, quality on a fixed mesh is predictable
+from the mesh alone --- worst cell \(\approx 1.61 \times\) granularity, which
+scales as \(N/V\) --- so a mesh can be sized for a target area error without
+running anything. Four points and no mechanism: a pattern, not a law.
+
+\textbf{A coarser mesh under-measures perimeter.} \(N{=}1000\) reads
+\(583.1417\) at \(V{=}114{,}144\) against \(583.2558\) at \(209{,}568\),
+\(-0.020\%\). The direction is not noise: a boundary represented by fewer, longer
+straight segments is a shorter approximation to the same curve, so the coarse
+value is an underestimate and the finer one is closer to the truth. Small, but it
+biases any perimeter-derived quantity systematically with \(N\) when the mesh is
+held fixed --- which is the price of holding it fixed.
+
+\textbf{Equal-area accuracy of the exported geometry is unaffected by any of
+this.} The percentages above are Phase~1's \emph{discrete} winner-take-all
+imbalance and do not survive into the export; Phase~2 equalises the actual
+geometric areas. Measured on the exported best iterates, the worst cell is off
+target by \(0.0014\%\) (\(N{=}400\)), \(0.0023\%\) (\(500\)), \(0.0272\%\)
+(\(750\)) and \(0.0127\%\) (\(1000\)) --- the two mesh-matched runs are the
+loosest of the set, as fewer verts/cell would predict, and all four are
+negligible.
+
 \subsection*{Why the missing anchor is the finding}
 
 The obvious objection is that a result without a baseline is weak. Here it is the
@@ -667,11 +761,30 @@ quadratically.} Campaign wall against variable-point count:
 \end{tabular}
 \end{center}
 
-Three points cannot fit a law, and the two exponents are not equal, so the
-defensible statement is \emph{superlinear and steepening}, not ``quadratic''.
-Either way it is the binding constraint on \(N\): at this trend \(N{=}1000\)
-implies a Phase~2 of roughly \(7\text{--}9\,\mathrm{h}\), against a Phase~1 that
-remains under an hour.
+\(N{=}1000\) has since been measured and extends the table: 62{,}472 variable
+points, \(29{,}946\,\mathrm{s}\), \(0.479\,\mathrm{s}\)/VP, exponent
+\(\mathbf{1.74}\). \textbf{An earlier version of this paragraph called the trend
+``superlinear and \emph{steepening}''; the fourth point refutes the second half}
+--- the exponents run \(1.69 \to 2.00 \to 1.74\), so 2.00 was an excursion, not a
+trend. The defensible statement is \emph{superlinear, exponent \(\approx\)
+1.7--2.0, with no evident trend}, which is a better outlook than the wording it
+replaces because it means the cost is not accelerating away.
+
+One cleaner comparison is now available. \(N{=}750\) and \(N{=}1000\) both have
+mesh-matched companions on \(V{=}114{,}144\) (\S\ref{sec:meshmatched}), giving the
+first pair measured at \emph{fixed} mesh: 39{,}704 VPs / \(12{,}908\,\mathrm{s}\)
+and 45{,}859 VPs / \(18{,}138\,\mathrm{s}\), an exponent of \(\mathbf{2.36}\) ---
+steeper than any of the mixed-mesh figures, which suggests part of what was being
+attributed to variable-point count was a mesh effect. Two points, so this is a
+flag for a third measurement rather than a result. Either way Phase~2 is the
+binding constraint on \(N\).
+
+\emph{Measurement note.} The \(N{=}750\) mesh-matched campaign was launched twice
+--- the first attempt wrote iterate 1 and stopped --- leaving 21 iterate files,
+two of them bit-identical copies of iteration 1. Its wall time must be taken from
+the \emph{second} launch (\(12{,}908\,\mathrm{s}\)); measuring from the campaign
+directory spans the aborted attempt and reads \(14{,}021\,\mathrm{s}\), \(9\%\)
+high. It is the only campaign of the ten with more than one launch.
 
 \begin{tcolorbox}[colback=red!3!white, colframe=red!45!black,
                   title={A reporting trap in \code{timing\_profile.yaml}},

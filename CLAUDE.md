@@ -252,6 +252,9 @@ testing/
 ├── diagnose_neighbor_triggers.py        # Neighbor-trigger diagnostic
 └── diagnose_white_triangles.py          # White-triangle diagnostic
 parameters/                       # (selected — see the directory for the full set)
+├── torus_1000part_mbo_v114144_5lvl.yaml  # N=1000 on the COMMON mesh via the STANDARD ladder (100×96 base, 5 levels → 348×328). Ladder/seed/mbo block byte-identical to `torus_500part_mbo.yaml`; only `n_partitions` differs. **Its level 0 is BELOW the τ freeze threshold (ratio 0.897, 9.6 v/cell)** — the first run there, and it passed all gates. Result: worst 2.2560% (bar 2.8035%), 0 fragmented, Phase 1 63.4 min, Phase 2 583.1417
+├── torus_750part_mbo_v114144_5lvl.yaml   # N=750 on the COMMON mesh, same standard ladder. Level 0 ratio 0.964 (12.8 v/cell), also sub-threshold. Result: worst 1.6928% (bar 2.1026%), 0 fragmented, Phase 1 41.7 min, Phase 2 504.1626
+├── torus_1000part_mbo_v114144.yaml       # N=1000 on the common mesh via a TRUNCATED ladder (224×212 base, 3 levels). Same endpoint as the two above but **a different procedure** — written before the standard-ladder route was shown to work, and kept as the companion experiment. NOT run
 ├── torus_1000part_mbo.yaml       # N=1000 via approach B, EXPLORATORY. **Second ladder re-basing: base 224×212, 5 levels → 472×444 (V=209,568, 209.6 v/cell).** The coarsest *usable* rung rises with N because when the τ cap is active the freeze ratio reduces to √(R_cell/h_max), which falls as cells shrink: at N=1000, 100×96 is **0.897 (frozen)** and 162×154 clears at 1.141 but holds only 24.9 v/cell — starved on both the fragmentation and the cost axis, so the base skips to 224×212 (47.5 v/cell, ratio 1.341). Every level ≥ 1.133. Granularity 0.7635% ⇒ bar 1.5270%, but the worst-cell/granularity ratio has risen 1.39 → 1.57 → 1.66 across N=400/500/750, so headroom is the thinnest yet. ⚠ **No √N check** (shares a mesh with nothing). ⚠ **11–14 h end-to-end**: Phase 1 2.5–4 h, Phase 2 **8–10 h**, ~5.0 GB peak RAM, ~3.35 GB solution file
 ├── torus_750part_mbo.yaml        # N=750 via approach B, EXPLORATORY. **The ladder starts one rung up (162×154, 5 levels → 410×386, V=158,260)** because at N=750 the usual 100×96 base is 12.8 v/cell with freeze ratio **0.964 — below 1.0**, i.e. the coarse band cannot move; every measured run has been above 1.0 at every level, so that is untested territory entered for nothing. Levels 1–5 of the standard ladder are kept verbatim. Final 211 v/cell, granularity 0.7582% ⇒ bar 1.5165%, finest freeze margin 1.131 (better than N=500's 1.109). ⚠ The fixed-mesh √N check does NOT apply (different V); ~504.7 is a soft upper expectation only. ⚠ Cost is **not** ~V·N — see the verts-per-cell gotcha below
 ├── torus_500part_mbo.yaml        # N=500 via approach B, EXPLORATORY. **RAN 2026-08-22, all predictions held** (`arm_mbo_20260822_120646`): valid, exported, Phase 1 1,322 s (1.7% over the 1,100–1,300 s estimate — the one miss), Phase 2 412.1138. Deliberately the SAME 5-level ladder as N=400 (finest 348×328, V=114,144), so the fixed-mesh √N check applies: N=400's 368.6603 predicted **412.17**, measured **412.1138** (−0.015%). The finest level took **41 steps** vs N=400's 30, confirming the larger freeze margin rather than a freeze. 228 v/cell, granularity 0.7009% ⇒ bar 1.4017% — better resolved than the accepted N=300 deliverable. τ cap binds on levels 0–1 (as at N=400); the finest level's freeze margin is 1.109, *more* than the N=400 run that worked (1.049) — a 6th level would drop it to 1.022, which is why it stops at 5. Phase 1 ≈ 20 min; Phase 2 ≈ 2.5–3 h and is the long pole
@@ -418,26 +421,47 @@ wrong and built its central section on the mistake.
 **Exported deliverables (the files downstream repos consume).** `finalised=True`
 is what downstream gates on; every high-N export needs `--force-finalised`
 because the migration-cycling plateau leaves `pending_migration=True` on the best
-iterate. Verified 2026-08-22:
+iterate. **Grouped by exported mesh, because the export carries the Phase 1 mesh
+and cross-N measurement requires a common one.** Verified 2026-08-28:
 
-| N | file (under the run's `partition/`) | iter | perimeter |
+**Common mesh — 114,144 vertices / 228,288 faces (use these for cross-N work):**
+
+| N | file | iter | perimeter |
 |---|---|---|---|
 | 50 | `torus_partition_run_20260625_113015_...h5` | 19 | 130.1020 |
-| 100 | `torus_partition_run_20260709_081548_...h5` ★ | 20 | 185.2546 |
+| 100 | `torus_partition_run_20260709_081548_...h5` | 20 | 185.2546 |
 | 150 | `torus_partition_run_20260711_165615_...h5` | 20 | 228.1566 |
 | 200 | `torus_partition_n200_s61803399.h5` | 16 | 262.1096 |
-| 300 | `torus_partition_run_20260806_123326_..._balanced.h5` | 18 | 323.3192 |
-| 300 | `torus_partition_n300_s61803399_5lvl.h5` ★ | 19 | **322.9622** |
-| **400** | `torus_partition_n400_s84172851.h5` ★ **(approach B)** | 19 | **368.6603** |
-| **500** | `torus_partition_n500_s84172851.h5` ★ **(approach B)** | 10 | **412.1138** |
-| **750** | `torus_partition_n750_s84172851.h5` ★ **(approach B)** | 14 | **504.9214** |
+| 300 | `torus_partition_n300_s61803399_5lvl.h5` | 19 | 322.9622 |
+| 400 | `torus_partition_n400_s84172851.h5` | 19 | 368.6603 |
+| 500 | `torus_partition_n500_s84172851.h5` | 10 | 412.1138 |
+| **750** | `torus_partition_n750_V114144.h5` | 9 | **504.1626** |
+| **1000** | `torus_partition_n1000_V114144.h5` | 16 | **583.1417** |
 
-★ = the best available at that N. All nine are `finalised=True`. The N=10 and
-N=30 exports are legacy smoke tests and are `finalised=False` — not deliverables.
-The N=400 and N=500 files live under **arm** runs
-(`results/arm_mbo_20260820_133709_npart400_.../partition/` and
-`results/arm_mbo_20260822_120646_npart500_.../partition/`), so their
-`source_run_id` is the arm directory (see the arm layout section).
+**Finer meshes — better partitions, NOT cross-comparable:**
+
+| N | mesh | file | iter | perimeter | worst cell |
+|---|---|---|---|---|---|
+| 750 | 158,260 | `torus_partition_n750_s84172851.h5` | 14 | 504.9214 | 1.2569% |
+| 1000 | 209,568 | `torus_partition_n1000_s84172851.h5` | 15 | 583.2558 | 1.3473% |
+| 100 | 47,488 | `torus_partition_run_20260708_094925_...h5` | 10 | 185.0787 | — |
+| 300 | 47,488 | `torus_partition_run_20260806_123326_..._balanced.h5` | 18 | 323.3192 | 1.63% |
+
+All thirteen are `finalised=True`. N=10 and N=30 are legacy smoke tests
+(`finalised=False`) and are not deliverables. The N=400–1000 files live under
+**arm** runs, so their `source_run_id` is the arm directory (see the arm layout
+section).
+
+⚠ **Which to hand downstream.** The finer-mesh N=750/N=1000 runs are the *better*
+partitions (worst cell 1.26%/1.35% vs 1.69%/2.26% pre-refinement); the
+common-mesh ones are the *comparable* ones. A study measuring per-cell quantities
+across N needs the common mesh. Two costs of that choice, both small and both
+measured: a coarser mesh **under-measures perimeter** (N=1000 reads 583.1417 vs
+583.2558, −0.020%, because a boundary of fewer longer segments is a shorter
+approximation), and the exported equal-area accuracy is looser (0.0272% at N=750
+and 0.0127% at N=1000, against 0.0014–0.0023% at N=400/500 — still negligible).
+Note the 1.69%/2.26% figures are Phase 1's *discrete* imbalance and do **not**
+survive into the export; Phase 2 equalises the geometric areas.
 
 **`docs/reference/`** — permanent explanatory documents: topology-switch
 methodology, scalability analysis, the optimization-methods primer, and
@@ -816,6 +840,9 @@ pre-registered thresholds committed before any run:
 | N=400 s84172851 | 920 s | *(no anchor — see below)* | vacuous; 0.7773%; **0 frag** | 368.6603 (it 19/20) | — |
 | N=500 s84172851 | 1,322 s | *(no anchor — see below)* | vacuous; 1.0993%; **0 frag** | 412.1138 (it 10/20) | — |
 | N=750 s84172851 | 3,614 s | *(no anchor — see below)* | vacuous; 1.2569%; **0 frag at every level** | 504.9214 (it 14/20) | — |
+| N=1000 s84172851 | 7,776 s | *(no anchor)* | vacuous; 1.3473%; **0 frag** (1 born at L3, healed) | 583.2558 (it 15/20) | — |
+| N=750 **mesh-matched** | 2,502 s | *(no anchor)* | vacuous; 1.6928%; **0 frag** | 504.1626 (it 9/20) | — |
+| N=1000 **mesh-matched** | 3,803 s | *(no anchor)* | vacuous; 2.2560%; **0 frag** | 583.1417 (it 16/20) | — |
 
 **N=400 is an EXISTENCE-AND-VALIDITY result, and its lack of an anchor is the
 finding, not a gap.** No PGD run at N=400 exists or is planned: the incumbent is
@@ -873,6 +900,13 @@ one at level 0 that later levels had to heal. ⚠ It is on a different mesh, so 
 is **outside the fixed-mesh √N table above**; against the soft expectation
 (504.7342) it came in at 504.9214, **+0.037%** — small, but opposite in sign to
 all three fixed-mesh checks, and opposite to the direction the config predicted.
+
+**Mesh-matched companions (2026-08-27).** N=750 and N=1000 re-run on the COMMON
+V=114,144 mesh via the *standard* ladder — identical ladder, seed and τ constants
+to the N=400/500 configs, only `n_partitions` differs — so the whole N=50→1000
+set now shares one exported mesh. Both have a level 0 **below the freeze
+threshold** and both still pass all three gates; see the freeze gotcha below and
+report 08 §Result 5. Configs: `torus_{750,1000}part_mbo_v114144_5lvl.yaml`.
 
 ⚠ Phase 2 cost 7,326 / 8,829 / **18,323 s** at N=400/500/750 against Phase 1's
 920 / 1,322 / 3,614 s, so **Phase 1 is only 11–16.5% of end-to-end** — and the
@@ -1174,6 +1208,9 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 - **VariablePoint soft deletion:** Destroyed VPs are marked `active=False` but never removed from the list. This preserves index stability for snapshot rollback but means you must always filter on `vp.active`.
 - **Consistency checks:** `PipelineOrchestrator.export_checkpoint()` runs roundtrip perimeter verification after saving. If this fails with a warning, the indicator functions may be out of sync with the live VP state.
 - **Phase 2 migration-cycling plateau (high N).** At higher region counts (observed at N=100 and again at N=150), Phase 2 does not reach a clean convergence. After the large first-iteration perimeter drop, per-iteration gains decay to noise (~0.003%) and the topology *oscillates*: migrations (Type 1/2) periodically raise the perimeter by a hair and the next optimize step claws it back, so `pending_migration` never clears and `optimization_success` stays `False`. It runs to the iteration cap without converging — this is a **plateau, not a failure or a bug**. The exported geometry at the best iterate is complete and valid; it just wasn't topologically frozen. **Standard workflow:** pick the minimum-`final_perimeter` iteration across the campaign (scan `final_perimeter` on every `iteration_*.h5`) and export it. Because that iterate carries `pending_migration=True`, `scripts/export_partition.py` writes `finalised=False` by default (`finalised = not pending_migration` in `src/export/writer.py`); for the accepted final deliverable, pass **`--force-finalised`** — it writes `finalised=True` plus an explanatory `finalised_note` (best iterate at the plateau) in one reproducible step, so external repos that gate on `finalised==True` accept it. `--force-finalised` is mutually exclusive with `--strict`. The N=100 deliverables were finalised by hand-patching the attr (before the flag existed); the N=150 deliverable uses `--force-finalised`.
+- **A ladder rung BELOW the τ freeze threshold is survivable under B — measured twice, and it costs work rather than correctness.** When the over-merge cap is active the freeze ratio reduces to `√(R_cell/h_max)`, which *falls* as cells shrink, so the standard `100×96` base drops below 1.0 at high N: **0.964 at N=750, 0.897 at N=1000**. Both ran and **passed all three gates**. What a sub-threshold level actually does: it captures **18% (N=750) / 26% (N=1000)** of the improvement available to it, against 55–89% for every healthy level — a *partial* freeze, since the diffusion reaches past the mean edge but not the largest on a 1.81× anisotropic mesh. It also manufactures fragmented cells (2 and 3, more than any above-threshold run), which the ladder then heals completely: `2→0→0→0→0` and `3→2→1→0→0`. **This is the distinction from PGD**, where a starved level 0 leaves a *permanent* runt (`docs/experiments/06-subfloor-ladder/`); under B the same insult is transient. ⚠ **The ratio does not predict how much a sub-threshold level accomplishes** — N=750 has the better ratio and more v/cell yet captured *less*. Prefer re-basing the ladder when you can (`torus_750part_mbo.yaml`, `torus_1000part_mbo.yaml` do); accept a sub-threshold rung when procedure-matching matters more than partition quality.
+- **On a fixed mesh the worst cell saturates at ≈1.61× the one-vertex granularity floor.** Measured at V=114,144: N=400 1.386, N=500 1.568, N=750 **1.610**, N=1000 **1.609**. If it holds, quality is predictable from the mesh alone (worst ≈ 1.61 × granularity, which scales as N/V), so a mesh can be sized for a target area error without running anything. Four points, no mechanism — a pattern, not a law.
+- **A Phase 2 campaign's wall time must exclude aborted launches.** The N=750 mesh-matched campaign was started twice (the first attempt wrote iterate 1 and stopped), leaving 21 iterate files with two bit-identical copies of iteration 1. Measuring from the campaign directory spans both and reads 14,021 s; the real figure from the second launch is **12,908 s**, 9% lower. Check `grep -c "STARTING ITERATIVE REFINEMENT" refinement.log` before quoting any campaign wall — it is 1 for nine of the ten arm campaigns and 2 for that one.
 - **Approach B's Phase 1 cost is NOT ~V·N — it degrades sharply, and verts-per-cell is the likely driver.** Measured at the *matched* mesh V=24,948: **N=400 3.24 s/step (62.4 v/cell), N=500 5.09 s/step (49.9), N=750 24.61 s/step (33.3)** — ×1.57 for ×1.25 cells (exponent 2.0), then ×4.83 for ×1.50 cells (exponent **3.9**). The balanced-assignment dual appears to need more subgradient iterations when each cell owns fewer vertices, which would confine the blow-up to *coarse* levels and leave the finest level (where v/cell stays 200+) closer to V·N. **That inference was then tested at N=750 and held, on two independent lines:** the finest level (211 v/cell) came in at 35.96 s/step against a pure-V·N prediction of 33.03, **+8.9%**; and per-step cost is *flat* across N=750's levels 0–2 (23.7 / 23.0 / 22.5 s) while V triples from 24,948 to 77,220 — tripling the mesh was free because v/cell tripled with it. Supported at four N, still not established as a law. Consequences: (1) never budget a new N by scaling V·N, run a `--levels 1` smoke test first; (2) a ladder whose coarse levels are starved is expensive as well as risky, which is a second reason to start the ladder higher at large N (see `torus_750part_mbo.yaml`).
 - **`timing_profile.yaml`'s `summary.total_wall_s` is NOT the Phase 2 campaign wall time — it is solver time only.** It accumulates time inside `optimizer.optimize()` and nothing else in the refinement loop, so at N=500 it reads **459 s against a campaign that took 8,829 s** (2.45 h) — a **19× under-report**. Take campaign wall from the `iteration_*.h5` timestamps. This is the same class of trap as `run_time_seconds` below (3.6×), and it has a consequence: **the IPOPT solver is only 5.2% of Phase 2 at N=500 and 3.6% at N=750** — a shrinking share — running 201 solver iterations per topology iteration at both, i.e. hitting `max_opt_iter: 200` every time. **Phase 2 also scales superlinearly in variable points** (0.250 / 0.270 / 0.389 s per VP at N=400/500/750; exponents 1.69 then 2.00), making it the binding constraint on N. So optimising the solver buys ≤5%, and the exact-Hessian path is the wrong target — the ~95% outside `optimize()` (contour rebuild, Steiner setup, migration detection, checkpoint export with roundtrip verification) is **unmeasured**, and decomposing it needs instrumentation that does not exist yet. See `docs/plans/PUBLICATION_READINESS_PLAN.md` Phase 4.
 - **`run_time_seconds` in `solution/metadata.yaml` is NOT the run's wall time.** It is `float(results[-1]['elapsed'])` — the **last level's** PGD elapsed time only (`src/pipeline/relaxation.py`). On the N=100 deliverable `run_20260709_081548` it reads **13,416 s** while the run actually took **48,132 s** (13.4 h) — a 3.6× under-report, because the last level is not the expensive one (level 0 is: it runs the 30,000-iteration cap and is 41% of that ladder). **For a real total, sum `level_wall_s` over `levels` in `solution/timing_profile.yaml`** (requires `--profile`), or read `summary.total_wall_s` on runs new enough to populate it. Anything comparing Phase 1 cost across configs — scaling studies, optimizer A/B arms — must use the profile, not `run_time_seconds`.

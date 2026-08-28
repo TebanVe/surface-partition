@@ -1,0 +1,124 @@
+# ============================================================================
+# N=750 via APPROACH B -- THE STANDARD LADDER, UNCHANGED.
+#
+# PURPOSE: run N=750 through EXACTLY the procedure used for N=100/400/500 --
+# base 100x96, five levels, ending at 348x328 (V=114,144) -- changing nothing but
+# n_partitions. Companion to parameters/torus_1000part_mbo_v114144_5lvl.yaml,
+# which does the same for N=1000.
+#
+# WHY: the exported partition carries the Phase 1 mesh, so N=100/150/200/300/400/
+# 500 all hand downstream the SAME 114,144-vertex / 228,288-face torus, while the
+# production N=750 (V=158,260) and N=1000 (V=209,568) runs do not. A downstream
+# Monte-Carlo study measuring per-cell quantities on the mesh cannot compare
+# across N when the mesh changes under it -- and matching only the ENDPOINT is not
+# enough, because in a multi-level scheme the coarse levels do the structural work
+# and the fine levels refine it. This config matches the procedure, not just the
+# endpoint.
+#
+# It does NOT replace parameters/torus_750part_mbo.yaml. That run is the better
+# N=750 partition (V=158,260, worst 1.2569%); this one is the comparable one.
+#
+# LEVEL 0 IS BELOW THE FREEZE THRESHOLD -- and that is now a measured, survivable
+# condition rather than an unknown:
+#
+#   lvl      res       V  v/cell   cap  RATIO  granularity      bar
+#     0   100x96    9600    12.8  True  0.964     12.4997%  24.9995%   <-- below 1.0
+#     1  162x154   24948    33.3  True  1.226      4.8100%   9.6199%
+#     2  224x212   47488    63.3  True  1.441      2.5269%   5.0539%
+#     3  286x270   77220   103.0 False  1.353      1.5540%   3.1080%
+#     4  348x328  114144   152.2 False  1.227      1.0513%   2.1026%
+#
+# ** THE PRECEDENT: N=1000 RAN THIS LADDER AND PASSED ALL THREE GATES. **
+# (run arm_mbo_20260827_095843, 2026-08-27.) Its level 0 was HARDER than this one
+# -- ratio 0.897 against 0.964, and 9.6 verts/cell against 12.8 -- and the outcome
+# was "impaired but not dead":
+#
+#   * level 0 captured 26% of the improvement available to it, where every healthy
+#     level captured 55-77%. About a third of normal work, consistent with a
+#     PARTIAL freeze: fine-triangle regions evolve, the anisotropic coarse band
+#     does not. It did not stall (13 steps, 10 active).
+#   * level 0 produced THREE fragmented cells -- more than any run before it --
+#     and the chain healed them completely: 3 -> 2 -> 1 -> 0 -> 0.
+#   * final: 0 dead / 0 weak, 0 imbalanced (worst 2.2560%, bar 2.8035%),
+#     0 fragmented. 63.4 min.
+#
+# So a sub-threshold level 0 costs work and manufactures defects, but under B the
+# damage is NOT permanent -- which is the distinction from PGD (docs/experiments/
+# 06, where a starved level 0 leaves a permanent runt). N=750's level 0 is milder
+# on both axes, so it should fare at least as well.
+#
+# EXPECTED RESULT. The production N=750 run reached worst 1.6237% at V=114,144 as
+# its level 3, via a different ladder (162x154 base). At N=1000 the standard
+# ladder came out ~5% worse than the equivalent finer-base ladder (2.2560% vs a
+# predicted 2.1457%). Applying that single comparison here suggests roughly
+# ** 1.70% **, comfortably inside the 2.1026% bar. Treat this as an extrapolation
+# from ONE paired comparison, not a prediction.
+#
+# COST. Roughly 40-60 min for Phase 1: this ladder is the production N=750 run's
+# levels shifted down one rung, plus a cheap 9,600-vertex level, minus its
+# expensive 158,260 level (that run took 3,614 s in total). Phase 2 extrapolates
+# to ** 3.5-4 h ** at roughly 40,000 variable points, against the production run's
+# 5.09 h at 47,088. Memory ~2.1 GB peak; solution file ~1.37 GB.
+#
+# WATCH LEVEL 0, exactly as at N=1000: compare its reported `worst` against the
+# init's `worst_rel_dev` in arm_report.yaml. The floor there is 12.4997%, so no
+# solver can do better than that regardless of the freeze.
+#
+# RUN IT:
+#   python scripts/run_mbo_arm.py --config parameters/torus_750part_mbo_v114144_5lvl.yaml
+# ============================================================================
+
+experiment:
+  name: torus-750-mbo-standard-ladder
+  surface: torus
+
+relaxation:
+  n_partitions: 750                  # the ONLY parameter that differs from the
+                                     # N=400/N=500 configs on this ladder
+  seed: 84172851                     # same seed family as every validated config
+  refinement_levels: 5               # 100x96, 162x154, 224x212, 286x270, 348x328
+  # --- The keys below are NOT read by approach B. They are kept so this file
+  # --- remains a valid Phase 1 config for a possible PGD run on the same ladder.
+  lambda_penalty: 16.0               # UNCALIBRATED at N=750 -- see the lambda-window
+                                     # gotcha in CLAUDE.md before trusting a PGD run
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100                     # levels: 100x96, 162x154, 224x212, 286x270, 348x328
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults. DELIBERATELY UNCHANGED despite level 0
+# sitting below the freeze threshold: raising tau_c would walk into the over-merge
+# wall on the other side of the same two-sided window, and would stop this being
+# the same procedure as the N<=500 runs, which is the entire point.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 settings -- identical to every validated campaign, same 20-iteration
+# budget, so the refinement path is the qualified one.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
