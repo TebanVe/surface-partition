@@ -13,6 +13,20 @@ existed keep opening exactly as before.
 
 Small datasets are left uncompressed -- chunking overhead is not worth it below
 roughly a megabyte, and scalars cannot be chunked at all.
+
+** APPLY THIS ONLY TO ONE-HOT / INDICATOR PAYLOADS. ** The ratio above comes
+entirely from the data being almost all zeros; it does not generalise. Measured
+on Phase 1's *continuous* PGD density (10.1M distinct values in [0,1]) the same
+setting gives only **1.21x** and makes the write **42.6x slower** (0.04 s ->
+1.64 s on a 91 MB block). That is why ``src/pipeline/relaxation.py`` and
+``scripts/balanced_readout.py`` deliberately do NOT use this helper: their
+``x_opt`` is a relaxed density, not an indicator, and relaxation.py's write is
+moreover the per-level checkpoint that makes multi-day runs survivable -- not a
+path to slow down 40x for a 1.2x saving.
+
+Current callers, both writing strictly 0/1 fields:
+  * ``src/partition/arm_harness.py``      -- arm labellings (``x_opt``/``x0``)
+  * ``src/pipeline/pipeline_orchestrator.py`` -- ``indicator_functions``
 """
 
 import numpy as np
