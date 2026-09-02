@@ -1,0 +1,105 @@
+# ============================================================================
+# B1 -- GROUP B (shape) -- approach B (auction-dynamics MBO), EXPLORATORY.
+#
+# Requested by the downstream Monte-Carlo study. Surface and cell count are fixed
+# by that request; everything below is what this repo has to do to deliver them.
+#
+#   R = 0.9165   r = 0.6547   R/r = 1.400   area A = 23.6883
+#   n_cells = 50        target mesh V ~ 114,000
+#
+# ** DELIVERED MESH: 348x328 = 114,144 vertices (+0.13% vs target),
+#    2282.9 verts/cell. **
+# The mesh is not free to choose: it is the product of the refinement ladder, so
+# only certain V are reachable. The ladder below was designed to land on the
+# requested V while keeping every level inside the tau window.
+#
+# LADDER (base 100x96, increments +62/+58, 5 levels):
+#
+#   lvl   mesh          V   v/cell    cap   RATIO   granularity
+#   0  100x96      9600    192.0  False   1.139    0.8929%
+#   1  162x154    24948    499.0  False   0.898    0.3436%
+#   2  224x212    47488    949.8  False   0.764    0.1805%
+#   3  286x270    77220   1544.4  False   0.677    0.1110%
+#   4  348x328   114144   2282.9  False   0.614    0.0751%
+#
+#   final granularity 0.0751%  =>  area-gate solver bar 0.1502%
+#   mesh anisotropy h_max/h_mean = 1.841 (reference torus is 1.814)
+#
+# ** ON THE LOW FREEZE RATIOS AT THE FINE LEVELS -- THIS IS EXPECTED AND BENIGN
+#    HERE. ** The ratio is sqrt(tau)/h_max against the local non-freeze threshold.
+# It falls as cells grow relative to the mesh, so a HIGH verts/cell configuration
+# necessarily runs low. That is not the dangerous regime: the danger is low
+# verts/cell, where a cell is only a handful of vertices and sub-edge motion means
+# nothing. The measured precedent is decisive -- approach B at n=100 on the
+# reference torus ran its three finest levels at ratios 0.923 / 0.818 / 0.742 and
+# produced the best n=100 result in this repo (Phase 2 perimeter 184.4118, beating
+# the PGD control by 0.455%, with 0 imbalanced and 0 fragmented cells). The runs
+# that genuinely struggled below 1.0 were at 9.6-12.8 verts/cell, two orders of
+# magnitude away from this configuration.
+#
+# COST ESTIMATE -- rough, and to be replaced by a smoke test (see below):
+#   Phase 1  ~     3 min   (164 s)  assuming ~30 MBO steps per level
+#   Phase 2  ~   0.3 h     (1,038 s)  at ~10,253 variable points
+#   TOTAL    ~   0.3 h
+#   peak RAM ~0.14 GB (V x n score matrix + 2 transients)
+#   solution file ~0.09 GB on disk
+# Phase 1 is extrapolated from 49 measured levels at 0.3-0.5 s per million (V*n)
+# per step; Phase 2 from VPs ~ 4.292*sqrt(n*V) and wall ~ 3.63e-5*VPs^1.859, both
+# fitted on the reference torus. ** Group B changes the aspect ratio, so its
+# variable-point estimate is the least reliable number here. **
+#
+# STANDING RULE -- SMOKE TEST BEFORE BUDGETING TIME:
+#   python scripts/run_mbo_arm.py --config parameters/torus_B1_n50.yaml --levels 1
+# Never budget a new configuration by scaling V*n; the cost model has been wrong
+# before and the smoke test costs minutes.
+# ============================================================================
+
+experiment:
+  name: torus-b1-n50-mbo
+  surface: torus
+
+relaxation:
+  n_partitions: 50
+  seed: 84172851                     # same seed family as every validated config
+  refinement_levels: 5
+  # --- Not read by approach B; kept so the file stays a valid Phase 1 config.
+  lambda_penalty: 10.0               # UNCALIBRATED on this surface -- do not run PGD
+                                     # from this file without recalibrating
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100
+    n_phi: 96
+    R: 0.9165
+    r: 0.6547
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults -- unchanged from every measured run.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 -- identical to every validated campaign so the refinement path is the
+# qualified one.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

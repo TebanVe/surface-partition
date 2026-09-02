@@ -1,0 +1,115 @@
+# ============================================================================
+# C1 -- GROUP C (bracket the perimeter minimum from below) -- approach B, EXPLORATORY.
+#
+# Requested by the downstream Monte-Carlo study, to extend the n-series BELOW the
+# existing n=50 point.
+#
+#   R = 1.0   r = 0.6   R/r = 1.667   area A = 23.6871
+#   n_cells = 25         target mesh V ~ 114,000
+#
+# ** THIS IS THE REFERENCE TORUS ON THE REFERENCE LADDER. ** Same surface, same
+# base mesh, same increments, same seed as torus_500part_mbo.yaml and the whole
+# N=50..1000 deliverable series; only n_partitions differs. So C1 lands on the
+# COMMON mesh 348x328 = 114,144 vertices (+0.13% vs target),
+# 4565.8 verts/cell, and is directly comparable with everything already delivered.
+#
+# LADDER (base 100x96, increments +62/+58, 5 levels):
+#
+#   lvl   mesh          V   v/cell    cap   RATIO   granularity
+#   0  100x96      9600    384.0  False   0.973    0.4167%
+#   1  162x154    24948    997.9  False   0.767    0.1603%
+#   2  224x212    47488   1899.5  False   0.653    0.0842%
+#   3  286x270    77220   3088.8  False   0.578    0.0518%
+#   4  348x328   114144   4565.8  False   0.524    0.0350%
+#
+#   final granularity 0.0350%  =>  area-gate solver bar 0.0701%
+#
+# ** EVERY LEVEL SITS BELOW THE FREEZE RATIO OF 1.0, WHICH IS A FIRST, AND THE
+#    FINEST (0.524) IS THE LOWEST THIS REPO WOULD HAVE RUN. READ THIS BEFORE
+#    INTERPRETING THE RESULT. **
+#
+# The finest level's ratio is not a design choice. With V and n both fixed by the
+# request and the over-merge cap inactive, it evaluates to 2.204/sqrt(R_cell/h_max)
+# = 0.524 exactly. No ladder can raise it; only a coarser final mesh or more cells
+# could, and both are specified.
+#
+# Why it is nevertheless expected to be fine: the ratio falls as cells grow
+# relative to the mesh, so it is LOW precisely because verts/cell is HIGH, and
+# high verts/cell is the safe regime. The measured precedent is approach B at
+# n=100 on this same surface and ladder, which ran its three finest levels at
+# 0.923 / 0.818 / 0.742 -- all sub-threshold -- and produced the best n=100 result
+# in this repo: Phase 2 perimeter 184.4118, beating the PGD control by 0.455%,
+# with 0 imbalanced (worst cell 0.1504%) and 0 fragmented. C1 extends that trend
+# one step: 4566 verts/cell against 1141. The runs that genuinely struggled below
+# 1.0 were at 9.6-12.8 verts/cell -- the opposite end.
+#
+# ** Still, 0.524 is an extrapolation beyond measured ground. Treat a poor result
+# here as evidence about the freeze threshold at high verts/cell, not as a defect
+# in the request. The smoke test below sees level 0 in about a minute. **
+#
+# EXPECTED QUALITY. At n=100 the final worst cell was 1.073x the granularity floor
+# (0.1504% against 0.1402%), far tighter than the ~1.61x that low-verts/cell runs
+# saturate at. If C1 behaves similarly, expect a worst cell near 0.04% against a
+# 0.0701% bar.
+#
+# COST -- the cheapest configuration in this set by a wide margin:
+#   Phase 1  ~1.4 min (82 s)   Phase 2  ~9 min (545 s) at ~7,250 variable points
+#   peak RAM ~0.068 GB   solution file ~0.046 GB
+#
+# ** COMPARABILITY CAVEAT. ** C1 lands on the same mesh as the existing n=50
+# deliverable, but that one was produced by PGD and PREDATES the energy fix
+# (run_20260625_113015, 2026-06-25; fix 6ff71a0, 2026-07-06). C1 vs n=50 is
+# therefore not a single-method comparison. See the deliverables table in
+# CLAUDE.md, which records the four pipelines spanning the n=50..1000 series.
+#
+# SMOKE TEST FIRST:
+#   python scripts/run_mbo_arm.py --config parameters/torus_C1_n25.yaml --levels 1
+# ============================================================================
+
+experiment:
+  name: torus-c1-n25-mbo
+  surface: torus
+
+relaxation:
+  n_partitions: 25
+  seed: 84172851                     # same seed as the whole reference series
+  refinement_levels: 5
+  # --- Not read by approach B; kept so the file stays a valid Phase 1 config.
+  lambda_penalty: 2.1                # the n=50 reference value; UNCALIBRATED at n=25
+  init_method: seeded
+  max_iter: 30000
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  checkpoint_per_level: true
+  profile: true
+
+surface:
+  torus:
+    n_theta: 100
+    n_phi: 96
+    R: 1.0
+    r: 0.6
+    n_theta_increment: 62
+    n_phi_increment: 58
+
+# MBO constants at the shipped defaults -- unchanged from every measured run.
+mbo:
+  tau_c: 4.0
+  rho: 1.0
+  max_iters: 200
+
+# Phase 2 -- identical to every validated campaign.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve
