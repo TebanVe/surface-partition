@@ -39,6 +39,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.h5util import create_dataset as h5_create
 from src.logging_config import get_logger, setup_logging
 from src.mesh.tri_mesh import TriMesh
 from src.partition.balanced_readout import (
@@ -157,15 +158,15 @@ def main():
     out_h5 = out_dir / "solution_balanced.h5"
     tmp_h5 = out_h5.with_suffix(".h5.tmp")
     with h5py.File(tmp_h5, "w") as f:
-        f.create_dataset("x_opt", data=result["densities"].ravel())
-        f.create_dataset("x0", data=x0 if x0 is not None else densities.ravel())
-        f.create_dataset("vertices", data=vertices)
-        f.create_dataset("faces", data=faces)
+        h5_create(f, "x_opt", result["densities"].ravel())
+        h5_create(f, "x0", x0 if x0 is not None else densities.ravel())
+        h5_create(f, "vertices", vertices)
+        h5_create(f, "faces", faces)
         # Provenance and the full readout state: psi plus both labelings make the
         # source densities exactly recoverable and every relabeling auditable.
-        f.create_dataset("psi", data=result["psi"])
-        f.create_dataset("labels_final", data=result["labels"].astype(np.int32))
-        f.create_dataset("labels_source", data=result["source_labels"].astype(np.int32))
+        h5_create(f, "psi", result["psi"])
+        h5_create(f, "labels_final", result["labels"].astype(np.int32))
+        h5_create(f, "labels_source", result["source_labels"].astype(np.int32))
         for k, v in src_attrs.items():
             f.attrs[k] = v
         f.attrs["derived_from"] = os.path.relpath(solution_path, out_dir)

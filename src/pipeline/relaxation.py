@@ -15,6 +15,8 @@ import socket
 import yaml
 import h5py
 import numpy as np
+
+from ..h5util import create_dataset as h5_create
 from dataclasses import dataclass, field
 from typing import Optional, List
 
@@ -789,10 +791,10 @@ def _write_solution_h5(path, mesh, x_opt, x0, config, provider,
     label1, label2 = provider.resolution_labels()
 
     with h5py.File(path, 'w') as f:
-        f.create_dataset('x_opt', data=x_opt)
-        f.create_dataset('x0', data=x0)
-        f.create_dataset('vertices', data=mesh.vertices)
-        f.create_dataset('faces', data=mesh.faces, dtype='i4')
+        h5_create(f, 'x_opt', x_opt)
+        h5_create(f, 'x0', x0)
+        h5_create(f, 'vertices', mesh.vertices)
+        h5_create(f, 'faces', mesh.faces, dtype='i4')
         f.attrs['n_partitions'] = config.n_partitions
         f.attrs['surface'] = surface
         f.attrs['resolution_labels'] = [label1, label2]

@@ -11,6 +11,8 @@ import re
 import time
 import dataclasses
 import numpy as np
+
+from ..h5util import create_dataset as h5_create
 import h5py
 import yaml
 from dataclasses import dataclass
@@ -392,9 +394,9 @@ class PipelineOrchestrator:
         indicator_functions = self.partition.indicator_functions
 
         with h5py.File(output_path, 'w') as f:
-            f.create_dataset('lambda_parameters', data=lambda_opt)
-            f.create_dataset('vp_edges', data=vp_edges_arr)
-            f.create_dataset('indicator_functions', data=indicator_functions)
+            h5_create(f, 'lambda_parameters', lambda_opt)
+            h5_create(f, 'vp_edges', vp_edges_arr)
+            h5_create(f, 'indicator_functions', indicator_functions)
 
             f.attrs['n_variable_points'] = len(lambda_opt)
             f.attrs['n_cells'] = self.partition.n_cells

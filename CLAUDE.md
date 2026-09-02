@@ -210,6 +210,7 @@ src/
 │   ├── partition_helpers.py      # Partition-specific viz helpers (cell coloring, VP/Steiner markers)
 │   ├── cell_coloring.py          # Neighbour-distinct cell colors (graph coloring; glasbey/HSV palette)
 │   └── partition_screenshots.py  # Offscreen multi-angle partition rendering (PyVista, optional)
+├── h5util.py                     # `create_dataset()`: transparent gzip for the large one-hot payloads. The bulk of this project's disk footprint was a few datasets storing a HARD 0/1 field as uncompressed float64 — Phase 1's `x_opt`/`x0`, Phase 2's `indicator_functions`. Measured: gzip=4 shrinks such a block **459×** (457 MB → 1.0 MB) and is *faster* end to end, because writing 457 MB of mostly-zeros costs more I/O than compressing costs CPU. Applied at four write sites (`arm_harness`, `pipeline_orchestrator`, `relaxation`, `balanced_readout`); datasets under 1 MiB and scalars are left alone. **gzip is a standard HDF5 filter so h5py decompresses transparently: no reader changed, and pre-compression files still open.** NOT applied to `src/export/writer.py` (the format a downstream repo consumes — not ours to change unilaterally) or to PGD traces (continuous data, only 1.2× compressible)
 ├── profiling.py                  # ProfilingState (Phase 2) + RelaxationProfilingState (Phase 1): opt-in timing accumulators (stdlib only)
 └── logging_config.py             # Logging setup, get_logger(), @log_performance decorator
 scripts/
@@ -242,6 +243,7 @@ testing/
 ├── test_soft_area_constraint.py         # A2 gates: simplex projection vs KKT, penalty gradient vs FD, flag-off bit-identity
 ├── calibrate_soft_area_mu.py            # A2: pick soft_area_mu for a config (force parity at the 5% area gate)
 ├── validate_struct_trigger.py           # Replay the structure-based refinement trigger offline against completed runs
+├── test_h5_compression.py               # Gates for the gzip write path: round-trip bit-identity, small/scalar datasets left alone, compressed vs uncompressed indistinguishable to a reader (same array, shape, dtype, argmax), explicit caller choice wins, and the ratio is real
 ├── test_disconnected_cells_detection.py # Phase 1 connectivity gate: detect_disconnected_cells split/speckle logic
 ├── check_fragmentation.py               # Run all 3 Phase 1 validity gates on any solution OR per-level checkpoint (mid-ladder)
 ├── test_balanced_assignment_solver.py   # Phase 0a gates: (1) approach A byte-identical after generalizing the solver; (2) foreign score scales (B's diffused y, C's -d^2) converge on the arms' ITERATED state. Bar = max(2x granularity, A's own dual stall at EQUAL budget). The 1.25x strong-reference term was removed: it was computed with the solver under test, so six crippled solvers passed it, including one returning psi=0. Gate 3 now asserts a null solver FAILS; gate 4 checks early stopping is safe inside an iterated loop

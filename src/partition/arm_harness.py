@@ -35,6 +35,8 @@ from typing import Dict, List, Optional, Tuple
 import h5py
 import numpy as np
 
+from ..h5util import create_dataset as h5_create
+
 from ..mesh.tri_mesh import TriMesh
 from .find_contours import (
     detect_area_imbalance,
@@ -201,11 +203,11 @@ def write_arm_solution(
     dens = labels_to_one_hot(labels, n_partitions)
     tmp = path + ".tmp"
     with h5py.File(tmp, "w") as f:
-        f.create_dataset("x_opt", data=dens.ravel())
-        f.create_dataset("x0", data=dens.ravel())
-        f.create_dataset("vertices", data=vertices)
-        f.create_dataset("faces", data=faces, dtype="i4")
-        f.create_dataset("labels_final", data=labels.astype(np.int32))
+        h5_create(f, "x_opt", dens.ravel())
+        h5_create(f, "x0", dens.ravel())
+        h5_create(f, "vertices", vertices)
+        h5_create(f, "faces", faces, dtype="i4")
+        h5_create(f, "labels_final", labels.astype(np.int32))
         f.attrs["n_partitions"] = int(n_partitions)
         f.attrs["surface"] = "torus"
         f.attrs["completed_levels"] = 0
