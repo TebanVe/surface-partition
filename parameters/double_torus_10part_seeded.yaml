@@ -1,0 +1,178 @@
+# ============================================================================
+# DOUBLE TORUS -- 10 partitions -- PGD (Phase 1) on the CORRECTED energy.
+#
+# Replaces the unmaintained `double_torus_10part.yaml`, every run of which
+# predates the energy-discretization fix (6ff71a0, 2026-07-06) and used
+# `init_method: random`. Graded with the three validity gates on 2026-09-07,
+# all 16 archived double-torus solutions FAIL: the best (lam=3.0, V=56,700)
+# passes dormant and area cleanly (0 imbalanced, worst cell 1.45%) yet has all
+# 10 cells fragmented, the largest piece of cell 7 holding only 43.8% of its
+# own area. This config changes the three things that caused that.
+#
+#   surface   (x(x-1)^2(x-2) + y^2)^2 + z^2 = 0.03     genus 2
+#   area      5.802  (measured on the level-0 mesh below; converges to 5.826)
+#   n_cells   10
+#
+# ---------------------------------------------------------------------------
+# 1. THE MESH LADDER IS CHOSEN BY STIFFNESS CONDITIONING, NOT BY VERTEX COUNT.
+# ---------------------------------------------------------------------------
+# Marching cubes produces needle triangles and near-coincident vertex clusters
+# (docs/plans/MESH_DEGENERACY_AND_NEEDLE_TRIANGLES.md). That document frames
+# them as a Phase 2 / rendering concern. Measured 2026-09-07, they are worse
+# than that: they contaminate PHASE 1's gradient. On grid 104x70x22 the
+# largest |g| component sits on a triangle of aspect ratio 9,927 carrying
+# K_ii = 10,509 against a mesh median of 5.13 -- a 2,000x outlier. The Armijo
+# line search is limited by exactly that component, so a single sliver can
+# throttle a whole level.
+#
+# The degeneracy is NOT reduced by refining. Needle fraction (AR > 10) sits at
+# 4-7% of triangles at every resolution tried, and the doc's suggested L1 knob
+# -- raising n_grid_z -- makes it WORSE, because it breaks the cubic voxel the
+# provider tries to preserve (median AR 1.63 -> 3.88 going 104x80x30 ->
+# 104x80x120). What DOES vary, by 140x between neighbouring grids, is whether
+# the worst sliver lands on the surface at all. So the grid is selected, not
+# scaled: a scan of 3-level ladders over base x0 in [84,132] and increments in
+# {12,16,20,24,28} ranked by max(K_ii)/median(K_ii) per rung.
+#
+# LADDER (base 84x56x18, +16/+11, z derived as int(18*x/84), 3 levels):
+#
+#   lvl   grid          V   v/cell   AR max   Kmax/Kmed   K>100x median
+#   0   84x 56x18    6376    637.6    442.9       124.8       8
+#   1  100x 67x21    8654    865.4    132.5        30.7       0
+#   2  116x 78x24   12448   1244.8    455.8        86.6       0
+#
+# Both refined levels are pristine (zero vertices above 100x the median
+# stiffness); the 8 outliers are confined to the coarse level that exists only
+# to equalize cheaply before the fine levels run. This was the best of 55
+# ladders scanned -- for comparison, base 100x67x21 +20/+13 reaches
+# Kmax/Kmed = 1,982 with 156 outlier vertices at its finest level, and
+# 124x83x26 alone reaches 4,064.
+#
+# 1,245 verts/cell at the finest level. The validated torus deliverables run
+# 228-2,283 v/cell, so this sits mid-range -- comfortably clear of the starved
+# regime, and there is no reason to go finer: a 4th level (132x89x27) reaches
+# Kmax/Kmed = 199.8 with 20 outliers, i.e. it buys resolution by reintroducing
+# the pathology this ladder was chosen to avoid.
+#
+# ---------------------------------------------------------------------------
+# 2. lambda_penalty = 1.2 -- CALIBRATED, BUT THE WEAKEST NUMBER IN THIS FILE.
+# ---------------------------------------------------------------------------
+# lambda has no closed form and the repo's per-N torus window does not transfer
+# to another surface. Two calibration routes were tried:
+#
+#   (a) FAILED -- the force-parity rule used for soft_area_mu
+#       (`_calibrate_soft_area_mu`). It returns lambda = 54.9 for the torus
+#       N=10 config whose known-good value is 3.25 (17x off) and swings
+#       109 -> 2,979 between two meshes OF THE SAME SURFACE. Cause: it keys on
+#       ||g||_inf, which as shown above is a sliver artefact here. Do not
+#       revive it on a marching-cubes mesh.
+#
+#   (b) USED -- match the ENERGY ratio, which is an integral and therefore
+#       robust to a handful of degenerate triangles. At the seeded init,
+#       torus N=10 with lambda=3.25 puts |E_penalty| / (E_grad + E_interface)
+#       at 0.0886. Reproducing that ratio here gives lambda = 1.198 -> 1.2.
+#       The scaling is not simply area: the penalty term is dimensionless
+#       (var_w is normalized by total weight W, and T = mu(1-mu)), while the
+#       Dirichlet and double-well terms scale with area, but E_base also
+#       depends on interface structure, so pure area scaling would have said
+#       0.80 and under-shoots by 1.5x.
+#
+# ** The target ratio is itself seed-dependent: the same torus config reads
+#    0.1441 at seed 13001502 against 0.0886 at seed 84172851. ** So carry
+#    roughly +/-60% uncertainty on this number and treat it as the CENTRE OF A
+#    BRACKET, not a determined value. Cross-check: the archived runs that came
+#    closest on this surface used lambda 1.8-3.0, which brackets 1.2 from
+#    above, and lambda=12.0 gave 3 imbalanced cells -- consistent with a window
+#    well below the old default of 2.0-3.0 once the well is 16x steeper.
+#
+# If the run misses, sweep {0.6, 1.2, 2.4} -- see the header of the companion
+# banchoff config and the run instructions below. Diagnostic per CLAUDE.md: a
+# run that finishes suspiciously fast with min peak density well under 1.0 is
+# ABOVE the ceiling (lower lambda); diffuse runt cells with correct peak
+# density are BELOW it (raise lambda).
+#
+# ---------------------------------------------------------------------------
+# 3. init_method: seeded -- MANDATORY, and the likely cause of the old failure.
+# ---------------------------------------------------------------------------
+# Every archived double-torus run used `random`. On the corrected (steeper)
+# double well, random init traps in the symmetric diffuse state (torus N=30:
+# 43% worst-cell area error vs 0.7% seeded). Seeded init also hands every cell
+# a CONTIGUOUS region from iteration 0, which is the direct mechanism against
+# the connectivity failure that is the only gate the old runs actually failed.
+#
+# ---------------------------------------------------------------------------
+# EXPECTED COST: minutes to ~1 h for Phase 1 (V is small and N=10; the torus
+# N=10 smoke test is the closest analogue). Phase 2 is the long pole as always.
+# Not measured -- run it and see; nothing here justifies a budget estimate.
+#
+# ** EXPORT IS NOT AVAILABLE FOR THIS SURFACE. ** scripts/export_partition.py
+# writes the link-list-torus schema: it reads config["surface"]["torus"],
+# requires R/r, and asserts n_theta*n_phi == V, which no marching-cubes mesh
+# can satisfy. Phase 1 + Phase 2 + all three gates + the balanced readout work
+# on this surface unchanged; only the final downstream export does not.
+# ============================================================================
+
+experiment:
+  name: double-torus-10-partitions-seeded
+  surface: double_torus
+
+relaxation:
+  n_partitions: 10
+  lambda_penalty: 1.2                 # see section 2 -- centre of a bracket
+  seed: 84172851                      # the seed lambda was calibrated at
+  init_method: seeded                 # see section 3 -- mandatory
+  refinement_levels: 3                # see section 1 -- a 4th rung is dirty
+  max_iter: 25000
+
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  checkpoint_per_level: true          # cheap insurance; keeps a mid-ladder restart
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 100
+  h5_save_stride: 50
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+
+surface:
+  double_torus:
+    n_grid_x: 84                      # base level -- see the ladder table
+    n_grid_y: 56
+    n_grid_z: 18                      # cubic voxel for bbox 3.0 x 2.0 x 0.6;
+                                      # scales as int(18 * n_grid_x / 84)
+    c: 0.03                           # tube thickness (defines the surface)
+    n_grid_x_increment: 16
+    n_grid_y_increment: 11
+
+# Phase 2 -- the qualified campaign, identical to every validated torus run.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

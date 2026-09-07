@@ -9,14 +9,35 @@
 
 Surfaces implemented: **torus** (`TorusMeshProvider`), **ellipsoid** (`EllipsoidMeshProvider`), **double torus** (`DoubleTorusMeshProvider`), and **Banchoff-Chmutov order 4** (`BanchoffChmutovMeshProvider`).
 
-**Surface scope — this project is torus-focused.** It began aiming at arbitrary
-closed surfaces; it has since narrowed to the torus, and the work that matters
-here (high-N validity, the λ window, the balanced readout, Phase 1 cost) is all
-torus work. The ellipsoid, double-torus, and Banchoff-Chmutov providers and
-their configs are **retained but unmaintained** — kept to seed a follow-on
-project, not exercised since the energy-discretization fix (`6ff71a0`), and so
-of unverified convergence. Treat any result from them as unvalidated until
-re-run. Representative config: `parameters/torus_100part_coarse_seeded.yaml`.
+**Surface scope — torus-focused, but approach B is now surface-agnostic
+end-to-end (2026-09-07).** The project began aiming at arbitrary closed
+surfaces and narrowed to the torus; the PGD work that matters (high-N validity,
+the λ window, the balanced readout, Phase 1 cost) is all torus work, and the
+**PGD** results on other surfaces remain unmaintained — every archived
+ellipsoid / double-torus / Banchoff-Chmutov run predates the
+energy-discretization fix (`6ff71a0`) and used `init_method: random`. Graded
+with the three gates on 2026-09-07, **all 21 of them FAIL**: 16 double-torus
+runs give 4–10 of 10 cells fragmented, and all 5 Banchoff-Chmutov runs give
+12 of 12 fragmented at 14–30 components per cell. Treat any PGD result on
+those surfaces as invalid, not merely unvalidated.
+
+**Approach B handles them cleanly.** `mbo_auction.py` was always mesh-generic;
+only the driver was torus-bound, and that was removed (see
+`src/surfaces/factory.py`). Measured the same day at N=10, all three gates
+passing on raw labels with **0 fragmented**:
+
+| surface | ladder | V | worst cell | bar | Phase 1 wall |
+|---|---|---|---|---|---|
+| double torus | 84x56 → 116x78 | 12,448 | 0.0468% | 0.3010% | **7 s** |
+| Banchoff-Chmutov | 48³ → 60³ | 26,928 | 0.0169% | 0.1351% | **17 s** |
+
+Configs: `parameters/{double_torus,banchoff_chmutov}_10part_seeded.yaml`.
+⚠ **`scripts/export_partition.py` is still torus-only** — it writes the
+link-list-torus schema, reads `config["surface"]["torus"]`, and asserts
+`n_theta*n_phi == V`, which no marching-cubes mesh satisfies. Phase 1, Phase 2,
+all three gates and the balanced readout work on these surfaces unchanged; only
+the downstream export does not. Representative torus config:
+`parameters/torus_100part_coarse_seeded.yaml`.
 
 ## Build & Run
 
@@ -168,7 +189,12 @@ src/
 │   ├── ellipsoid.py              # EllipsoidMeshProvider: parametric spherical-coord mesh
 │   ├── implicit.py               # ImplicitSurfaceProvider: marching-cubes base class
 │   ├── double_torus.py           # DoubleTorusMeshProvider: Bogosel & Oudet Figure 3
-│   └── banchoff_chmutov.py       # BanchoffChmutovMeshProvider: Bogosel & Oudet Figure 4
+│   ├── banchoff_chmutov.py       # BanchoffChmutovMeshProvider: Bogosel & Oudet Figure 4
+│   └── factory.py                # `build_provider(cfg)` / `is_structured(name)`: config → any SurfaceProvider.
+│                                 #   Added so `run_mbo_arm.py` stops being torus-only; `find_surface_partition.py`
+│                                 #   deliberately keeps its own equivalent branch (consolidating them is a separate
+│                                 #   change with its own regression burden). `is_structured` is a whitelist of one
+│                                 #   — only the torus satisfies `V == res1*res2`; marching-cubes meshes do not.
 ├── optimization/
 │   ├── pgd_optimizer.py          # ProjectedGradientOptimizer: Phase 1 PGD with Γ-convergence energy
 │   ├── perimeter_optimizer.py    # PerimeterOptimizer + IPOPTProblemAdapter: Phase 2 constrained minimization
@@ -217,7 +243,7 @@ scripts/
 ├── find_surface_partition.py     # Phase 1 CLI: Γ-convergence relaxation
 ├── refine_perimeter.py           # Phase 2 CLI: iterative perimeter refinement
 ├── balanced_readout.py           # Bridge CLI: balanced, connected readout of a Phase 1 solution
-├── run_mbo_arm.py                # Phase A CLI: run approach B and score it through arm_harness. Reads the mesh ladder from the ANCHOR RUN's experiment.yaml (never `parameters/`) and asserts `arm_final_V == anchor_V` before scoring. Writes `var1`/`var2`/`completed_levels` into the arm solution (asserting `var1*var2 == V`) so the output is exportable, not merely refinable, and snapshots the ladder-setting config to `experiment.yaml` at the run root. Reads `tau_c`/`rho`/`max_iters` from an optional `mbo:` config block, CLI overriding
+├── run_mbo_arm.py                # Phase A CLI: run approach B and score it through arm_harness. Reads the mesh ladder from the ANCHOR RUN's experiment.yaml (never `parameters/`) and asserts `arm_final_V == anchor_V` before scoring. Writes `var1`/`var2`/`completed_levels` into the arm solution (asserting `var1*var2 == V` **only for structured surfaces** — on a marching-cubes mesh the pair is a sampling grid and V is whatever the level set intersects) so the output is exportable, not merely refinable, and snapshots the ladder-setting config to `experiment.yaml` at the run root. Reads `tau_c`/`rho`/`max_iters` from an optional `mbo:` config block, CLI overriding. **Surface-agnostic since 2026-09-07** — builds the ladder through `src/surfaces/factory.py` and the `SurfaceProvider` interface, so it runs any of the four surfaces. The torus path is unchanged and was verified **bit-identical** (every dataset and attr of the N=400 `--levels 1` solution, plus 30 imbalanced / worst 7.6979% / 0 fragmented / boundary 215.8804)
 ├── optimization_analyzer.py      # Per-run analysis and plotting
 ├── visualize_partition_fast.py   # Fast partition viewer — production (PyVista, vectorized, neighbour-distinct cell colors)
 ├── visualize_partition.py        # Original partition viewer — debugging (PyVista)
@@ -278,7 +304,11 @@ parameters/                       # (selected — see the directory for the full
 ├── torus_300part_rebased_ladder.yaml    # ⚠ **Probably under-corrected — do not run without re-deciding.** Would have re-based the N=300 ladder, but puts level 0 at 51 v/cell. That was dismissed as "still inside the dying regime" on a ~90 v/cell boundary that is **not established** (see the runs-or-dies gotcha below), so the dismissal is weaker than it was written: 51 v/cell is below every *controlled* dying point measured, but the target "~92 v/cell ⇒ V₀ ≈ 27,600 (base ~176×164)" inherits the same unestablished number. Kept as the record — see its header and the two ladder gotchas below
 ├── ellipsoid_6part.yaml          # Ellipsoid, 6 partitions — LEGACY/UNMAINTAINED (see Surface scope)
 ├── double_torus_10part.yaml      # Double torus, 10 partitions — LEGACY/UNMAINTAINED (implicit / marching cubes)
-└── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions — LEGACY/UNMAINTAINED (implicit / marching cubes)
+├── banchoff_chmutov_12part.yaml  # Banchoff-Chmutov order 4, 12 partitions — LEGACY/UNMAINTAINED (implicit / marching cubes)
+├── double_torus_10part_seeded.yaml       # ★ Double torus N=10 — VALID via approach B (0 fragmented, worst 0.0468%, 7 s).
+│                                 #   Ladder chosen by STIFFNESS CONDITIONING, not vertex count — see the marching-cubes gotcha
+└── banchoff_chmutov_10part_seeded.yaml   # ★ Banchoff-Chmutov N=10 — VALID via approach B (0 fragmented, worst 0.0169%, 17 s).
+                                  #   Cubic voxels (48³→60³); the old 60x40x20 had 3× anisotropic voxels on a cubic bbox
 sweep/                              # Parameter sweep tool (independent from core pipeline)
 ├── parameter_sweep.py            # Sweep orchestrator (grid/paired, local/parallel/generate/collect)
 ├── sweep_analyzer.py             # Experiment-wide analysis (heatmaps, line plots, convergence overlays)
@@ -1225,6 +1255,10 @@ python sweep/sweep_analyzer.py --experiment-dir results/torus_npart10/
 - **MBO time step `tau` is a TWO-SIDED window, and a fixed `c` does not hold it.** For approach B, `tau = min((c·h_mean)², (ρ·R_cell)²)` with `c = 4`, `ρ = 1.0`. Below `c ≈ √(R_cell/h)` the scheme *freezes* (per-step motion ≈ τκ falls under one edge length); above `√τ ≈ R_cell` it *over-merges* (the diffused indicator has spread over the whole cell). The trap: a fixed `c` holds `√τ/h_max` constant at 2.20 while `√τ/R_cell` varies **6×** across the ladders in use (0.250 at N=100 V=114,144 up to 1.495 at N=300 V=9,600), so the two sides pull in opposite directions as the mesh coarsens or N rises. The cap binds on exactly one level in current use, N=300 level 0. Report **`√τ/h_max`, never `h_mean` alone** — this mesh is **1.81× anisotropic**, so a mean-based figure shows a comfortable 2.20 while the coarse-triangle band sits below its own local non-freeze threshold of 2.97. Note the two rulers disagree about which levels are at risk, so neither settles it by algebra; the calibrated pinning probe (NC3) is the arbiter.
 - **Assignment quality cannot detect over-merging** — the balanced assignment hits its area target *by construction*, so a smeared, non-local cell scores just as well as a compact one. Anything reasoning about MBO's `tau` being too large must use a geometry instrument: fragmented-cell count, per-cell isoperimetric ratio `Q_k = P_k²/(4πA_k)`, or core loss (cells whose own diffused-score peak vertex lies outside their territory). Citing an assignment-quality result against an over-merge claim is the same class of error as the theatre bar and the early-stop mask (`docs/experiments/07-phase0-shared-harness/`).
 - **A level below the resolution floor permanently damages the partition.** Measured at N=100 (`docs/experiments/06-subfloor-ladder/`): dropping only the coarsest level from 96 to 31 verts/cell — everything else, including the finest mesh, identical to the validated control — yields a cell 15.92% off the equal-area target where the control gets 0.78%. The defect is born at level 0 (46.80%) and is **not healed** by 37× more vertices downstream. It did *not* produce fragmentation. Note the sub-floor ladder is also *cheaper* (≈24,300 s vs 48,132 s), so cost alone never indicates a healthy ladder — judge validity per unit compute.
+- **`label_boundary_length` (Phase 1) and `final_perimeter` (Phase 2) differ by a FACTOR OF 2 BY DEFINITION — never compare them directly.** `PerimeterCalculator.compute_total_perimeter` returns the *sum of all cell perimeters* `Σ_k Per(cell_k)`, and every interface is shared by two cells, so it is counted **twice**. `label_boundary_length` (`src/partition/balanced_readout.py`, whose docstring already says "a label-space proxy for perimeter, not the Phase 2 contour perimeter") counts each interface **once**. Measured on the identical unoptimised configuration the ratio is **1.999** on both implicit surfaces — exactly 2, before Phase 2 does anything. Put side by side without the factor, Phase 2 looks like it *raises* perimeter by ~70%; it does not. The observed `P2_best / label_boundary` ratio is **1.68–1.74 across all 11 arm runs** (N=10 to N=800, two surfaces), which is just `2 x (1 - reduction)` and inverts to a **12–16% Phase 2 reduction** on every run — matching the directly measured 15.93% (double torus) and 12.76% (Banchoff) to two decimals. ⚠ **Every perimeter this project reports is `Σ_k Per(cell_k)`** — the deliverable table above, `arm_report.yaml`, and the exported `final_perimeter` — so a downstream consumer expecting total *interface* length must halve it.
+- **On a marching-cubes surface, choose the grid by STIFFNESS CONDITIONING, not by vertex count.** Measured 2026-09-07 on the double torus and Banchoff-Chmutov. Marching cubes emits needle triangles and near-coincident vertex clusters at **4–7% of triangles at every resolution tried** — the fraction is irreducible, so refining does not clean it up. What varies, by **140× between neighbouring grids**, is whether the worst sliver lands on the surface: `max(K_ii)/median(K_ii)` is 29 at double-torus `88x59x18` and **4,064** at `124x83x26`. This matters to **Phase 1, not only to Phase 2 rendering** as `docs/plans/MESH_DEGENERACY_AND_NEEDLE_TRIANGLES.md` frames it: on grid `104x70x22` the largest ‖g‖ component sits on a triangle of aspect ratio 9,927 carrying `K_ii = 10,509` against a mesh median of **5.13**, and PGD's Armijo line search is limited by exactly that component, so one sliver throttles a level. Two consequences. (1) **The doc's suggested L1 knob — raising `n_grid_z` — makes it worse**, because it breaks the cubic voxel `ImplicitSurfaceProvider` tries to preserve (median AR 1.63 → 3.88 going `104x80x30` → `104x80x120`); size the grid to the bounding box instead (double torus 3.0×2.0×0.6 ⇒ z ≈ 1+0.2(x−1); Banchoff's bbox is cubic ⇒ nx=ny=nz, where the old `60x40x20` config was 3× anisotropic). (2) **Select the ladder by scanning candidates**, requiring every rung clean — the shipped ones are `84x56x18 +16/+11` (8 outliers, all on level 0) and `48³ +6` (**zero at every level**). ⚠ Do not extend either upward: a 4th double-torus rung reaches 199.8 with 20 outliers, and Banchoff degrades sharply above ~80³ (82³ → 793, 86³ → 4,700). Approach B is the less exposed method here — it has **no line search**, doing one prefactorized LU solve per level, which tolerates a few stiff rows far better than a max-norm-limited gradient step.
+- **λ cannot be calibrated from ‖g‖∞ on a marching-cubes mesh, and the repo's torus λ window does not transfer to another surface.** The force-parity rule used for `soft_area_mu` (`_calibrate_soft_area_mu`) returns **λ = 54.9** for the torus N=10 config whose known-good value is **3.25**, and swings 109 → 2,979 between two meshes *of the same surface* — because it keys on ‖g‖∞, which is the sliver artefact above. What works instead is matching the **energy** ratio `|E_penalty| / (E_grad + E_interface)` at the seeded init, since energy is an integral and robust to a few bad triangles; that gives λ = 1.2 (double torus) and 2.4 (Banchoff) against the torus N=10 reference. ⚠ **Carry ±60%**: the target ratio is itself seed-dependent (0.1441 at seed 13001502 vs 0.0886 at 84172851 for the *identical* torus config). This whole problem is a reason to prefer approach B on a new surface — **B has no λ**, τ being derived per level from the mesh and N.
+- **The τ freeze ratio < 1.0 is NOT a freeze warning at high verts-per-cell.** The ratio falls as cells grow relative to the mesh, so a well-resolved configuration necessarily runs low, and reading `< 1.0` as a defect is a mistake — it fires on all three levels of the *validated* torus N=10 smoke config. The measured band that passes every gate reaches **0.524** (mc_study C1, n=25: 0 fragmented, worst 0.0217%) and 0.614 (B1, n=50). Judge a ratio against that measured band, not against 1.0. The genuinely dangerous end is the opposite one — 9.6–12.8 v/cell, where a cell is a handful of vertices.
 
 ## Dependencies
 

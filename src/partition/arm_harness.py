@@ -183,6 +183,7 @@ def write_arm_solution(
     faces: np.ndarray,
     n_partitions: int,
     extra_attrs: Optional[Dict] = None,
+    surface: str = "torus",
 ) -> str:
     """Write an arm's labelling in the Phase 1 solution schema.
 
@@ -209,7 +210,9 @@ def write_arm_solution(
         h5_create(f, "faces", faces, dtype="i4")
         h5_create(f, "labels_final", labels.astype(np.int32))
         f.attrs["n_partitions"] = int(n_partitions)
-        f.attrs["surface"] = "torus"
+        # Defaults to "torus" so every pre-existing caller is bit-identical;
+        # the MBO core is surface-agnostic, so the arm records what it ran on.
+        f.attrs["surface"] = str(surface)
         f.attrs["completed_levels"] = 0
         f.attrs["optimizer"] = "arm"
         for k, v in (extra_attrs or {}).items():

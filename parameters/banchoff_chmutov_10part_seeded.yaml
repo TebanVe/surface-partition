@@ -1,0 +1,150 @@
+# ============================================================================
+# BANCHOFF-CHMUTOV order 4 -- 10 partitions -- PGD (Phase 1), CORRECTED energy.
+#
+# Replaces the unmaintained `banchoff_chmutov_12part.yaml`. Every archived run
+# on this surface predates the energy fix (6ff71a0, 2026-07-06) and used
+# `init_method: random`; graded with the three gates on 2026-09-07 all five
+# FAIL, and they fail catastrophically -- ALL 12 cells fragmented in every run,
+# 14 to 30 components per cell, the largest component holding only 14-46% of
+# its own cell. That is a shattered field, not a partition. This is the worst
+# result on any surface in the repo, and the mesh is the main suspect.
+#
+#   surface   T4(x) + T4(y) + T4(z) = 0     (Chebyshev, largest component kept)
+#   area      25.586  (measured on the level-0 mesh below)
+#   n_cells   10      (was 12; 10 as requested, and it makes the two study
+#                      surfaces directly comparable at equal N)
+#
+# ---------------------------------------------------------------------------
+# 1. THE OLD GRID WAS STRONGLY ANISOTROPIC. THIS ONE IS CUBIC.
+# ---------------------------------------------------------------------------
+# The bounding box is 2.2 x 2.2 x 2.2 -- exactly cubic -- so a cubic voxel
+# requires n_grid_x = n_grid_y = n_grid_z. The old config used 60 x 40 x 20:
+# voxels 3x longer in z than in x, on a surface with no such anisotropy.
+# Measured effect on triangle shape (median aspect ratio, lower is better):
+#
+#   60x40x20  (old)   AR median 1.89
+#   90x70x20  (old)   AR median 1.72
+#   48x48x48  (here)  AR median 1.53
+#
+# That alone does not prove the anisotropy caused the shattering, but it is a
+# free correction in the right direction, and it is the one structural defect
+# the old configs had that the double-torus configs did not.
+#
+# As on the double torus, the residual marching-cubes degeneracy is selected
+# against rather than refined away: needle triangles hold 4-7% of the mesh at
+# every resolution, but max(K_ii)/median(K_ii) varies by two orders of
+# magnitude between neighbouring grids, and a single sliver with K_ii 2,000x
+# the median throttles the Armijo line search for a whole level.
+#
+# LADDER (base 48^3, +6/+6, z tracks x, 3 levels) -- fully clean:
+#
+#   lvl   grid          V   v/cell   AR max   Kmax/Kmed   K>100x median
+#   0   48x48x48    17088   1708.8    140.8        25.8       0
+#   1   54x54x54    21576   2157.6    226.2        53.3       0
+#   2   60x60x60    26928   2692.8    189.3        39.0       0
+#
+# ** Zero outlier vertices at EVERY level ** -- the only fully clean ladder
+# found for either implicit surface. Neighbouring choices are visibly worse:
+# 46^3 +4 puts 144 outliers on its level 1 (Kmax/Kmed 489), 46^3 +6 puts 93 on
+# its level 1, and 52^3 +4 puts 48 on its finest level. Above ~80^3 the surface
+# degrades sharply (82^3 -> 793, 86^3 -> 4,700), so do NOT simply refine this
+# ladder further; 2,693 verts/cell is already generous for N=10.
+#
+# ---------------------------------------------------------------------------
+# 2. lambda_penalty = 2.4 -- same calibration as the double torus.
+# ---------------------------------------------------------------------------
+# Matched to the energy ratio of the validated torus N=10 config: at the seeded
+# init, torus lambda=3.25 puts |E_penalty| / (E_grad + E_interface) at 0.0886
+# (seed 84172851); reproducing that here gives lambda = 2.395 -> 2.4.
+#
+# This surface's area (25.586) is close to the reference torus's (23.663), so
+# here the naive area scaling and the ratio match nearly agree -- 3.51 vs 2.40,
+# within the seed-induced uncertainty -- which is a mild independent check on
+# the method. It is NOT a check on the double torus, where the two routes
+# disagree by 1.5x.
+#
+# ** Carry roughly +/-60% uncertainty: the target ratio reads 0.1441 at seed
+#    13001502 against 0.0886 at seed 84172851 for the identical torus config.**
+# Treat 2.4 as the centre of a bracket; sweep {1.2, 2.4, 4.8} if it misses.
+# Diagnostic per CLAUDE.md: fast finish + min peak density well below 1.0 means
+# lambda is ABOVE the ceiling (lower it); diffuse runts with peak density ~1.0
+# mean it is BELOW (raise it). Note the archived lambda=14.5 run had min peak
+# density 0.434 -- textbook over-ceiling -- so the old defaults of 8-14.5 were
+# far too high even before the energy correction.
+#
+# ---------------------------------------------------------------------------
+# 3. init_method: seeded -- mandatory, as on every surface post-fix.
+# ---------------------------------------------------------------------------
+# Random init traps on the corrected steeper well, and seeded init gives every
+# cell a contiguous region from iteration 0 -- the direct countermeasure to the
+# 14-30-component shattering the archived runs produced.
+#
+# ---------------------------------------------------------------------------
+# ** EXPORT IS NOT AVAILABLE FOR THIS SURFACE ** -- scripts/export_partition.py
+# writes the link-list-torus schema (reads config["surface"]["torus"], requires
+# R/r, asserts n_theta*n_phi == V). Phase 1, Phase 2, all three gates and the
+# balanced readout work here unchanged; only the downstream export does not.
+# ============================================================================
+
+experiment:
+  name: banchoff-chmutov-10-partitions-seeded
+  surface: banchoff_chmutov
+
+relaxation:
+  n_partitions: 10
+  lambda_penalty: 2.4                 # see section 2 -- centre of a bracket
+  seed: 84172851                      # the seed lambda was calibrated at
+  init_method: seeded                 # see section 3 -- mandatory
+  refinement_levels: 3                # see section 1 -- do NOT extend upward
+  max_iter: 25000
+
+  use_analytic: true
+  use_discrete_area_for_constraints: true
+  checkpoint_per_level: true
+
+  pgd_step0: 1.0
+  pgd_armijo_c: 0.0001
+  pgd_backtrack_rho: 0.5
+  pgd_projection_max_iter: 200
+  pgd_projection_tol: 1.0e-10
+
+  enable_refinement_triggers: true
+  refine_trigger_mode: full
+  refine_patience: 30
+  refine_delta_energy: 1.0e-8
+  refine_grad_tol: 1.0e-2
+  refine_constraint_tol: 1.0e-2
+  refine_gnorm_patience: 30
+  refine_gnorm_delta: 1.0e-4
+  refine_feas_patience: 30
+  refine_feas_delta: 1.0e-6
+
+  penalty_target_mode: fixed
+  penalty_eps: 1.0e-8
+
+  run_log_frequency: 100
+  h5_save_stride: 50
+  h5_save_vars: ["x"]
+  h5_always_save_first_last: true
+
+surface:
+  banchoff_chmutov:
+    n_grid_x: 48                      # cubic voxel: bbox is 2.2^3, so x=y=z
+    n_grid_y: 48
+    n_grid_z: 48                      # scales as int(48 * n_grid_x / 48)
+    n_grid_x_increment: 6
+    n_grid_y_increment: 6
+
+# Phase 2 -- the qualified campaign, identical to every validated torus run.
+refinement:
+  method: ipopt
+  max_iterations: 20
+  max_opt_iter: 200
+  tolerance: 1.0e-7
+  boundary_tol: 0.001
+  lbfgs_memory: 30
+  exact_hessian: true
+  best_iterate: true
+  allow_partial_convergence: true
+  save_iterations: true
+  distance_preservation: preserve

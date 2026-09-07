@@ -50,7 +50,12 @@ from src.partition.arm_harness import (  # noqa: E402
 )
 from src.partition.balanced_readout import label_boundary_length  # noqa: E402
 from src.partition.mbo_auction import MBOConfig, run_mbo_ladder  # noqa: E402
-from src.surfaces.torus import TorusMeshProvider  # noqa: E402
+from src.surfaces.factory import (  # noqa: E402
+    build_provider,
+    is_structured,
+    ladder_resolutions,
+    surface_name_from_config,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 logger = get_logger(__name__)
@@ -65,23 +70,29 @@ def resolve_anchor(pattern: str) -> Path:
     return Path(matches[0])
 
 
-def anchor_spec(run_dir: Path) -> dict:
-    """Mesh ladder, N and seed, taken from the anchor run's OWN experiment.yaml."""
-    with open(run_dir / "experiment.yaml") as f:
-        cfg = yaml.safe_load(f)
+def _spec_from_cfg(cfg: dict) -> dict:
+    """Ladder / N / seed from a config dict, for ANY supported surface.
+
+    The ladder is carried as the config plus the surface name rather than as
+    torus grid dimensions: the mesh sequence is then produced through the
+    ``SurfaceProvider`` interface, which every surface implements, so nothing
+    here knows what a torus is. ``mbo_auction`` never did.
+    """
     relax = cfg.get("relaxation", cfg)
-    torus = cfg.get("surface", {}).get("torus", {})
     return {
         "n_partitions": int(relax["n_partitions"]),
         "seed": int(relax["seed"]),
         "levels": int(relax["refinement_levels"]),
-        "n_theta": int(torus["n_theta"]),
-        "n_phi": int(torus["n_phi"]),
-        "d_theta": int(torus["n_theta_increment"]),
-        "d_phi": int(torus["n_phi_increment"]),
-        "R": float(torus.get("R", 1.0)),
-        "r": float(torus.get("r", 0.6)),
+        "surface": surface_name_from_config(cfg),
+        "cfg": cfg,
     }
+
+
+def anchor_spec(run_dir: Path) -> dict:
+    """Mesh ladder, N and seed, taken from the anchor run's OWN experiment.yaml."""
+    with open(run_dir / "experiment.yaml") as f:
+        cfg = yaml.safe_load(f)
+    return _spec_from_cfg(cfg)
 
 
 def anchor_solution_vertices(run_dir: Path) -> int:
@@ -114,19 +125,7 @@ def spec_from_config(path: Path) -> dict:
     """
     with open(path) as f:
         cfg = yaml.safe_load(f)
-    relax = cfg.get("relaxation", cfg)
-    torus = cfg.get("surface", {}).get("torus", {})
-    return {
-        "n_partitions": int(relax["n_partitions"]),
-        "seed": int(relax["seed"]),
-        "levels": int(relax["refinement_levels"]),
-        "n_theta": int(torus["n_theta"]),
-        "n_phi": int(torus["n_phi"]),
-        "d_theta": int(torus["n_theta_increment"]),
-        "d_phi": int(torus["n_phi_increment"]),
-        "R": float(torus.get("R", 1.0)),
-        "r": float(torus.get("r", 0.6)),
-    }
+    return _spec_from_cfg(cfg)
 
 
 def mbo_overrides(path: Optional[Path]) -> dict:
@@ -169,14 +168,33 @@ def resolve_mbo_params(args, overrides: dict) -> Tuple[dict, dict]:
 
 
 def build_ladder(spec: dict):
+    """The mesh at every level, built through the SurfaceProvider interface.
+
+    One provider, re-resolved per level -- the same contract
+    ``src/pipeline/relaxation.py`` drives for Phase 1, so a ladder means the
+    same thing to both methods on every surface.
+    """
+    provider = build_provider(spec["cfg"], spec["surface"])
     meshes = []
-    nt, nphi = spec["n_theta"], spec["n_phi"]
-    for _ in range(spec["levels"]):
-        meshes.append(
-            TorusMeshProvider(n_theta=nt, n_phi=nphi, R=spec["R"], r=spec["r"]).build()
-        )
-        nt, nphi = nt + spec["d_theta"], nphi + spec["d_phi"]
+    for res in ladder_resolutions(provider, spec["levels"]):
+        provider.set_resolution(*res)
+        meshes.append(provider.build())
     return meshes
+
+
+def ladder_description(spec: dict) -> str:
+    """``"100x96 (+62/+58)"`` -- the ladder in the provider's own axis labels."""
+    provider = build_provider(spec["cfg"], spec["surface"])
+    (r1, r2) = provider.get_initial_resolution()
+    (d1, d2) = provider.get_resolution_increment()
+    lab1, lab2 = provider.resolution_labels()
+    return f"{r1}x{r2} (+{d1}/+{d2}) [{lab1}/{lab2}]"
+
+
+def final_resolution(spec: dict):
+    """The ``(res1, res2)`` pair of the ladder's finest level."""
+    provider = build_provider(spec["cfg"], spec["surface"])
+    return ladder_resolutions(provider, spec["levels"])[-1]
 
 
 def main():
@@ -257,9 +275,9 @@ def main():
         spec["levels"] = int(args.levels)
     seed = args.seed if args.seed is not None else spec["seed"]
     N = spec["n_partitions"]
+    print(f"surface       : {spec['surface']}")
     print(
-        f"ladder        : {spec['levels']} levels from {spec['n_theta']}x{spec['n_phi']} "
-        f"(+{spec['d_theta']}/+{spec['d_phi']}), N={N}"
+        f"ladder        : {spec['levels']} levels from {ladder_description(spec)}, N={N}"
     )
     print(
         f"anchor V      : {anchor_V if anchor_V is not None else 'n/a (exploratory)'}"
@@ -338,15 +356,22 @@ def main():
     print(f"  boundary len : {lbl:.4f}   arm wall {wall:.0f}s")
 
     sol = str(run_root / "solution" / f"arm_{mode}_part{N}_V{arm_V}_seed{seed}.h5")
-    # var1/var2 are the FINAL level's torus resolution. export_partition.py reads
-    # them off the base solution, so an arm run that omits them is refinable and
-    # viewable but not exportable -- the schema has to be complete, not nearly so.
-    final_nt = spec["n_theta"] + (spec["levels"] - 1) * spec["d_theta"]
-    final_nphi = spec["n_phi"] + (spec["levels"] - 1) * spec["d_phi"]
-    if final_nt * final_nphi != arm_V:
+    # var1/var2 are the FINAL level's resolution pair, in whatever axes the
+    # surface uses (torus: n_theta/n_phi; implicit: n_grid_x/n_grid_y). Phase 1
+    # writes the same thing for every surface, and export_partition.py reads them
+    # off the base solution -- so an arm run that omits them is refinable and
+    # viewable but not exportable, and the schema has to be complete.
+    final_r1, final_r2 = final_resolution(spec)
+    # The product identity is a property of a STRUCTURED mesh, not of the schema:
+    # on a marching-cubes surface the pair is a sampling grid and V is whatever
+    # the level set intersects (a real double-torus solution carries
+    # 200x150=30,000 against V=56,700). Assert it exactly where it is meaningful
+    # -- dropping it outright would silently retire a live check on every torus
+    # run, which is the one surface export_partition.py actually supports.
+    if is_structured(spec["surface"]) and final_r1 * final_r2 != arm_V:
         raise AssertionError(
             f"resolution bookkeeping disagrees with the mesh: "
-            f"{final_nt}x{final_nphi}={final_nt * final_nphi} != V={arm_V}"
+            f"{final_r1}x{final_r2}={final_r1 * final_r2} != V={arm_V}"
         )
     write_arm_solution(
         sol,
@@ -354,13 +379,14 @@ def main():
         mesh.vertices,
         mesh.faces,
         N,
+        surface=spec["surface"],
         extra_attrs={
             "arm": mode,
             "tau_c": cfg.tau_c,
             "rho": cfg.rho,
             "seed": seed,
-            "var1": int(final_nt),
-            "var2": int(final_nphi),
+            "var1": int(final_r1),
+            "var2": int(final_r2),
             "completed_levels": int(spec["levels"]),
             # HDF5 attrs cannot hold None, so exploratory runs record the config
             # they came from instead of an anchor that does not exist.
