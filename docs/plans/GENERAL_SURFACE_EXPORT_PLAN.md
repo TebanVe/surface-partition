@@ -71,17 +71,30 @@ reader against — considerably more useful than a hypothetical file.
 ## Phase 3 — Hand-off
 **Status:** Not Started
 
-Give the downstream worktree the spec plus the two files. Two items are
-**open questions for that side**, not things this repo can settle:
+Give the downstream worktree the spec plus the two files. Both items that were
+open when this plan was first written have since been **measured and closed** —
+they are recorded here so the downstream side inherits the answers, not the
+questions.
 
-1. **The residual tolerance for `implicit_expr`.** A marching-cubes mesh sits on a
-   linear interpolation of the level set, so its residual scales with voxel size,
-   not machine epsilon. The torus's fixed `MESH_RESIDUAL_TOL` will reject every
-   valid general-surface file. Needs calibrating against real meshes.
-2. **Mesh-quality thresholds.** `_check_mesh_quality` is calibrated on structured
-   torus meshes; marching-cubes meshes carry needles at 4–7% of triangles
-   irreducibly. The thresholds need recalibrating, or the check needs to become
-   advisory for `structured: false` files.
+1. **Residual tolerance — ANSWERED.** Test `|f|/|grad f|` (a distance, comparable
+   across surfaces), never raw `|f|` (arbitrary per-surface scaling: 2.7e-3 vs
+   2.4e-2 at comparable density). The normalised residual obeys `C * h^2` with `C`
+   constant to 5% down both ladders and O(1) on both surfaces (3.2 and 0.95), so
+   the check is `max |f|/|grad f| < K * voxel_size^2` with **`K = 10`**. This needs
+   `voxel_size` in the file — added to the `/surface` group in the spec. The
+   torus's `1e-10` cannot be reused: an exactly-parametrised torus sits at
+   **4.4e-16** (machine precision, resolution-independent), a marching-cubes vertex
+   near **1e-3**. Thirteen orders apart. Full table in the spec, §5.1.
+
+2. **Mesh-quality thresholds — NOT AN ISSUE.** `_check_mesh_quality` **warns, it
+   does not raise**, and *the accepted torus deliverables already breach both
+   thresholds*: on the Rep-3 subdivided mesh the shipped n=25 / n=50 / n=200
+   partitions all read `min_rel_area = 0.0` and `min_angle = 0.0 deg` (4 of 248,826
+   and 2 of 269,832 sub-triangles exactly degenerate) against `1e-6` / `1.0 deg`.
+   That is a property of Rep-3 subdivision — a variable point landing on a mesh
+   vertex gives a zero-area sub-triangle — not of the surface. General surfaces are
+   no worse than production torus files here. Recalibrating the thresholds (they
+   look calibrated for a base mesh, not a subdivided one) is downstream cosmetics.
 
 ## Deferred — convergence of 1.1 into 2.0
 **Status:** Not planned

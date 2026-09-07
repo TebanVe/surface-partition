@@ -72,6 +72,7 @@ about it?" from the file alone. `/surface` carries that.
 | `bbox` | float64 (3,2) | yes | Axis-aligned bounding box of `/mesh/vertices`, `[[xmin,xmax],[ymin,ymax],[zmin,zmax]]`. |
 | `params` | subgroup | yes | The surface's own parameters as scalar attributes. May be empty. |
 | `implicit_expr` | str | if `kind=="implicit"` | The defining equation as a human-readable string, zero level set. See §5. |
+| `voxel_size` | float64 | if `kind=="implicit"` | Marching-cubes grid spacing `h` along x. **Required** — the residual tolerance scales with it (§5). |
 | `resolution` | int (2,) | if `structured` | The `(res1, res2)` pair; the 2.0 spelling of `grid_shape`. |
 | `resolution_labels` | str (2,) | if `structured` | Axis names, e.g. `["n_theta","n_phi"]`; the 2.0 spelling of `vertex_order`'s content. |
 
@@ -128,25 +129,67 @@ defining function is the true analogue, not a placeholder:
 The residual check that replaces `_check_mesh_on_torus` is then
 `max |f(v)| < tol` over `/mesh/vertices`, with the same shape as the torus one.
 
-⚠ **The tolerance is not transferable.** The torus check uses a fixed
-`MESH_RESIDUAL_TOL` against an exactly-parametrised mesh, where the residual is
-at machine precision. A marching-cubes mesh sits on a *linear interpolation* of
-the level set, so its residual is bounded by the voxel size, not by machine
-epsilon. A general-surface consumer must scale the tolerance with the grid
-spacing, or the check will reject every valid file. Calibrating that tolerance is
-an open item, flagged in the plan.
+### 5.1 The residual tolerance — measured, with a scaling law
+
+**Do not test raw `|f|`.** `f` carries arbitrary scaling per surface: at comparable
+mesh density the double torus reads `max|f| = 2.7e-3` while Banchoff-Chmutov reads
+`2.4e-2`, a 9x spread that says nothing about mesh accuracy — the double torus's
+`f` has units of length^4, Banchoff's is dimensionless.
+
+**Test `|f| / |grad f|`**, which is the first-order distance from the vertex to the
+level set and is therefore in length units and comparable across surfaces. On the
+same two meshes it reads `4.1e-3` and `1.9e-3` — the same order, as it should.
+
+Measured across all three levels of both shipped ladders, the normalised residual
+follows `C * h^2` with `h` the voxel spacing, i.e. the **second-order** accuracy of
+marching cubes' linear interpolation:
+
+| surface | grid | `h` | `max |f|/|grad f|` | `/ h^2` |
+|---|---|---|---|---|
+| double torus | 84x56x18 | 0.03614 | 4.110e-03 | 3.146 |
+| double torus | 100x67x21 | 0.03030 | 3.022e-03 | 3.291 |
+| double torus | 116x78x24 | 0.02609 | 2.196e-03 | 3.227 |
+| Banchoff | 48^3 | 0.04681 | 1.943e-03 | 0.887 |
+| Banchoff | 54^3 | 0.04151 | 1.656e-03 | 0.961 |
+| Banchoff | 60^3 | 0.03729 | 1.383e-03 | 0.994 |
+
+`C` is constant to within 5% down each ladder and is **O(1)** on both surfaces
+(3.2 and 0.95). So the recommended check is
+
+```
+max |f(v)| / |grad f(v)|  <  K * voxel_size**2 ,   K = 10
+```
+
+`K = 10` clears the measured `C` by 3x on the double torus and 10x on Banchoff —
+enough margin for a surface with sharper curvature, tight enough to still catch a
+genuinely wrong mesh (which fails by orders of magnitude, not by a factor of three).
+
+**For scale, why the torus's `1e-10` cannot be reused:** an exactly-parametrised
+torus mesh has `max|f|` of **4.4e-16 at 100x96 and 5.0e-16 at 348x328** — machine
+precision, six orders inside its tolerance, and resolution-independent because the
+vertices are placed by the analytic parametrisation. A marching-cubes vertex sits
+on a *linear interpolant* of the level set, so its error is `O(h^2)` and lands
+near **1e-3**. That is thirteen orders of magnitude apart. `1e-10` is not a
+tolerance these meshes miss narrowly; it is the wrong kind of test for them.
 
 ## 6. What a general-surface reader must not assume
 
 1. **No `(u,v)` per vertex** unless `structured` is true (§4).
 2. **No analytic geodesic distance** on any 2.0 surface.
-3. **Mesh quality is worse.** Marching-cubes meshes carry needle triangles at
-   **4–7% of triangles at every resolution tried** — the fraction is irreducible
-   by refinement — and near-coincident vertex clusters at a similar rate. The
-   downstream `_check_mesh_quality` thresholds (min relative area, min interior
-   angle) are calibrated on structured torus meshes and **will need
-   recalibrating**. See the marching-cubes gotcha in `CLAUDE.md` and
-   `docs/plans/MESH_DEGENERACY_AND_NEEDLE_TRIANGLES.md`.
+3. **Mesh quality: already advisory, and the torus already trips it.** The
+   downstream `_check_mesh_quality` **warns, it does not raise** ("Check 8: mesh
+   quality on `/partition`. Warn (don't raise)"), and *the currently accepted
+   torus deliverables already breach both thresholds*: measured on the Rep-3
+   subdivided mesh, `min_rel_area` is **exactly 0.0** and `min_interior_angle`
+   **0.0 deg** for the shipped n=25, n=50 and n=200 torus partitions (4 of 248,826
+   and 2 of 269,832 sub-triangles are exactly degenerate), against thresholds of
+   `1e-6` and `1.0 deg`. This is a property of Rep-3 subdivision — a variable
+   point sitting on a mesh vertex yields a zero-area sub-triangle — not of the
+   surface. So mesh quality is **not a barrier** for general surfaces: they are no
+   worse than production torus files on this measure. The thresholds appear
+   calibrated for a base mesh rather than a subdivided one; recalibrating them is
+   a downstream cosmetic matter, not a blocker.
+
 4. **Genus is not 1.** Anything assuming a single handle, or two periodic
    directions, is torus-specific. The exported surfaces are genus 2 and genus 5.
 5. **`final_perimeter` counts every interface twice.** It is
