@@ -97,13 +97,18 @@ questions.
    look calibrated for a base mesh, not a subdivided one) is downstream cosmetics.
 
 ## Deferred — convergence of 1.1 into 2.0
-**Status:** Not planned
+**Status:** Decided (2026-09-07) — converge eventually, keep both for now.
 
-Whether the torus eventually migrates to 2.0 (with `R`/`r`/`resolution` living in
-`/surface/params` like every other surface) is a cross-repo decision and is
-deliberately left open. The spec is written so that convergence is possible later
-without redesign: the torus's own fields have a defined 2.0 spelling. Until both
-sides want it, torus stays on 1.1 and nothing moves.
+**Decision:** the end state is **one schema for all surfaces**. Until the
+general-surface work is proven, both `1.1` (torus) and `2.0` (everything else)
+are written and both are supported; a reader should accept either. The torus
+migrates to 2.0 only when both repos are ready, and nothing is forced.
+
+The spec is written so that migration needs no redesign: the torus's `R`/`r` and
+`grid_shape`/`vertex_order` already have a defined 2.0 spelling
+(`/surface/params` plus `resolution` / `resolution_labels`), so convergence is a
+move, not a reformat. Until then the torus path does not change at all, which is
+what keeps the downstream contract intact.
 
 ## Related documents
 
