@@ -1,6 +1,6 @@
 # General-Surface Partition Export — Implementation Plan
 
-**Status:** Not Started
+**Status:** Implemented (2026-09-07). Phases 1-2 done; Phase 3 hand-off awaits the downstream worktree.
 
 The schema this implements is specified in
 `docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`. Read that first — this
@@ -27,7 +27,7 @@ takes care is not the code but *not disturbing the torus path*, which a
 downstream project consumes as a stable contract.
 
 ## Phase 1 — Writer accepts a surface descriptor
-**Status:** Not Started
+**Status:** Done
 
 In `src/export/writer.py`:
 
@@ -54,7 +54,7 @@ gate that protects the downstream contract. If a re-export is not byte-identical
 the change is wrong — do not rationalise a diff.
 
 ## Phase 2 — Export the two existing partitions
-**Status:** Not Started
+**Status:** Done — files listed below
 
 Export both runs above at their **best** Phase 2 iterate (not the last — both sit
 on the migration-cycling plateau with `pending_migration=True` throughout, so
@@ -65,11 +65,23 @@ on the migration-cycling plateau with `pending_migration=True` throughout, so
 | double torus | `iteration_015_20260907_170820.h5` | 25.491911 |
 | Banchoff-Chmutov | `iteration_020_20260907_170922.h5` | 61.449188 |
 
-These become the fixtures the downstream general-surface worktree develops its
+**Exported 2026-09-07:**
+
+| surface | file | schema | genus | voxel_size | perimeter |
+|---|---|---|---|---|---|
+| double torus | `results/other_surfaces/arm_mbo_20260907_164351_.../partition/double_torus_partition_n10_V12448.h5` | 2.0 | 2 | 0.026087 | 25.491911 |
+| Banchoff-Chmutov | `results/other_surfaces/arm_mbo_20260907_164358_.../partition/banchoff_chmutov_partition_n10_V26928.h5` | 2.0 | 5 | 0.037288 | 61.449188 |
+
+Both `finalised=True`. The residual rule from spec §5.1 was validated end-to-end
+on the shipped files: `max |f|/|grad f|` is 2.196e-03 against a `10*h^2` tolerance
+of 6.805e-03 (3.1x margin) for the double torus, and 1.383e-03 against 1.390e-02
+(10.1x) for Banchoff-Chmutov. Both PASS.
+
+These are the fixtures the downstream general-surface worktree develops its
 reader against — considerably more useful than a hypothetical file.
 
 ## Phase 3 — Hand-off
-**Status:** Not Started
+**Status:** Ready — awaiting the downstream worktree
 
 Give the downstream worktree the spec plus the two files. Both items that were
 open when this plan was first written have since been **measured and closed** —

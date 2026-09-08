@@ -25,6 +25,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.export import export_partition
+from src.surfaces.factory import surface_name_from_config
 from src.partition.steiner_handler import SteinerHandler
 from src.pipeline.io import find_base_solution_path, load_partition_from_refined_file
 
@@ -39,11 +40,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--config", type=str, required=True,
-        help="Path to the experiment YAML containing surface.torus radii."
+        help="Path to the experiment YAML containing the surface section."
     )
     parser.add_argument(
         "--output", type=str, default=None,
-        help="Output HDF5 path. Default: <run_dir>/partition/torus_partition_<run-id>.h5"
+        help="Output HDF5 path. Default: <run_dir>/partition/<surface>_partition_<run-id>.h5"
     )
     parser.add_argument(
         "--strict", action="store_true",
@@ -71,8 +72,15 @@ def main() -> int:
     with open(args.config, "r") as f:
         config = yaml.safe_load(f) or {}
 
-    if "surface" not in config or "torus" not in config["surface"]:
-        print("ERROR: config has no surface.torus section (R, r, n_theta, n_phi)")
+    if "surface" not in config or not isinstance(config["surface"], dict):
+        print("ERROR: config has no surface section")
+        return 1
+    surface_name = surface_name_from_config(config)
+    if surface_name not in config["surface"]:
+        print(
+            f"ERROR: config declares surface {surface_name!r} but has no "
+            f"surface.{surface_name} section"
+        )
         return 1
 
     run_dir = Path(checkpoint_path).parent.parent.parent
@@ -105,7 +113,9 @@ def main() -> int:
     else:
         partition_dir = run_dir / "partition"
         partition_dir.mkdir(exist_ok=True)
-        output_path = str(partition_dir / f"torus_partition_{source_run_id}.h5")
+        output_path = str(
+            partition_dir / f"{surface_name}_partition_{source_run_id}.h5"
+        )
 
     export_partition(
         partition=partition,

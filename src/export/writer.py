@@ -15,9 +15,97 @@ import h5py
 import numpy as np
 
 from .rep3_builder import build_representation_3
+from ..surfaces.factory import (
+    is_structured,
+    resolve_surface_params,
+    surface_name_from_config,
+)
 
 
 logger = logging.getLogger(__name__)
+
+#: Zero level set of each implicit surface, as a human-readable expression. The
+#: generalisation of the torus's ``R``/``r``: ``f`` and ``grad f`` give the
+#: on-surface residual check, exact normals, and projection onto the surface
+#: alike. See docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md §5.
+_IMPLICIT_EXPR = {
+    "double_torus": "(x*(x-1)**2*(x-2) + y**2)**2 + z**2 - c",
+    "banchoff_chmutov": "T4(x) + T4(y) + T4(z),  T4(t) = 8*t**4 - 8*t**2 + 1",
+}
+
+#: Which config keys are the surface's own shape parameters, per surface.
+_SURFACE_PARAM_KEYS = {
+    "torus": ("R", "r"),
+    "ellipsoid": ("a", "b", "c"),
+    "double_torus": ("c",),
+    "banchoff_chmutov": (),
+}
+
+#: Marching-cubes surfaces; ``voxel_size`` is meaningful only for these, and the
+#: residual tolerance scales with it as ``K * h**2`` (spec §5.1).
+_IMPLICIT_SURFACES = frozenset(_IMPLICIT_EXPR)
+
+
+def _euler_characteristic(faces: np.ndarray) -> int:
+    """``chi = V - E + F`` from the face list alone."""
+    e = np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [0, 2]]])
+    e = np.unique(np.sort(e, axis=1), axis=0)
+    return int(faces.max() + 1) - int(e.shape[0]) + int(faces.shape[0])
+
+
+def _provider_bbox(surface_name: str, surface_params: dict):
+    """The provider's marching-cubes sampling box, ``((xmin,xmax), ...)``.
+
+    The sampling box, not the mesh extent: the level set generally does not reach
+    the box faces, so vertex extents would understate the voxel size.
+    """
+    from ..surfaces.factory import build_provider
+
+    provider = build_provider({"surface": {surface_name: dict(surface_params)}})
+    return provider.bounding_box()
+
+
+def _write_surface_group(
+    f, surface_name, surface_params, mesh, resolution, structured
+) -> None:
+    """Write the self-describing ``/surface`` group of schema 2.0.
+
+    Genus is *computed* from the exported mesh rather than tabulated per surface:
+    it doubles as a check that what we are exporting is a closed surface.
+    """
+    grp = f.create_group("surface")
+    grp.attrs["name"] = surface_name
+    is_implicit = surface_name in _IMPLICIT_SURFACES
+    grp.attrs["kind"] = "implicit" if is_implicit else "parametric"
+    grp.attrs["structured"] = bool(structured)
+
+    chi = _euler_characteristic(np.asarray(mesh.faces))
+    grp.attrs["euler_characteristic"] = int(chi)
+    grp.attrs["genus"] = int((2 - chi) // 2)
+
+    v = np.asarray(mesh.vertices)
+    grp.attrs["bbox"] = np.stack([v.min(axis=0), v.max(axis=0)], axis=1).astype(
+        np.float64
+    )
+
+    params = grp.create_group("params")
+    for key in _SURFACE_PARAM_KEYS.get(surface_name, ()):
+        if key in surface_params:
+            params.attrs[key] = float(surface_params[key])
+
+    if is_implicit:
+        grp.attrs["implicit_expr"] = _IMPLICIT_EXPR[surface_name]
+        # Voxel spacing along x. Two things this must NOT use: the config's
+        # n_grid_x (that is the BASE level, not the refined one this mesh came
+        # from), and the vertex extent (the level set does not reach the sampling
+        # box). Take the FINAL resolution and the provider's own bounding box.
+        n_gx = int(resolution[0])
+        (xmin, xmax), _, _ = _provider_bbox(surface_name, surface_params)
+        if n_gx > 1:
+            grp.attrs["voxel_size"] = (xmax - xmin) / (n_gx - 1)
+
+    if structured:
+        grp.attrs["resolution"] = np.asarray(resolution, dtype=np.int32)
 
 
 def _git_sha() -> str:
@@ -112,11 +200,14 @@ def export_partition(
             logger.warning(msg)
             print(f"WARNING: {msg}")
 
-    torus_cfg = config["surface"]["torus"]
-    R = float(torus_cfg["R"])
-    r = float(torus_cfg["r"])
+    surface_name = surface_name_from_config(config)
+    surface_params = resolve_surface_params(config, surface_name)
+    structured = is_structured(surface_name)
     n_theta = int(n_theta_final)
     n_phi = int(n_phi_final)
+    if surface_name == "torus":
+        R = float(surface_params["R"])
+        r = float(surface_params["r"])
 
     active_vps = [vp for vp in partition.variable_points if vp.active]
     n_vp = len(active_vps)
@@ -126,7 +217,11 @@ def export_partition(
     vertex_labels = partition.indicator_functions.argmax(axis=1).astype(np.int32)
     V = mesh.vertices.shape[0]
 
-    if n_theta * n_phi != V:
+    # The product identity is a property of a STRUCTURED mesh, not of the schema.
+    # Enforced for the torus -- the surface the 1.1 contract is written for -- and
+    # skipped where it cannot hold: on a marching-cubes mesh the resolution pair is
+    # a sampling grid and V is whatever the level set intersects.
+    if structured and n_theta * n_phi != V:
         raise ValueError(
             f"grid_shape inconsistency: n_theta_final * n_phi_final = "
             f"{n_theta} * {n_phi} = {n_theta * n_phi}, but mesh.vertices has "
@@ -164,11 +259,17 @@ def export_partition(
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with h5py.File(output_path, "w") as f:
-        f.attrs["schema_version"] = "1.1"
-        f.attrs["surface"] = "torus"
+        # Version namespace is FORKED, not bumped: the torus keeps writing 1.1
+        # byte-identically so the downstream reader -- which validates
+        # schema_version == "1.1" AND surface == "torus" -- cannot be affected.
+        # It refuses a 2.0 file at its first check, which is correct behaviour.
+        # See docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md.
+        f.attrs["schema_version"] = "1.1" if surface_name == "torus" else "2.0"
+        f.attrs["surface"] = surface_name
         f.attrs["n_cells"] = n_cells
-        f.attrs["R"] = R
-        f.attrs["r"] = r
+        if surface_name == "torus":
+            f.attrs["R"] = R
+            f.attrs["r"] = r
         f.attrs["finalised"] = bool(finalised)
         if finalised_note is not None:
             f.attrs["finalised_note"] = finalised_note
@@ -182,10 +283,15 @@ def export_partition(
         mesh_grp = f.create_group("mesh")
         mesh_grp.create_dataset("vertices", data=mesh.vertices.astype(np.float64))
         mesh_grp.create_dataset("faces", data=mesh.faces.astype(np.int32))
-        mesh_grp.attrs["grid_shape"] = np.array([n_theta, n_phi], dtype=np.int32)
-        mesh_grp.attrs["vertex_order"] = (
-            "theta-major row-major: vertex[i*n_phi + j] is at (theta_i, phi_j)"
-        )
+        if surface_name == "torus":
+            mesh_grp.attrs["grid_shape"] = np.array([n_theta, n_phi], dtype=np.int32)
+            mesh_grp.attrs["vertex_order"] = (
+                "theta-major row-major: vertex[i*n_phi + j] is at (theta_i, phi_j)"
+            )
+        else:
+            _write_surface_group(
+                f, surface_name, surface_params, mesh, (n_theta, n_phi), structured
+            )
 
         part_grp = f.create_group("partition")
         part_grp.create_dataset("sub_vertices", data=sub_vertices)
