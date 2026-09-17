@@ -1,0 +1,248 @@
+provenance:
+  generated: '2026-09-17'
+  script: docs/math/10-mbo-auction-dynamics/check_numerics.py
+  quick: false
+  seed_jitter: 0
+  seed_init: 84172851
+  python: 3.12.13
+  numpy: 2.4.4
+  scipy: 1.17.1
+  platform: macOS-15.3.1-arm64-arm-64bit
+  torus:
+    R: 1.0
+    r: 0.6
+  wall_seconds: 315.7
+constants:
+  mixture_vs_K0_kernel:
+    tau: 0.7
+    r: 0.9
+    mixture_integral: 0.085997184161
+    closed_form_K0: 0.085997184161
+  interface_constant:
+    resolvent_via_mixture: 0.5
+    resolvent_via_marginal: 0.5
+    gaussian_1_over_sqrt_pi: 0.5641895835
+  displacement_over_kappa:
+    via_mixture: 0.35
+    via_2d_kernel_ratio_half: 0.35
+    tau_over_2: 0.35
+    marginal_k0_check: 0.5976143047
+    marginal_k0_expected: 0.5976143047
+  bessel_integrals:
+    int_K0: 1.5707963268
+    int_s2_K0: 1.5707963268
+    pi_over_2: 1.5707963268
+    gamma_3_2_over_gamma_1_2: 0.5
+  second_moment_per_coordinate:
+    resolvent: 1.4
+    two_tau: 1.4
+  centre_value:
+    at_x:
+      '1':
+        resolvent: 0.3981
+        gaussian: 0.2212
+      '2':
+        resolvent: 0.7203
+        gaussian: 0.6321
+      '4':
+        resolvent: 0.9501
+        gaussian: 0.9817
+    mixture_check:
+      R: 1.3
+      tau: 0.5
+      mixture: 0.6812510434
+      closed_form: 0.6812510434
+  disc_exact_solution:
+    x: 3.87
+    ode_residual_inside_u=2: 1.0e-08
+    ode_residual_outside_u=6: -0.0
+    jump_at_x: 0.0
+    derivative_jump_at_x: 0.0
+    wronskian_I0K1_plus_I1K0_minus_1_over_x: 0.0
+positivity_and_pairing:
+  pairing_cases:
+  - mesh: 40x36
+    V: 1440
+    N: 10
+    tau: 0.366441
+    min_entry_A_tau: 2.7189978e-05
+    skew_over_DA_frobenius: 0.00238139
+    MA_tau_asymmetry_frobenius: 0.0
+    sym_DA_min_eig: 4.452811e-06
+    sym_DA_max_eig: 0.02058208
+    MA_tau_min_eig: 1.2316e-06
+    labelling_pair:
+      init_seed: 84172851
+      skew_term_over_sym_term: 1.09423e-05
+      argmax_moved_vertices: 1
+      argmax_moved_fraction: 0.00069444
+      labels_changed_by_step: 33
+  - mesh: 60x52
+    V: 3120
+    N: 100
+    tau: 0.075266
+    min_entry_A_tau: 8.657e-09
+    skew_over_DA_frobenius: 0.00206861
+    MA_tau_asymmetry_frobenius: 0.0
+    sym_DA_min_eig: 4.369627e-06
+    sym_DA_max_eig: 0.01040741
+    MA_tau_min_eig: 1.183708e-06
+    labelling_pair:
+      init_seed: 84172851
+      skew_term_over_sym_term: 2.03032e-05
+      argmax_moved_vertices: 1
+      argmax_moved_fraction: 0.00032051
+      labels_changed_by_step: 104
+  - mesh: 100x96
+    V: 9600
+    N: 100
+    tau: 0.056129
+    min_entry_A_tau: 3.27e-10
+    skew_over_DA_frobenius: 0.000907
+    MA_tau_asymmetry_frobenius: 0.0
+    sym_DA_min_eig: 6.29293e-07
+    sym_DA_max_eig: 0.00344272
+    MA_tau_min_eig: 1.67016e-07
+  - mesh: 100x96
+    V: 9600
+    N: 400
+    tau: 0.018838
+    min_entry_A_tau: 0.0
+    skew_over_DA_frobenius: 0.0011968
+    MA_tau_asymmetry_frobenius: 0.0
+    sym_DA_min_eig: 1.872633e-06
+    sym_DA_max_eig: 0.00361699
+    MA_tau_min_eig: 4.96989e-07
+  expm_check:
+    mesh: 40x36
+    t: 0.00229026
+    t_over_h_mean2: 0.1
+    min_entry_expm: -0.01403328
+    row_sum_dev: 0.0
+    K_max_positive_offdiag: 0.0
+disc_check:
+  mesh: 348x328
+  V: 114144
+  h_mean: 0.017133
+  h_max: 0.031089
+  anisotropy: 1.8146
+  total_area: 23.685884
+  centre:
+  - 1.6
+  - 0.0
+  - 0.0
+  jitter:
+    seed: 0
+    n_samples_per_row: 24
+    parametrisation: theta ~ U(0, 2pi/n_theta), phi ~ U(0, 2pi/n_phi) about the centre, one shared rng
+      consumed row by row in the order listed
+  gaussian_curvature_outer_equator: 1.041667
+  rows:
+  - R_d: 0.2
+    tau: 0.004
+    sqrt_tau_over_h_mean: 3.692
+    x: 3.162
+    leading_order_loss_pi_tau: 0.012566
+    exact_resolvent_factor: 1.1568
+    exact_resolvent_loss: 0.014537
+    exact_gaussian_factor: 1.0442
+    exact_gaussian_loss_2pi_tau_times: 0.026242
+    lumped_area_ambient_disc: 0.123842
+    pi_Rd2: 0.125664
+    lumped_area_dev_pct: -1.449
+    vertex_centred:
+      dA: -0.013134
+      ratio_to_leading_order: 1.0452
+      ratio_to_exact: 0.9035
+      ratio_to_gaussian_exact: 0.5005
+      displacement_over_h_mean: 0.627
+      y_min: 0.0
+      y_max: 0.8946
+    jittered:
+      ratio_to_exact_mean: 0.9704
+      ratio_to_exact_std: 0.0573
+      ratio_to_exact_min: 0.8583
+      ratio_to_exact_max: 1.1086
+      ratio_to_gaussian_exact_mean: 0.5376
+    geodesic_curvature_correction_pct: 1.389
+  - R_d: 0.25
+    tau: 0.004
+    sqrt_tau_over_h_mean: 3.692
+    x: 3.953
+    leading_order_loss_pi_tau: 0.012566
+    exact_resolvent_factor: 1.1075
+    exact_resolvent_loss: 0.013917
+    exact_gaussian_factor: 1.0251
+    exact_gaussian_loss_2pi_tau_times: 0.025763
+    lumped_area_ambient_disc: 0.194632
+    pi_Rd2: 0.19635
+    lumped_area_dev_pct: -0.875
+    vertex_centred:
+      dA: -0.012378
+      ratio_to_leading_order: 0.985
+      ratio_to_exact: 0.8894
+      ratio_to_gaussian_exact: 0.4805
+      displacement_over_h_mean: 0.467
+      y_min: 0.0
+      y_max: 0.948471
+    jittered:
+      ratio_to_exact_mean: 0.96
+      ratio_to_exact_std: 0.0831
+      ratio_to_exact_min: 0.8663
+      ratio_to_exact_max: 1.1272
+      ratio_to_gaussian_exact_mean: 0.5186
+    geodesic_curvature_correction_pct: 2.17
+  - R_d: 0.3
+    tau: 0.006
+    sqrt_tau_over_h_mean: 4.521
+    x: 3.873
+    leading_order_loss_pi_tau: 0.01885
+    exact_resolvent_factor: 1.1112
+    exact_resolvent_loss: 0.020946
+    exact_gaussian_factor: 1.0263
+    exact_gaussian_loss_2pi_tau_times: 0.038691
+    lumped_area_ambient_disc: 0.285101
+    pi_Rd2: 0.282743
+    lumped_area_dev_pct: 0.834
+    vertex_centred:
+      dA: -0.017492
+      ratio_to_leading_order: 0.928
+      ratio_to_exact: 0.8351
+      ratio_to_gaussian_exact: 0.4521
+      displacement_over_h_mean: 0.55
+      y_min: 0.0
+      y_max: 0.946414
+    jittered:
+      ratio_to_exact_mean: 0.9291
+      ratio_to_exact_std: 0.0383
+      ratio_to_exact_min: 0.8647
+      ratio_to_exact_max: 0.9917
+      ratio_to_gaussian_exact_mean: 0.503
+    geodesic_curvature_correction_pct: 3.125
+  - R_d: 0.2
+    tau: 0.002
+    sqrt_tau_over_h_mean: 2.61
+    x: 4.472
+    leading_order_loss_pi_tau: 0.006283
+    exact_resolvent_factor: 1.0882
+    exact_resolvent_loss: 0.006837
+    exact_gaussian_factor: 1.0188
+    exact_gaussian_loss_2pi_tau_times: 0.012803
+    lumped_area_ambient_disc: 0.123842
+    pi_Rd2: 0.125664
+    lumped_area_dev_pct: -1.449
+    vertex_centred:
+      dA: -0.005249
+      ratio_to_leading_order: 0.8354
+      ratio_to_exact: 0.7678
+      ratio_to_gaussian_exact: 0.41
+      displacement_over_h_mean: 0.246
+      y_min: 0.0
+      y_max: 0.967573
+    jittered:
+      ratio_to_exact_mean: 0.9063
+      ratio_to_exact_std: 0.0851
+      ratio_to_exact_min: 0.7677
+      ratio_to_exact_max: 1.0576
+      ratio_to_gaussian_exact_mean: 0.484
+    geodesic_curvature_correction_pct: 1.389

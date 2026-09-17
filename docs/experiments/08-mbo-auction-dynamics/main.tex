@@ -132,25 +132,51 @@ what was constrained. B therefore does not \emph{close} the continuous--discrete
 gap that motivated approaches A--E; the category is absent.
 
 \paragraph{The regime, and the novelty claim we do \emph{not} make.}
-Every published implementation of this machinery we are aware of convolves on a
+\textbf{Corrected 2026-09-17.} An earlier version of this paragraph said that every
+published implementation of this machinery we were aware of convolves on a
 \emph{uniform Cartesian grid via FFT}, on a flat domain, at small \(N\), and for
-P\'olya's \emph{outer} problem --- which convex body maximises the length of the
-shortest partition. That is true of Hu, Liu and Wang \cite{hu2024iterative}, whose
-auction-plus-thresholding machinery is closest to ours but whose domains are
-\([0,1]^2\) and 3D boxes on \(128^2\)/\(256^2\) grids, and of Bogosel and Oudet
-\cite{bogosel2021longest}, whose capacity-constrained Voronoi construction with
-\(>100\) cells is planar. Ours is the \emph{inner} problem: partition a fixed
-closed genus-1 surface into \(N\) equal-area minimal-perimeter cells on an
-unstructured triangulated mesh, at \(N\) in the hundreds. \textbf{We phrase this as
-``we are not aware of'', never as ``first''}: two web searches and two papers is
-not a literature review, and surface-remeshing and computer-graphics venues may
-cover adjacent ground under different vocabulary. Stated as a population claim, the
-corpus is: two full-text readings plus this project's standing bibliography.
+P\'olya's \emph{outer} problem. That was written from two papers and was wrong on
+three of its four clauses --- two falsified by one paper, the third by another.
+Reading the lineage itself
+(\codefile{docs/math/10-mbo-auction-dynamics/} \S2, all copies held at
+\codefile{docs/papers/}): Jacobs, Merkurjev and Esedo\u{g}lu
+\cite[\S4.2]{jacobs2018auction} already solve the \emph{inner} problem --- equal-area
+minimal-perimeter tessellation --- of the \emph{flat 2-torus}, a closed genus-1
+surface, at \(N = 64\) (recovering the hexagonal lattice) and run the
+area-preserving flow of a 160-cell Voronoi diagram; Merriman and Ruuth
+\cite[\S8.3]{merriman2007surfaces} evolve five regions of multiphase MBO on an
+embedded, \emph{curved} torus and 175 regions on the sphere by the
+closest-point method; and Elsey,
+Esedo\u{g}lu and Smereka \cite{elsey2009grain, elsey2011large} run
+diffusion-generated grain growth at \(10^5\) grains. Only ``uniform grid via FFT''
+survives, and only for the Euclidean implementations --- the graph line
+\cite{garcia2014multiclass}, whose implicit-Euler step is the one this arm
+transplants to surface finite elements, never used an FFT, and
+\cite[\S5]{jacobs2018auction} already run the \emph{constrained} scheme on an
+unstructured similarity graph. Hu, Liu and Wang
+\cite{hu2024iterative} remain the closest in \emph{purpose} (auction dynamics as
+the inner solver of the outer problem), at \(n \le 9\) on \(256^2\)/\(128^3\)
+grids, and Bogosel and Oudet \cite{bogosel2021longest} use capacity-constrained
+Voronoi diagrams with \(>100\) planar cells as an initialisation.
+
+What the held literature does not contain, stated as ``we are not aware of'' and
+never as ``first'': the scheme on a curved embedded surface discretised by an
+unstructured triangle mesh with a surface-FEM diffusion step; equal-area
+constraints at \(N = 400\)--\(1000\); an inexact transportation dual in place of
+the exact auction; and the multilevel mesh ladder. The defensible framing is
+\emph{combination, surface and scale}, not \emph{method}. The corpus is now the
+twenty-odd papers listed in \codefile{docs/papers/README.md}, read at the sections
+cited, plus this project's bibliography; it is still not a systematic review, and
+surface-remeshing and computer-graphics venues may cover adjacent ground under
+different vocabulary.
 
 The difference is load-bearing rather than cosmetic. The FEM operator
-\((M+\tau K)^{-1}M\) is a different object from an FFT convolution, with different
-failure modes; mesh pinning \cite{vangennip2014mean} is ours to manage, and no
-grid-derived \(\tau\) heuristic is imported.
+\((M+\tau K)^{-1}M\) is the \emph{resolvent} of the Laplace--Beltrami operator, not
+a Gaussian convolution: document~10 derives that one step is mean-curvature flow
+over time \(\tau/2\) rather than \(\tau\), that \(E_\tau\) tends to
+\(\tfrac12 \sum_k \mathrm{Per}(\Omega_k)\) rather than \(\pi^{-1/2}\) times it, and
+checks the former on the production mesh; mesh pinning \cite{vangennip2014mean}
+is ours to manage, and no grid-derived \(\tau\) heuristic is imported.
 
 \section{Result 1 --- perimeter}
 \label{sec:perimeter}
@@ -837,31 +863,24 @@ raises Phase~2, which is now the expensive half.
   initially mis-scored in B's \emph{dis}favour by an instrument that did not exist.
 \end{enumerate}
 
-\section*{Provenance of the two closest references}
-Both papers are held at \codefile{docs/papers/}. Authors, titles and versions are
-now \textbf{verified against their title pages}:
-\cite{hu2024iterative} is Shilong Hu, Hao Liu and Dong Wang (v1, 25 May 2024) ---
-an earlier draft of this report guessed two of the three given names wrongly, from a
-secondary description --- and \cite{bogosel2021longest} is Beniamin Bogosel and
-Edouard Oudet (v2, 7 June 2021).
+\section*{Provenance of the references}
+\textbf{Updated 2026-09-17.} Every paper cited in \S\ref{sec:what} is now held at
+\codefile{docs/papers/} and was read at the sections cited, not only at the
+abstract; the reading is recorded, with a table of cell counts, domains and
+constraints, in \codefile{docs/math/10-mbo-auction-dynamics/} \S2. The original
+note stands for the two papers it covered: \cite{hu2024iterative} is Shilong Hu,
+Hao Liu and Dong Wang (v1, 25 May 2024) --- an earlier draft of this report
+guessed two of the three given names wrongly, from a secondary description ---
+and \cite{bogosel2021longest} is Beniamin Bogosel and Edouard Oudet (v2, 7 June
+2021). The consequence of the wider reading is the corrected novelty paragraph in
+\S\ref{sec:what}.
 
-The scope characterisation is now partly checked directly rather than taken on
-trust: \cite{hu2024iterative} states in its abstract that it treats the
-\emph{longest} minimal length partition problem by Gaussian convolution with
-auction dynamics and threshold dynamics, on \(128\times128\) and
-\(256\times256\) grids in 2D and 3D, and its full text contains \textbf{zero}
-occurrences of ``manifold'', ``Riemannian'' or ``torus'';
-\cite{bogosel2021longest} states in its abstract that it seeks the set maximizing
-the perimeter of the least-perimeter partition and uses capacity-constrained
-Voronoi diagrams as \emph{initialization}, with 44 occurrences of ``convex'' and
-2 of ``manifold''. \textbf{What remains second-hand} is the reading of their full
-numerical sections; the author has read the title pages, abstracts and these
-keyword counts, not the papers end to end.
-
-Volume and page numbers throughout \codefile{docs/math/shared/references.bib}
-carry an upstream note that they should be checked against published sources
-before external distribution. That note still stands for the other 28 entries,
-none of which this report verified.
+Of the entries in \codefile{docs/math/shared/references.bib} that this report
+cites, every one is now either verified against a held copy or explicitly marked
+second-hand in its own \texttt{note} field (\cite{ruuth2003volume} is the one
+second-hand entry in the lineage). Entries this report does not cite keep the
+upstream note that volume and page numbers should be checked before external
+distribution.
 
 \section*{Related documents}
 \begin{itemize}\itemsep1pt

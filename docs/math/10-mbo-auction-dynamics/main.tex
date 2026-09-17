@@ -1,0 +1,1211 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{../shared/macros}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {Auction-Dynamics MBO on Surface Meshes},
+  pdfauthor  = {surface-partition project}
+}
+
+\title{\textbf{Auction-Dynamics MBO on Surface Meshes}\\[0.5em]
+  \large The threshold-dynamics replacement for Phase~1: provenance, derivation,
+  what transfers from the literature, and what does not}
+\author{}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Approach~B (\codefile{src/partition/mbo\_auction.py}) replaces the Phase~1
+$\Gamma$-convergence relaxation by volume-constrained multiphase threshold
+dynamics: the state is a hard labelling of the mesh vertices, each step diffuses
+every cell's indicator by one backward-Euler step of the surface heat equation and
+reassigns every vertex by a balanced thresholding $\argmax_k [y_{ik} + \psi_k]$
+whose offsets $\psi$ enforce equal discrete area. None of the ingredients is new:
+the scheme is Merriman--Bence--Osher's, its variational interpretation is
+Esedo\u{g}lu--Otto's, the balanced thresholding is Jacobs--Merkurjev--Esedo\u{g}lu's
+auction dynamics, and the implicit-Euler diffusion is the one the graph-MBO
+literature uses. This document first records, from the papers themselves, what
+each of those works did, at what cell counts, on what domains --- because an
+earlier description of this approach overstated its novelty on three of its
+four clauses. It then derives what is specific to this implementation: that the
+backward-Euler step is an \emph{exponential mixture} of heat kernels, from which
+its interface constant ($\tfrac12$, against $1/\sqrt\pi$ for the Gaussian) and its
+per-step displacement ($\tau\kappa/2$, against $\tau\kappa$) follow in three
+lines each and are confirmed on the production mesh; that the balanced
+threshold is the dual of a transportation problem whose two-phase case is the
+Ruuth--Wetton shifted level; that the Esedo\u{g}lu--Otto dissipation theorem does
+\emph{not} apply to the implemented pairing of a consistent diffusion with a
+lumped assignment and an inexact dual, and exactly which inequality survives;
+that a lumped--lumped pairing would restore the theorem (not implemented); and
+the two-sided time-step window, with the over-merge side quantified by the
+diffused indicator's value at a cell's centre, $1 - x K_1(x)$ at
+$x = \Rcell/\sqrt\tau$. Measurements are cited from report~08; nothing here is a
+new measurement except the one-step displacement check.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Overview}
+\label{sec:overview}
+
+\begin{tcolorbox}[colback=gray!6!white, colframe=gray!50!black,
+                  title={Provenance of every computed number in this document},
+                  fontupper=\small]
+\begin{tabular}{@{}p{2.6cm}p{11.8cm}@{}}
+Status & derivation, complete; twice adversarially reviewed (2026-09-17), all
+  findings applied \\
+Script & \codefile{docs/math/10-mbo-auction-dynamics/check\_numerics.py}
+  $\to$ committed \codefile{numerics.yaml} beside this file. \textbf{Every number
+  below that was produced by running code is quoted from that file}, with its
+  key named in the text; nothing is quoted from an interactive session or from
+  a reviewer's scratch script. Run from the repo root (\(\approx 5\) min;
+  \code{-{}-quick} skips the two \(100 \times 96\) dense eigendecompositions). \\
+Determinism & jittered disc centres (\S\ref{sec:check}):
+  \code{numpy.random.default\_rng(0)}, 24 samples per row, one shared generator
+  consumed row by row in the table's order, offsets
+  \(\theta \sim U(0, 2\pi/348)\), \(\varphi \sim U(0, 2\pi/328)\). Labelling pair
+  (\S\ref{sec:outside}): the geodesic balanced init at the project seed
+  \(84172851\), then one full-budget balanced step. \\
+Meshes & torus \(R = 1.0\), \(r = 0.6\) throughout (\code{TorusMeshProvider});
+  \(40 \times 36\), \(60 \times 52\), \(100 \times 96\) (the production base), and
+  the \(348 \times 328\) deliverable mesh (\(V = 114{,}144\)); \(\tau\) from
+  \code{tau\_diagnostics} with \code{MBOConfig()} defaults. \\
+Versions & Python 3.12.13, numpy 2.4.4, scipy 1.17.1; macOS 15.3.1 arm64
+  (Mac mini). Eigenvalues may differ in the last printed digit across BLAS
+  builds; nothing quoted depends on that digit. \\
+Cited, not computed & the run statistics of \S\ref{sec:outside} and
+  \S\ref{sec:survives} (4 of 96 energy increases; the slack range) are from
+  \codefile{docs/experiments/08-mbo-auction-dynamics/data.yaml}; the
+  \(68.16\%\)/\(1.97\%\) of \S\ref{sec:init} from
+  \codefile{docs/plans/PHASE1\_BC\_REPLACEMENT\_PLAN.md}; the freeze constants'
+  \(c = 2\)/\(c = 4\) pair from \codefile{testing/test\_mbo\_auction.py}; every
+  statement about a paper from the copy indexed in
+  \codefile{docs/papers/README.md}. \\
+\end{tabular}
+\end{tcolorbox}
+
+Phase~1 of this project, as specified by Bogosel and Oudet
+\cite{bogosel2017partitions} and derived in document~06
+(\codefile{docs/math/06-phase1-energy-discretization/}), minimises a
+Modica--Mortola functional over $N$ continuous densities under an equal-mass
+constraint, and reads the partition off as the winner-take-all territory of those
+densities. Document~09 (\codefile{docs/math/09-balanced-readout/}) derives why
+that readout can diverge from what was constrained --- at high $N$ it
+manufactures cells whose territory is far from the equal-area target, and cells
+whose territory is disconnected --- and the extraction-time correction that
+repairs it.
+
+Approach~B removes the category of problem rather than repairing it. Its state is
+a labelling $\omega : \{1,\dots,V\} \to \{1,\dots,N\}$ of the mesh vertices, never
+a continuous field, so there is no readout to diverge. Each step at a fixed mesh
+level is
+\begin{enumerate}[itemsep=1pt]
+  \item \textbf{diffuse}: for every cell $k$, solve $(M + \tau K)\, y_k = M \chi_k$,
+    where $\chi_k$ is the indicator of cell $k$'s territory;
+  \item \textbf{balanced threshold}: $\omega'(i) = \argmax_k [\, y_{ik} + \psi_k \,]$,
+    with the $N$ offsets $\psi$ chosen so that every cell's discrete area equals
+    the target $\Atgt$.
+\end{enumerate}
+This is repeated until the labels stop changing, the labels are carried to the
+next finer mesh by nearest-vertex interpolation, and the process repeats. Phase~2
+then refines the resulting contour exactly as it would a Phase~1 output
+(\codefile{src/optimization/perimeter\_optimizer.py}); nothing downstream
+changed.
+
+The measurements --- perimeter against the validated PGD deliverables, the three
+validity gates, attribution to the dynamics rather than the initialisation, seed
+spread, and the $N = 400$--$1000$ runs --- are in
+\codefile{docs/experiments/08-mbo-auction-dynamics/} and are not repeated here.
+This document is the derivation and the provenance. Following the scope policy of
+\codefile{docs/math/AUTHORING\_GUIDE.md}, it derives only what
+\codefile{src/partition/mbo\_auction.py} computes; where a cleaner variant exists
+on paper (\S\ref{sec:lumped-pairing}) it is stated and marked as not implemented.
+
+\section{Provenance: what was done before, and what is claimed here}
+\label{sec:provenance}
+
+Every reference in this section was read from the copy held in
+\codefile{docs/papers/} (title page, abstract, and the sections cited), not from a
+secondary description. The two exceptions are marked.
+
+\subsection{The lineage}
+\label{sec:lineage}
+
+\paragraph{Threshold dynamics.} Merriman, Bence and Osher introduced the scheme in
+a 1992 UCLA report \cite{merriman1992diffusion}: diffuse the indicator of a set
+for a short time, threshold at $\tfrac12$, repeat; the boundary moves by mean
+curvature. Their 1994 paper \cite{merriman1994motion} extends it to several phases
+by diffusing every indicator and assigning each point to the largest --- the
+$\argmax$ step above. Convergence of the two-phase scheme to mean-curvature flow
+was proved by Evans \cite{evans1993convergence}; the multiphase case, in the
+sense of a BV weak formulation and conditionally on energy convergence, by Laux
+and Otto \cite{laux2016convergence}. Ruuth \cite{ruuth1998multiphase} extended
+the multiphase scheme to prescribed junction angles.
+
+\paragraph{The variational interpretation.} Esedo\u{g}lu and Otto
+\cite{esedoglu2015threshold} showed that one MBO step is the minimiser of the
+\emph{linearisation} of a ``heat content'' energy $\Etau$ at the current
+configuration, that this energy is concave on the convex hull of partitions, so
+the step never increases it (their Lemma~5.2, for any kernel $G \ge 0$ with
+$\widehat G \ge 0$, \S5.2), and that $\Etau$ $\Gamma$-converges to the total
+interfacial energy as $\tau \to 0$ (their Appendix~A, for smooth radial kernels).
+Esedo\u{g}lu and Jacobs \cite{esedoglu2017kernels} widen the $\Gamma$-convergence
+to kernels that are merely nonnegative, symmetric, integrable with a finite first
+moment, and positive near the origin (their Theorem~5.1), which is the class the
+present kernel belongs to (\S\ref{sec:kernel}). Alberti and Bellettini's nonlocal phase-transition model is the underlying
+theory; the held Part~I \cite{alberti1998nonlocal} is the optimal-profile paper,
+and the $\Gamma$-limit itself is in its companion (European J.\ Appl.\ Math.\ 9,
+1998), which is not held.
+
+\paragraph{Volume constraints.} Ruuth and Wetton \cite{ruuth2003volume} enforce a
+prescribed volume in the two-phase scheme by shifting the threshold level away
+from $\tfrac12$ until the volume is met. \emph{(Cited second-hand: the paper is
+paywalled; its content is taken from the descriptions in \cite[\S2]{jacobs2018auction}
+and \cite{laux2017bulk}, which proves its convergence, and the bibliographic
+details from the publisher's listing.)} Jacobs, Merkurjev and Esedo\u{g}lu
+\cite{jacobs2018auction} generalise this to $N$ phases: minimising the
+linearisation of $\Etau$ under volume constraints is a linear assignment problem,
+its Lagrange multipliers shift the thresholds (their eq.~(11), which is exactly
+the $\argmax_k[y_{ik} + \psi_k]$ of this implementation), and they solve it with
+Bertsekas' auction algorithm \cite{bertsekas1988auction}; hence ``auction
+dynamics''. Laux and Swartz \cite{laux2017bulk} prove convergence of the
+volume-preserving thresholding scheme.
+
+\paragraph{Graphs, and the implicit-Euler diffusion.} Garcia-Cardona et al.\
+\cite{garcia2014multiclass} run multiclass MBO on a weighted graph and replace
+the Gaussian convolution by an \emph{implicit-Euler} step of the graph heat
+equation, $U^{n+1/2} = B^{-1}[\,U^n - \delta t\, \mu (U^n - \hat U)\,]$ with
+$B = I + \delta t\, L_s$ (their eqs.~(27)--(28); eq.~(29) is $B$ in a truncated
+eigenbasis). Jacobs et al.\ \cite[\S5]{jacobs2018auction} run
+\emph{volume-constrained} auction dynamics on an unstructured $k$-nearest-neighbour
+graph with unit-volume nodes --- but with the symmetrised similarity matrix
+$W^\top W$ used \emph{directly} as the kernel, no Laplacian and no implicit
+step. Van Gennip, Guillen, Osting and Bertozzi
+\cite{vangennip2014mean} prove the graph scheme is \emph{pinned} for $\tau$ below a
+spectral bound and \emph{trivial} above another (their Theorems~4.2--4.4) --- the
+rigorous form of the two-sided window of \S\ref{sec:tau}.
+
+\paragraph{Surfaces.} Merriman and Ruuth \cite{merriman2007surfaces} move curves
+with junctions on a curved surface by extending each indicator off the surface
+with the closest-point map, diffusing in $\mathbb{R}^3$ on a Cartesian grid, and
+thresholding on the surface; their \S8.3 evolves five regions on an embedded
+torus and, in their Fig.~11, the 174 countries plus ocean of a world map on the
+sphere --- many-region multiphase threshold dynamics on a curved closed surface,
+unconstrained. Wang and Osting \cite{wang2019dirichlet} compute \emph{Dirichlet}
+partitions (minimal sum of first Laplace--Beltrami eigenvalues, not perimeter) of
+flat tori and of the sphere by a diffusion-generated method, via FFT and the
+spherical harmonic transform, for $k \le 20$. The surface finite-element setting
+used here --- P1 mass and stiffness matrices on a triangulation of an embedded
+surface --- is Dziuk's \cite{dziuk1988beltrami, dziuk2013surfacefem}.
+
+\paragraph{Partitions with many cells.} Elsey, Esedo\u{g}lu and Smereka simulate
+grain growth by diffusion-generated motion with $166{,}927$ grains in two
+dimensions \cite{elsey2009grain} and $133{,}110$ in three \cite{elsey2011large},
+on uniform grids, without volume constraints. Wang et al.\
+\cite{wang2017thresholding} apply iterative convolution--thresholding to
+piecewise-constant Mumford--Shah segmentation with a handful of phases; Hu, Liu
+and Wang \cite{hu2024iterative} use auction dynamics as the inner solver of the
+\emph{outer} (P\'olya) problem on $256^2$ and $128^3$ grids with $n \le 9$ cells.
+Bogosel and Oudet \cite{bogosel2021longest} initialise the same outer problem
+from capacity-constrained Voronoi diagrams with more than $100$ equal-area cells
+in the plane.
+
+\begin{table}[H]
+\centering\footnotesize
+\begin{tabular}{@{}p{2.5cm}p{3.5cm}p{1.9cm}p{1.9cm}p{4.4cm}@{}}
+\toprule
+Work & Domain, discretisation & Cells & Equal-area & Relation to this implementation \\
+\midrule
+\cite{jacobs2018auction} \S4.2 & flat 2-torus $[0,1]^2$, grid, FFT & 17, \textbf{64}; 160 & \textbf{yes} (160: preserved) & same step, same problem class, exact auction \\
+\cite{jacobs2018auction} \S4.2 & flat 3-torus & 8; 32 & yes (32: preserved) & Weaire--Phelan found with temperature \\
+\cite{merriman2007surfaces} \S8.3 & embedded torus and sphere, closest point, grid & 5 (torus); 175 (sphere) & no & multiphase MBO on curved closed surfaces \\
+\cite{wang2019dirichlet} & flat tori and $S^2$, FFT / SHT & $\le 20$ & no & other energy; curved closed surface \\
+\cite{hu2024iterative} & box, $256^2$ / $128^3$ grid & $\le 9$ & yes & auction dynamics as inner solver \\
+\cite{garcia2014multiclass} & weighted graph, eigenbasis & $\sim 10$ classes & no & implicit-Euler diffusion step \\
+\cite{jacobs2018auction} \S5 & unstructured $k$NN graph, kernel $W^\top W$ & $\sim 10$ classes & bounds & constrained + unstructured, no surface \\
+\cite{elsey2009grain, elsey2011large} & grids & $10^5$ & no & scale, unconstrained \\
+\cite{bogosel2021longest} & plane & $> 100$ (init only) & yes & capacity-constrained Voronoi as init \\
+\cite{bogosel2017partitions} & meshed surfaces, $\Gamma$-convergence & $\le 11$ torus, $\le 32$ sphere & yes & the Phase~1 incumbent; no thresholding \\
+\bottomrule
+\end{tabular}
+\caption{Cell counts and settings, read from the cited sections.
+``Preserved'' means each Voronoi cell keeps its \emph{initial} area or volume
+(160 cells in 2D, 32 grains in 3D), not that they are equal; ``init only''
+means the count appears in an initialisation figure, not a minimisation run.}
+\label{tab:lineage}
+\end{table}
+
+\subsection{The corrected statement of what is new}
+\label{sec:novelty}
+
+An earlier description of approach~B (the module docstring, and \S2 of
+report~08 as first written) said that every published implementation of this
+machinery runs ``on a uniform Cartesian grid via FFT, on a flat domain, at small
+$N$, for P\'olya's outer problem''. Table~\ref{tab:lineage} falsifies three of
+those four clauses: \cite{jacobs2018auction} \S4.2 solves the \emph{inner}
+problem at $N = 64$ and $160$ (two clauses), and \cite{merriman2007surfaces}
+runs the multiphase scheme on a curved torus and on the sphere (the ``flat''
+clause; JME's torus is flat). Only ``uniform grid via FFT'' survives, and only
+for the Euclidean implementations; the graph line never used an FFT.
+
+What the held literature does \emph{not} contain, stated as ``we are not aware
+of'' and not as ``first'':
+\begin{enumerate}[itemsep=1pt]
+  \item the scheme on a \textbf{curved, embedded surface discretised by an
+    unstructured triangle mesh}, with the diffusion done by a surface-FEM
+    backward-Euler step --- the graph line has the operator form, the closest-point
+    line has the surface, neither has both, and neither works with lumped and
+    consistent mass on a triangulation;
+  \item \textbf{equal-area constraints at $N = 400$--$1000$}: in the held
+    papers, equal-area minimisation reaches 64 cells
+    \cite[\S4.2]{jacobs2018auction}; the 160 and 32 there are area-preserving,
+    and the ``more than 100'' of \cite{bogosel2021longest} is an initialisation
+    figure;
+  \item the assignment solved by an \textbf{inexact} transportation dual
+    (\S\ref{sec:assignment}) rather than an exact auction, together with the
+    inequality that survives inexactness (\S\ref{sec:survives});
+  \item the \textbf{multilevel mesh ladder} with label interpolation and a
+    per-level, mesh-derived time step (\S\ref{sec:ladder}, \S\ref{sec:tau});
+  \item coupling to an exact contour refinement (Phase~2) and the gate
+    instruments of report~07.
+\end{enumerate}
+The defensible framing is therefore \emph{combination, surface, and scale}, not
+\emph{method}. The method is \cite{jacobs2018auction}'s; the diffusion operator
+is the graph-MBO one transplanted to surface finite elements; ``large $N$'' by
+itself is not new in three separate lines of work. And the held papers come
+closer than a one-line summary suggests: \cite[\S5]{jacobs2018auction} already
+has the volume constraint on an \emph{unstructured} domain (a similarity graph),
+\cite[Fig.~11]{merriman2007surfaces} has 175 regions on a curved closed surface,
+and \cite{wang2019dirichlet} has a curved closed surface with exact spectral
+diffusion at 20 cells. What none of them has is all of it at once on a
+triangulated surface with equal-area constraints in the hundreds.
+
+\section{Notation and Setup}
+\label{sec:notation}
+
+The surface $S$ is closed and triangulated with vertices $\V = \{x_1, \dots, x_V\}$
+and faces $\F$. $M$ and $K$ are the P1 mass and stiffness matrices of
+\codefile{docs/math/06-phase1-energy-discretization/} eq.~(MK-def), assembled by
+\code{TriMesh.compute\_matrices}; $K$ is the cotangent Laplacian and $K\mathbf 1 = 0$.
+The lumped mass is $v_i = \sum_j M_{ij} > 0$, $\Dlump = \operatorname{diag}(v)$,
+$|S| = \sum_i v_i$, and the equal-area target is $\Atgt = |S|/N$. The mesh scales
+are the mean and maximum edge length $\hmean$, $\hmax$ over all triangle sides,
+and the cell scale is the radius of the equal-area disc,
+\begin{equation}
+  \Rcell \;=\; \sqrt{\Atgt/\pi}.
+  \label{eq:rcell}
+\end{equation}
+
+A labelling $\omega$ has indicator columns $\chi_k \in \{0,1\}^V$,
+$\chi_{ik} = [\omega(i) = k]$, so $\sum_k \chi_k = \mathbf 1$, and territories
+$\Omega_k = \{i : \omega(i) = k\}$ with discrete areas
+$T_k = \sum_{i \in \Omega_k} v_i = v^\top \chi_k$. The diffused indicators are the
+columns $y_k$ of $y \in \mathbb{R}^{V \times N}$. In the continuum, $\Gt$ is the
+heat kernel of $S$ at time $t$ (on $\mathbb{R}^2$,
+$\Gt(x) = (4\pi t)^{-1} e^{-|x|^2/4t}$), and $\Ktau$ the kernel of
+$(I - \tau\Delta)^{-1}$, defined in \S\ref{sec:kernel}.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: the objects}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{sparse\_one\_hot(labels, n\_cells)}
+builds $\chi$; \code{edge\_lengths(mesh)} gives $\hmean$, $\hmax$;
+\code{cell\_radius(total\_area, n\_cells)} is \eqref{eq:rcell}; \code{mesh.v} is
+$v$, \code{mesh.M}, \code{mesh.K} are $M$, $K$.
+\end{tcolorbox}
+
+\section{Threshold dynamics in the continuum}
+\label{sec:continuum}
+
+\subsection{The MBO scheme}
+
+For a set $\Sigma \subset S$ and a time step $\tau$, one step of
+\cite{merriman1992diffusion} is
+\begin{equation}
+  \Sigma' \;=\; \bigl\{ x : (G_\tau * \chi_\Sigma)(x) \ge \tfrac12 \bigr\},
+  \label{eq:mbo2}
+\end{equation}
+and for a partition $(\Omega_1, \dots, \Omega_N)$ one step of
+\cite{merriman1994motion} is
+\begin{equation}
+  \omega'(x) \;=\; \argmax_k \, (G_\tau * \chi_{\Omega_k})(x).
+  \label{eq:mboN}
+\end{equation}
+Since $\sum_k G_\tau * \chi_{\Omega_k} = 1$, \eqref{eq:mboN} reduces to
+\eqref{eq:mbo2} when $N = 2$. Away from junctions, each interface moves by mean
+curvature over time $\tau$ per step, to leading order in $\tau$
+\cite{evans1993convergence, esedoglu2015threshold}; \S\ref{sec:displacement}
+derives the constant for the kernel actually used here.
+
+\subsection{The heat-content energy and the linearisation principle}
+\label{sec:heat-content}
+
+Following \cite[\S4]{esedoglu2015threshold}, define for a partition
+\begin{equation}
+  \Etau(\omega) \;=\; \frac{1}{\sqrt\tau} \sum_{k=1}^{N}
+    \int_S \chi_{\Omega_k}\,\bigl(1 - G_\tau * \chi_{\Omega_k}\bigr)\, dA
+  \;=\; \frac{1}{\sqrt\tau} \sum_{k \ne j} \int_S \chi_{\Omega_k}\, G_\tau * \chi_{\Omega_j}\, dA,
+  \label{eq:heat-content}
+\end{equation}
+the second form by $\sum_j G_\tau * \chi_{\Omega_j} = 1$. Each term measures the
+heat that escapes from cell $k$ into the others in time $\tau$ --- ``heat
+content''. Note the sum is over \emph{ordered} pairs, so every interface is
+counted from both sides; this is eq.~(4.2) of \cite{esedoglu2015threshold} with
+all surface tensions equal to one and the same $\tau^{-1/2}$ normalisation.
+
+Relaxed to $u : S \to \Delta_N$ (the probability simplex), the energy is
+\begin{equation}
+  \Etau(u) \;=\; \frac{1}{\sqrt\tau}\Bigl[\, |S| \;-\; \sum_k \int_S u_k\, G_\tau * u_k \, dA \Bigr],
+  \label{eq:relaxed}
+\end{equation}
+which is \textbf{concave}: $u_k \mapsto \int u_k\, G_\tau * u_k$ is a quadratic
+form with a positive semi-definite kernel ($\widehat{G_\tau} = e^{-\tau|\xi|^2} \ge 0$),
+so its negative is concave. Its linearisation at $u$ is, up to a constant,
+\begin{equation}
+  L_u(u') \;=\; -\frac{2}{\sqrt\tau} \sum_k \int_S u'_k\, G_\tau * u_k\, dA,
+  \label{eq:linearisation}
+\end{equation}
+and minimising $L_u$ over simplex-valued $u'$ is a pointwise problem whose
+solution puts all of $u'(x)$ on the largest $(G_\tau * u_k)(x)$ --- i.e.\ exactly
+the step \eqref{eq:mboN}. This is the observation of
+\cite{esedoglu2015threshold} that makes threshold dynamics a
+minimising-movements scheme, and it carries the dissipation property:
+
+\begin{prop}[Dissipation; {\cite[Lemma~5.2]{esedoglu2015threshold}}]
+\label{prop:dissipation}
+Let $F$ be concave and differentiable on a closed convex set $\mathcal K$, and
+let $u' \in \argmin_{\mathcal K} L_u$ where $L_u$ is the linearisation of $F$ at
+$u \in \mathcal K$. Then $F(u') \le F(u)$.
+\end{prop}
+\begin{proof}
+Concavity gives $F(u') \le L_u(u')$; optimality of $u'$ and feasibility of $u$
+give $L_u(u') \le L_u(u) = F(u)$.
+\end{proof}
+
+The proof uses only that $u$ itself lies in $\mathcal K$. So the conclusion
+survives \emph{any} further convex constraint on $u'$ that $u$ already satisfies
+--- in particular the equal-area constraint of \S\ref{sec:assignment}, provided
+the constrained linearisation is minimised \emph{exactly}. That is the route by
+which \cite{jacobs2018auction} obtain dissipation for auction dynamics, and
+\S\ref{sec:monotonicity} examines which of its hypotheses the implementation
+violates.
+
+\subsection{\texorpdfstring{$\Gamma$}{Gamma}-convergence and the interface constant}
+\label{sec:gamma}
+
+For a kernel $K_\tau(x) = \tau^{-d/2} K(x/\sqrt\tau)$ with $K \ge 0$, radial,
+$\int K = 1$ and a finite first moment, the heat content of a smooth set
+satisfies, per unit interface length and to leading order in $\tau$,
+\begin{equation}
+  \frac{1}{\sqrt\tau} \int_{\Sigma^c} K_\tau * \chi_\Sigma \, dA
+  \;\longrightarrow\; c_K \, \operatorname{Per}(\Sigma),
+  \qquad
+  c_K \;=\; \frac12 \int_{\mathbb{R}^d} |z_1| \, K(z)\, dz \;=\; \int_0^\infty r\, k(r)\, dr,
+  \label{eq:interface-constant}
+\end{equation}
+where $k$ is the one-dimensional marginal of $K$. The second form is the flat
+calculation: for an interface $\{x_1 = 0\}$, the pairs $(s, t)$ with
+$s < 0 < t$ and $t - s = r$ have measure $r$, so the escaped heat per unit
+length is $\int_0^\infty r\, k_\tau(r)\, dr = \sqrt\tau \int_0^\infty r\, k(r)\, dr$.
+Summed over cells in \eqref{eq:heat-content}, every interface is counted from both
+sides, so
+\begin{equation}
+  \Etau(\omega) \;\longrightarrow\; c_K \sum_k \operatorname{Per}(\Omega_k).
+  \label{eq:gamma-limit}
+\end{equation}
+For the Gaussian, $k$ is $N(0, 2)$ and $c_G = \tfrac12 \sqrt{4/\pi} = 1/\sqrt\pi$.
+This is the constant $c_0 = (|B^{d-1}|/|S^{d-1}|) \int |z|\, G(z)\, dz$ of
+\cite[eq.~(A.2)]{esedoglu2015threshold}: in $d = 2$ it is $\pi^{-1}\sqrt\pi = 1/\sqrt\pi$,
+and the same value follows from \eqref{eq:interface-constant} because
+$\int |z_1| K = (|B^{d-1}|/|S^{d-1}|)\cdot 2 \int |z| K$ for a radial kernel. The
+rigorous statement --- $\Gamma$-convergence of \eqref{eq:relaxed} in $L^1$ to
+$c_K \sum_k \operatorname{Per}(\Omega_k)$, with compactness --- is
+\cite[Proposition~A.1]{esedoglu2015threshold} for kernels that are smooth,
+nonnegative, radial, radially non-increasing, of unit mass with a finite first
+moment, and satisfy $|\nabla G(z)| \lesssim G(z/2)$; and
+\cite[Theorem~5.1]{esedoglu2017kernels} for kernels that are merely
+nonnegative, symmetric, in $L^1$ with $|z|K \in L^1$, and positive in a
+neighbourhood of the origin. The kernel used here fails the first set
+(it is singular at the origin, \S\ref{sec:kernel}) and satisfies the second.
+Both theorems are proved on a periodic box in $\mathbb{R}^d$; neither covers a
+curved surface or a finite-element discretisation. That transfer is assumed
+here, not proved.
+
+\section{The surface finite-element diffusion step}
+\label{sec:diffusion}
+
+\subsection{One backward-Euler step}
+
+The semi-discrete P1 heat equation on the surface is $M \dot y + K y = 0$
+\cite{dziuk2013surfacefem}. One backward-Euler step of length $\tau$ from
+$y(0) = \chi_k$ is
+\begin{equation}
+  (M + \tau K)\, y_k \;=\; M \chi_k,
+  \qquad\text{i.e.}\qquad
+  y_k \;=\; \Atau \chi_k, \quad \Atau \;=\; (M + \tau K)^{-1} M .
+  \label{eq:be-step}
+\end{equation}
+This is the only linear solve in the method. $M + \tau K$ is symmetric positive
+definite, is factorised once per $(\text{level}, \tau)$ pass --- in the step
+loop, again for the probe baseline and each probe factor, and for the final
+full-budget assignment --- and the $N$ right-hand sides are back-substituted.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: the diffusion step}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{make\_diffusion\_solver(mesh, tau)}
+returns \code{factorized((M + tau*K).tocsc())} (SuperLU);
+\code{diffuse\_indicators(solve, mesh, labels, n\_cells)} forms
+$M\chi$ sparsely and solves column by column, accumulating
+$\sum_k (M\chi_k)^\top y_k$ for \S\ref{sec:instruments}.
+\end{tcolorbox}
+
+\subsection{The step is an exponential mixture of heat semigroups}
+\label{sec:mixture}
+
+Everything that is specific to this kernel follows from one identity. Let
+$L = M^{-1} K$; it is diagonalisable with real eigenvalues
+$0 = \lambda_1 \le \lambda_2 \le \cdots$ by the generalised eigenproblem
+$K\phi = \lambda M\phi$, and $e^{-tL}$ is the semi-discrete heat semigroup.
+
+\begin{prop}[Mixture representation]
+\label{prop:mixture}
+\begin{equation}
+  \Atau \;=\; (I + \tau L)^{-1} \;=\; \int_0^\infty \frac{1}{\tau}\, e^{-t/\tau}\, e^{-tL}\, dt,
+  \label{eq:mixture}
+\end{equation}
+i.e.\ one backward-Euler step is the heat semigroup averaged over an
+exponentially distributed time $t \sim \mathrm{Exp}(\text{mean } \tau)$. The same
+identity holds in the continuum, $(I - \tau\Delta)^{-1} = \int_0^\infty
+\tau^{-1} e^{-t/\tau} e^{t\Delta}\, dt$.
+\end{prop}
+\begin{proof}
+On each eigenvector, $\int_0^\infty \tau^{-1} e^{-t/\tau} e^{-t\lambda}\, dt
+= \tau^{-1} (\tau^{-1} + \lambda)^{-1} = (1 + \tau\lambda)^{-1}$; the eigenvectors
+span $\mathbb{R}^V$.
+\end{proof}
+
+\subsection{Structural properties}
+\label{sec:structure}
+
+\begin{prop}
+\label{prop:structure}
+\begin{enumerate}[label=(\roman*), itemsep=1pt]
+  \item \textbf{Partition of unity.} $\sum_k y_k = \mathbf 1$ exactly, for every
+    labelling.
+  \item \textbf{Symmetry.} $M\Atau = M(M + \tau K)^{-1}M$ is symmetric positive
+    definite, so $\chi \mapsto -\chi^\top M \Atau \chi$ is concave.
+  \item \textbf{Positivity is not guaranteed on the mesh.} In the continuum
+    $\Atau$ has a positive kernel (\S\ref{sec:kernel}). On a triangulation, $K$ has
+    positive off-diagonal entries across obtuse angles and $M$ is not diagonal, so
+    $e^{-tL}$ need not be entrywise nonnegative (on a $40 \times 36$ torus mesh its
+    minimum entry is $-1.4 \times 10^{-2}$ at $t = 0.1 h^2$), and no argument
+    gives nonnegativity of the mixture $\Atau$ either. In practice it holds: on
+    every torus mesh tested at the production $\tau$ the minimum entry of $\Atau$
+    is positive ($+2.7 \times 10^{-5}$ at $40 \times 36$, $N = 10$;
+    $+8.7 \times 10^{-9}$ at $60 \times 52$, $N = 100$; $+3 \times 10^{-10}$ and
+    $0$ to twelve digits at $100 \times 96$, $N = 100$ and $400$), so the caveat
+    is inactive on the ladder. (\code{numerics.yaml}:
+    \code{positivity\_and\_pairing.expm\_check}, \code{pairing\_cases[*].min\_entry\_A\_tau}.)
+\end{enumerate}
+\end{prop}
+\begin{proof}
+(i) $K\mathbf 1 = 0$ gives $(M + \tau K)\mathbf 1 = M\mathbf 1$, so
+$\Atau \mathbf 1 = \mathbf 1$, and $\sum_k \chi_k = \mathbf 1$. (ii) $(M+\tau K)^{-1}$
+is SPD and $M$ is symmetric, so $M(M+\tau K)^{-1}M$ is SPD. (iii) is the standard
+failure of the discrete maximum principle for the cotangent Laplacian on
+non-Delaunay meshes, and the numbers are direct computation. Nothing in the
+method relies on positivity: the assignment is invariant under adding a common
+constant to a vertex's scores, and the balanced threshold does not compare
+against $\tfrac12$.
+\end{proof}
+
+\subsection{The continuum kernel and its interface constant}
+\label{sec:kernel}
+
+By \eqref{eq:mixture} the kernel of $(I - \tau\Delta)^{-1}$ on $\mathbb{R}^2$ is
+\begin{equation}
+  \Ktau(r) \;=\; \int_0^\infty \frac{1}{\tau} e^{-t/\tau}\, \frac{e^{-r^2/4t}}{4\pi t}\, dt
+  \;=\; \frac{1}{2\pi\tau}\, K_0\!\Bigl(\frac{r}{\sqrt\tau}\Bigr),
+  \label{eq:resolvent-kernel}
+\end{equation}
+with $K_0$ the modified Bessel function. From the mixture, without evaluating
+\eqref{eq:resolvent-kernel}: $\Ktau$ is nonnegative, radial, of unit mass, has all
+moments $\int |z|^p \Ktau = \mathbb{E}_t[\int |z|^p \Gt] \propto \mathbb{E}[t^{p/2}] < \infty$,
+and is positive (indeed logarithmically singular) at the origin. It therefore
+lies in the class of \cite[Theorem~5.1]{esedoglu2017kernels}; its Fourier symbol
+$(1 + \tau|\xi|^2)^{-1}$ is positive, so it also satisfies the hypothesis of
+Proposition~\ref{prop:dissipation}'s continuum version
+\cite[\S5.2]{esedoglu2015threshold}. Its tails are exponential rather than
+Gaussian: the one-dimensional marginal is
+\begin{equation}
+  k_\tau(s) \;=\; \frac{1}{2\sqrt\tau}\, e^{-|s|/\sqrt\tau},
+  \label{eq:marginal}
+\end{equation}
+because restricting the symbol to the $\xi_1$-axis gives $(1 + \tau\xi_1^2)^{-1}$,
+the transform of \eqref{eq:marginal}.
+
+\begin{prop}[Interface constant of the backward-Euler kernel]
+\label{prop:constant}
+$c_{\Ktau} = \tfrac12$. Hence, for the kernel actually used,
+\begin{equation}
+  \Etau(\omega) \;\longrightarrow\; \frac12 \sum_k \operatorname{Per}(\Omega_k)
+  \;=\; \text{total interface length, each interface counted once.}
+  \label{eq:gamma-resolvent}
+\end{equation}
+\end{prop}
+\begin{proof}
+Either from \eqref{eq:marginal}:
+$\int_0^\infty r\, k_1(r)\, dr = \tfrac12 \int_0^\infty r e^{-r}\, dr = \tfrac12$.
+Or from the mixture: the Gaussian at time $t$ escapes $\sqrt{t/\pi}$ per unit
+length, and $\mathbb{E}[\sqrt t\,] = \sqrt\tau\,\Gamma(\tfrac32) = \tfrac12\sqrt{\pi\tau}$,
+so $\tau^{-1/2}\, \mathbb{E}[\sqrt{t/\pi}\,] = \tfrac12$.
+\end{proof}
+
+\begin{remark}[The factor of two in the perimeter convention]
+Every perimeter this project reports --- \code{final\_perimeter},
+\code{arm\_report.yaml}, the deliverable tables --- is $\sum_k \operatorname{Per}(\Omega_k)$,
+which counts each interface twice. By \eqref{eq:gamma-resolvent}, $\Etau$
+approximates \emph{half} of that quantity, i.e.\ the same thing
+\code{label\_boundary\_length} measures (\S\ref{sec:instruments}). With the
+Gaussian it would approximate $(2/\sqrt\pi) \approx 1.128$ times the interface
+length instead.
+\end{remark}
+
+\subsection{The per-step displacement}
+\label{sec:displacement}
+
+\begin{prop}[Displacement per step]
+\label{prop:displacement}
+Let $\Sigma$ have a smooth boundary with (geodesic) curvature $\kappa$ at a point,
+positive when $\Sigma$ is locally convex. One step \eqref{eq:mbo2} with the
+Gaussian $G_\tau$ moves the boundary inward by $\tau\kappa$; with the
+backward-Euler kernel $\Ktau$ it moves it by
+\begin{equation}
+  \delta \;=\; \frac{\tau\kappa}{2},
+  \label{eq:displacement}
+\end{equation}
+both to leading order in $\tau$. One backward-Euler MBO step is therefore
+mean-curvature flow over time $\tau/2$, not $\tau$.
+\end{prop}
+\begin{proof}
+At signed distance $d$ outside $\Sigma$, the Taylor expansion of the diffused
+indicator is \cite[\S5]{esedoglu2015threshold}
+\begin{equation}
+  (\Gt * \chi_\Sigma)(d) \;=\; \frac12 - \frac{d + t\kappa}{\sqrt{4\pi t}} + O(d^2, t),
+  \label{eq:taylor}
+\end{equation}
+so the Gaussian threshold set is $d = -t\kappa$. Averaging \eqref{eq:taylor} over
+$t \sim \mathrm{Exp}(\tau)$ and setting it to $\tfrac12$,
+\[
+  d\,\mathbb{E}[t^{-1/2}] + \kappa\, \mathbb{E}[t^{1/2}] = 0
+  \;\Longrightarrow\;
+  d = -\kappa\, \frac{\mathbb{E}[t^{1/2}]}{\mathbb{E}[t^{-1/2}]}
+    = -\kappa\, \frac{\sqrt\tau\, \Gamma(3/2)}{\tau^{-1/2}\, \Gamma(1/2)}
+    = -\frac{\kappa\tau}{2}. \qedhere
+\]
+\end{proof}
+
+\begin{remark}[Second moments do not determine the speed]
+Both kernels have second moment $2\tau$ per coordinate (expand
+$(1 + \tau|\xi|^2)^{-1}$ and $e^{-\tau|\xi|^2}$ to first order), so one might
+expect the same speed. The displacement is instead $\delta = \tfrac{\kappa}{2}\, \rho_K$ with
+$\rho_K = \int y_2^2 K(0, y_2)\, dy_2 \big/ \int K(0, y_2)\, dy_2$ the ratio of the
+transverse second moment to the marginal density \emph{on the interface}; $\rho_K$
+is $2\tau$ for the Gaussian and $\tau$ for $\Ktau$ (a direct computation with
+\eqref{eq:resolvent-kernel}, using $\int_0^\infty s^2 K_0(s)\, ds = \int_0^\infty K_0(s)\, ds = \pi/2$).
+The mixture proof avoids the Bessel integrals.
+Every identity in \S\ref{sec:mixture}--\S\ref{sec:displacement} --- the mixture
+against the closed-form kernel, both interface constants, the displacement by
+both routes, the Bessel integrals, the second moments, and the centre values of
+\S\ref{sec:overmerge} --- is evaluated numerically in \code{numerics.yaml}:
+\code{constants}.
+\end{remark}
+
+\subsection{Numerical check on the production mesh}
+\label{sec:check}
+
+Proposition~\ref{prop:displacement} is for the continuum kernel and to leading
+order in $\tau$; the implementation uses \eqref{eq:be-step} on a triangulation.
+For a disc the continuum problem is exactly solvable, which gives a reference
+that is not leading-order. With $x = R/\sqrt\tau$ and $u = r/\sqrt\tau$, the
+radial solution of $(1 - \tau\Delta)\, y = \chi_{B_R}$ is
+\begin{equation}
+  y(u) \;=\;
+  \begin{cases}
+    1 - x K_1(x)\, I_0(u), & u \le x,\\
+    x I_1(x)\, K_0(u), & u \ge x,
+  \end{cases}
+  \label{eq:disc-exact}
+\end{equation}
+(continuous with continuous derivative at $u = x$ by the Wronskian
+$I_0 K_1 + I_1 K_0 = 1/x$; the centre value is \eqref{eq:centre}), so the
+$\tfrac12$-threshold radius $u^\ast$ and the exact area loss
+$\pi\tau (x^2 - u^{\ast 2})$ follow by a one-dimensional root find. At the $x$ of
+the table below it is $1.09$--$1.16 \times \pi\tau$: the leading-order $\pi\tau$
+is low by $9$--$16\%$ at these $x$, because the resolvent's exponential tails
+make its $O(1/x)$ correction about four times the Gaussian's (whose exact loss
+is $1.02$--$1.04 \times 2\pi\tau$ at the same $x$).
+
+On the $348 \times 328$ torus mesh of the deliverables ($V = 114{,}144$,
+$\hmean = 0.0171$, $\hmax = 0.0311$), take the set of vertices within
+\emph{ambient} distance $R_d$ of a point on the outer equator --- not a geodesic
+disc; its lumped area differs from $\pi R_d^2$ by $-1.4$ to $+0.8\%$ --- apply one
+step of \eqref{eq:be-step} and a $\tfrac12$-threshold, and measure the lumped
+area change. The result depends on where the centre sits relative to the mesh:
+the boundary ring of vertices flips in groups, so a single placement carries
+granularity noise. The table gives the vertex-centred placement $(1.6, 0, 0)$
+and the mean over 24 centres drawn uniformly within one grid cell around it, as
+ratios to the exact continuum loss \eqref{eq:disc-exact} (all values:
+\code{numerics.yaml}: \code{disc\_check}; seed and draw order in the provenance
+block):
+
+\begin{center}\footnotesize
+\begin{tabular}{@{}rrrrrrrr@{}}
+\toprule
+$R_d$ & $\tau$ & $\sqrt\tau/\hmean$ & $x$ & exact loss & vertex-centred & jittered mean $\pm$ std & vs.\ Gaussian exact \\
+\midrule
+0.20 & 0.004 & 3.69 & 3.16 & $-0.01454$ & 0.90 & $0.97 \pm 0.06$ & 0.54 \\
+0.25 & 0.004 & 3.69 & 3.95 & $-0.01392$ & 0.89 & $0.96 \pm 0.08$ & 0.52 \\
+0.30 & 0.006 & 4.52 & 3.87 & $-0.02095$ & 0.84 & $0.93 \pm 0.04$ & 0.50 \\
+0.20 & 0.002 & 2.61 & 4.47 & $-0.00684$ & 0.77 & $0.91 \pm 0.09$ & 0.48 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Averaged over placement the mesh reaches $0.91$--$0.97$ of the exact continuum
+loss and $0.48$--$0.54$ of the exact Gaussian value; the vertex-centred
+placement is the low tail of that distribution (an earlier version of this
+section reported it alone and read a $10$--$23\%$ deficit into it). Of the
+remaining $3$--$9\%$ shortfall, surface curvature accounts for $1.4$--$3.1\%$
+(the Gaussian curvature at the outer equator is $1/(r(R + r)) = 1.042$, which
+lowers the boundary's geodesic curvature below $1/R_d$ by $K R_d^2/3$, i.e.\
+$3.1\%$ at $R_d = 0.3$); the rest is finite-element and threshold-granularity
+error at a per-step displacement of only $0.25$--$0.63\, \hmean$ (implied by the
+measured vertex-centred loss, \code{displacement\_over\_h\_mean}). What the check establishes is that
+the FEM step moves an interface at \emph{half} the Gaussian rate to within the
+granularity of the test, as Proposition~\ref{prop:displacement} says. This is a
+one-off check of the derivation, not a measured study.
+
+\section{The balanced threshold}
+\label{sec:assignment}
+
+\subsection{The constrained linearisation is a transportation problem}
+
+Minimising the linearisation \eqref{eq:linearisation} under the equal-area
+constraint, discretised with a weight matrix $W$ for the inner product, is
+\begin{equation}
+  \max_{\chi'} \;\sum_k \ip{\chi'_k}{W y_k}
+  \quad\text{s.t.}\quad
+  \sum_k \chi'_{ik} = 1 \;\;\forall i, \qquad
+  \sum_i v_i\, \chi'_{ik} = \Atgt \;\;\forall k, \qquad
+  \chi'_{ik} \in \{0, 1\}.
+  \label{eq:assignment}
+\end{equation}
+The implementation takes $W = \Dlump$, so the objective is
+$\sum_{i} v_i\, y_{i,\omega'(i)}$ and \eqref{eq:assignment} is the transportation
+problem (LP) of \codefile{docs/math/09-balanced-readout/} \S6.2 with score matrix
+$s_{ik} = y_{ik}$: supplies $v_i$ at the vertices, demands $\Atgt$ at the cells.
+With unit vertex masses it would be the assignment problem of
+\cite{jacobs2018auction}; with the real lumped masses it is a transportation
+problem \cite{ahuja1993network}, which is why exact balance is generically
+unattainable (doc~09, \S6.5) and why a granularity bar exists at all.
+
+\subsection{Dual, shifted argmax, and the two-phase antecedent}
+\label{sec:dual}
+
+Doc~09 derives the dual of the LP relaxation and shows (its Proposition~6.1) that
+complementary slackness forces the assignment onto
+\begin{equation}
+  \omega'(i) \;=\; \argmax_k \bigl( y_{ik} + \psi_k \bigr),
+  \label{eq:shifted-argmax}
+\end{equation}
+in the code's sign convention, where raising $\psi_k$ grows cell $k$, and that the
+dual subgradient is $T_k - \Atgt$: grow the cells that are too small. The
+$\psi_k$ are the Lagrange multipliers $\lambda^*$ of \cite[eq.~(11)]{jacobs2018auction}
+and the \emph{prices} of the auction \cite{bertsekas1988auction}. For $N = 2$,
+using $y_{i1} + y_{i2} = 1$,
+\begin{equation}
+  y_{i1} + \psi_1 \ge y_{i2} + \psi_2
+  \;\Longleftrightarrow\;
+  y_{i1} \;\ge\; \frac12 + \frac{\psi_2 - \psi_1}{2},
+  \label{eq:ruuth-wetton}
+\end{equation}
+which is the threshold level shifted away from $\tfrac12$ until the volume is met
+--- the scheme of \cite{ruuth2003volume}. \eqref{eq:shifted-argmax} is its
+$N$-phase form.
+
+\subsection{The inexact solver as implemented}
+\label{sec:inexact}
+
+\code{solve\_dual\_offsets} is a subgradient method on the piecewise-linear dual
+with a decaying step --- descent on $D(\psi)$ in doc~09's convention, ascent on
+the concave form in the code's --- returning the \emph{best} iterate visited
+(doc~09, \S6.2--6.3). Three things are specific to its use here:
+\begin{enumerate}[itemsep=1pt]
+  \item \textbf{Scale.} The step schedule was calibrated on $\log$-density
+    scores. Diffused indicators live on $[0, 1]$, so with
+    \code{normalize\_scores=True} the scores are divided by the median gap
+    between each vertex's top two scores (the margin an offset must cover to
+    flip a vertex), the schedule \code{normalized\_eta0 = 2.0},
+    \code{dual\_decay = 0.02}, \code{normalized\_dual\_iters = 2000} is run on the
+    normalised scores, and $\psi$ is rescaled to the caller's units. Correctness
+    of \eqref{eq:shifted-argmax} is scale-free; only convergence is not.
+  \item \textbf{Quality bar.} A solve is accepted at
+    $\max_k |T_k - \Atgt|/\Atgt \le \text{bar}$ with
+    $\text{bar} = \max(2\,\gamma, \text{A-parity})$, where
+    $\gamma = \max_i v_i / \Atgt$ is the one-vertex granularity and A-parity is
+    approach~A's own stall level at equal budget (report~07). A-parity is a
+    two-entry lookup, for $(V, N) = (47{,}488, 300)$ and $(114{,}144, 300)$ only;
+    for every other configuration --- all $N = 100, 400$--$1000$ runs and every
+    non-torus surface --- the bar is exactly $2\gamma$. It is a solver-failure
+    detector, not a validity test: equal area is what the step optimises, so
+    hitting it says the dual converged.
+  \item \textbf{Early stopping is production-only.} In-loop solves stop at the
+    bar; every level ends with a full-budget re-assignment, and in-loop area
+    figures are tagged \code{early\_stop\_capped} so they are never quoted as
+    assignment quality (report~07, artefact~5).
+\end{enumerate}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: the balanced threshold}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{balanced\_assign(scores, lumped\_mass, target, bar, early\_stop)}
+$\to$ \codefile{src/partition/balanced\_readout.py}: \code{solve\_dual\_offsets}
+with \code{BalancedReadoutConfig(normalize\_scores=True, dual\_early\_stop\_rel=bar or None)};
+\code{assignment\_margin\_scale} is the median top-two gap;
+\codefile{src/partition/arm\_harness.py}: \code{assignment\_quality\_bar},
+\code{vertex\_granularity}.
+\end{tcolorbox}
+
+\section{Energy dissipation: what transfers and what does not}
+\label{sec:monotonicity}
+
+\subsection{The theorem, for the consistent pairing with an exact assignment}
+\label{sec:theorem}
+
+Discretise \eqref{eq:relaxed} with the consistent mass matrix:
+\begin{equation}
+  E^{M}_\tau(\chi) \;=\; \frac{1}{\sqrt\tau}\Bigl[\, |S| - \sum_k \chi_k^\top M \Atau \chi_k \Bigr]
+  \;=\; \frac{1}{\sqrt\tau}\Bigl[\, |S| - \sum_k \ip{\chi_k}{M y_k} \Bigr].
+  \label{eq:E-consistent}
+\end{equation}
+By Proposition~\ref{prop:structure}(ii) this is concave on the convex hull of
+labellings, and its linearisation at $\chi$ is
+$-\tfrac{2}{\sqrt\tau} \sum_k \ip{\chi'_k}{M y_k}$. So if the assignment step
+\emph{exactly} maximised $\sum_k \ip{\chi'_k}{M y_k}$ over labellings with equal
+discrete area, Proposition~\ref{prop:dissipation} would give
+$E^M_\tau(\chi') \le E^M_\tau(\chi)$ at every step, constraint included --- the
+discrete form of the auction-dynamics theorem of \cite{jacobs2018auction}.
+
+\subsection{Why the implementation is outside it}
+\label{sec:outside}
+
+Two hypotheses fail, independently.
+\begin{enumerate}[itemsep=1pt]
+  \item \textbf{The pairing.} The assignment maximises
+    $\sum_k \ip{\chi'_k}{\Dlump y_k} = \sum_k \chi_k'^\top \Dlump\Atau \chi_k$ with the
+    \emph{lumped} $\Dlump$, while $y_k$ was produced with the \emph{consistent}
+    $M$, and $\Dlump\Atau = \Dlump (M + \tau K)^{-1} M$ is not symmetric. Write
+    $\Dlump\Atau = S + Z$ with $S$ symmetric and $Z$ skew;
+    $\|Z\|_F / \|\Dlump\Atau\|_F$ is $2 \times 10^{-3}$ on the $40 \times 36$ and
+    $60 \times 52$ torus meshes and $0.9$--$1.2 \times 10^{-3}$ on the
+    $100 \times 96$ production base. The lumped energy
+    $E^{\Dlump}_\tau = \tau^{-1/2}[\,|S| - \sum_k \chi_k^\top S \chi_k]$ (the skew part
+    drops out of a quadratic form) is concave iff $S \succeq 0$, which is not
+    guaranteed but was true on every mesh tested at the production $\tau$:
+    smallest eigenvalue $+4 \times 10^{-6}$ ($40 \times 36$, $N = 10$;
+    $60 \times 52$, $N = 100$) and $+6 \times 10^{-7}$, $+2 \times 10^{-6}$
+    ($100 \times 96$ at $N = 100$, $400$), against largest eigenvalues of
+    $3 \times 10^{-3}$ to $2 \times 10^{-2}$. The operative failure is
+    elsewhere: the linearisation of $-\chi^\top S \chi$ at $\chi$ is $-2 S\chi$,
+    whereas the assignment maximises $\ip{\chi'}{(S + Z)\chi}$. The step is
+    therefore the exact minimise-the-linearisation step of
+    Proposition~\ref{prop:dissipation} for $E^{\Dlump}_\tau$ \emph{perturbed by
+    the skew term} $\ip{\chi'}{Z\chi}$. The matrix-norm figure above is an upper
+    bound on that perturbation, not its size: at an actual pair of labellings
+    (the geodesic balanced init at the project seed, then one full-budget
+    balanced step) $\ip{\chi'}{Z\chi}/\ip{\chi'}{S\chi}$ is $1.1 \times 10^{-5}$
+    on $40 \times 36$ and $2.0 \times 10^{-5}$ on $60 \times 52$, and the skew
+    term changes the unconstrained argmax at one vertex of $1{,}440$ and one of
+    $3{,}120$ respectively (\code{numerics.yaml}:
+    \code{pairing\_cases[*].labelling\_pair}). All eigenvalue and asymmetry
+    figures in this item: \code{pairing\_cases[*]}. Monotonicity of
+    $E^{\Dlump}_\tau$ can fail only through that term and through inexactness
+    (next item); tracking $E^M_\tau$ instead is simply the wrong pairing, since
+    its gradient $-2 M\Atau\chi$ is not what the assignment sees at all.
+  \item \textbf{Exactness.} \cite{jacobs2018auction} obtain a theorem because
+    the auction solves the assignment exactly (to $\varepsilon$-complementary
+    slackness). \code{solve\_dual\_offsets} returns the best iterate of a
+    subgradient method with a residual area error, and the early-stopped in-loop
+    solves are further from optimal by design.
+\end{enumerate}
+Report~08 records the consequence: $E^{\Dlump}_\tau$ \emph{increases} on 4 of
+96 active steps at $N = 300$, consistent with two small perturbations of an
+otherwise monotone scheme. Neither energy is therefore a gate. The discrete
+forms of the dissipation statement exist in the literature and are the right
+reference here: \cite[\S4.4]{esedoglu2017kernels} state that two-phase graph MBO
+with a symmetric weight matrix $W$ decreases its energy at every step when $W$ is
+positive semi-definite, and exhibit a $W = A + \lambda I$ ($\lambda < 2$) for which
+it cycles between two configurations (their Example~3, Fig.~3); their numbered
+Propositions~4.7--4.9 concern modified algorithms with split weights and are
+not the statement used here. For the constrained multiclass scheme
+\cite[\S5.2]{jacobs2018auction} state the same condition (``as long as $W$ is
+positive semi-definite, the graph heat content is concave''), which is
+Proposition~\ref{prop:dissipation} applied to a graph energy.
+
+\subsection{The inequality that survives}
+\label{sec:survives}
+
+\begin{prop}[Descent inequality]
+\label{prop:survives}
+Let $\omega'$ be \emph{any} labelling of the form \eqref{eq:shifted-argmax} for
+some $\psi \in \mathbb{R}^N$ --- exact or not --- and $\omega$ the previous
+labelling. Then
+\begin{equation}
+  \sum_k \ip{\chi'_k}{\Dlump y_k} \;-\; \sum_k \ip{\chi_k}{\Dlump y_k}
+  \;\ge\; \sum_k \psi_k \bigl( T_k - T'_k \bigr),
+  \label{eq:survives}
+\end{equation}
+where $T_k, T'_k$ are the old and new discrete areas.
+\end{prop}
+\begin{proof}
+For every vertex $i$, the argmax gives
+$y_{i\omega'(i)} + \psi_{\omega'(i)} \ge y_{i\omega(i)} + \psi_{\omega(i)}$.
+Multiply by $v_i > 0$ and sum: the $y$ terms give the left side of
+\eqref{eq:survives}, and $\sum_i v_i (\psi_{\omega(i)} - \psi_{\omega'(i)})
+= \sum_k \psi_k (T_k - T'_k)$.
+\end{proof}
+
+The right-hand side is exactly the price of inexactness: at perfect balance
+$T_k = T'_k = \Atgt$ it vanishes and \eqref{eq:survives} becomes the textbook
+monotone step for the lumped linearisation; otherwise it scales like
+$\|\psi\| \times$ (area error): the per-level maxima recorded in report~08's
+\code{data.yaml} run from $1.3 \times 10^{-4}$ ($N = 100$) to $2.8 \times 10^{-2}$
+($N = 1000$ on $V = 114{,}144$, level~1), relative to $|v^\top y_{\omega}|$. Because
+\eqref{eq:survives} needs neither concavity nor exactness, a violation beyond
+floating point can only mean the returned labels are not the argmax at the
+returned $\psi$, or a unit mismatch between them; that makes it worth gating on,
+and the measured violation is $\le 6.1 \times 10^{-8}$.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: energies and the gate}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{lyapunov\_energy(y, labels, v, total\_area, tau, inner\_consistent)}
+returns \code{E\_lumped} $= E^{\Dlump}_\tau$ and \code{E\_consistent} $= E^M_\tau$;
+\code{descent\_slack(y, v, psi, labels\_old, labels\_new, n\_cells)} returns
+\code{lhs}, \code{rhs} of \eqref{eq:survives} and \code{violation\_rel} $=$ (rhs$-$lhs)/scale.
+\codefile{testing/test\_mbo\_auction.py} gate G4 asserts \eqref{eq:survives}.
+\end{tcolorbox}
+
+\subsection{A pairing that would restore the theorem (not implemented)}
+\label{sec:lumped-pairing}
+
+\begin{remark}[Lumped--lumped pairing]
+Replace \eqref{eq:be-step} by the mass-lumped step
+$(\Dlump + \tau K)\, y_k = \Dlump \chi_k$, i.e.\ $\Atau^{\Dlump} = (\Dlump + \tau K)^{-1}\Dlump$,
+and keep the assignment as it is. Then $\Dlump\Atau^{\Dlump} = \Dlump(\Dlump + \tau K)^{-1}\Dlump$
+is symmetric positive definite, the lumped energy $E^{\Dlump}_\tau$ is concave,
+its linearisation is the objective the assignment already maximises, and with an
+exact assignment Proposition~\ref{prop:dissipation} applies verbatim. Mass
+lumping is a standard, first-order-consistent variant of the P1 heat step
+\cite{dziuk2013surfacefem}; Propositions~\ref{prop:mixture}--\ref{prop:displacement}
+hold unchanged with $L = \Dlump^{-1}K$. This changes the diffusion operator and
+therefore every measured number, so it is a separate experiment with its own
+falsifiers; it is recorded here because it is the one-line change that removes the skew
+term of \S\ref{sec:outside}(1) exactly --- with $W = \Dlump(\Dlump + \tau K)^{-1}\Dlump$,
+which is symmetric positive definite, the lumped energy is the graph heat
+content of \cite[\S5.2]{jacobs2018auction} and the assignment objective is its
+linearisation, so Proposition~\ref{prop:dissipation} applies --- leaving only
+the inexactness of \S\ref{sec:outside}(2). Since the skew term is
+$\lesssim 2 \times 10^{-3}$ in matrix norm and $\sim 10^{-5}$ at an actual
+labelling pair, the experiment would be isolating a small effect.
+\end{remark}
+
+\section{The time step: a two-sided window}
+\label{sec:tau}
+
+\subsection{The rule}
+
+Per mesh level,
+\begin{equation}
+  \tau \;=\; \min\bigl( (c\, \hmean)^2,\; (\rho\, \Rcell)^2 \bigr),
+  \qquad c = 4, \quad \rho = 1,
+  \label{eq:tau-rule}
+\end{equation}
+so $\sqrt\tau$ is $c$ mean edges unless that would exceed the cell radius. The
+two branches are the two sides of the window; the constants are pre-registered
+and the measured band that passes every gate is in report~08 and
+\codefile{CLAUDE.md}.
+
+\subsection{Freeze}
+\label{sec:freeze}
+
+A vertex's label can change only if the diffused field crosses its neighbour's
+at that vertex, which requires the continuum interface to move at least a mesh
+spacing. With Proposition~\ref{prop:displacement} and $\kappa \sim 1/\Rcell$ for a
+cell-scale feature,
+\begin{equation}
+  \delta = \frac{\tau}{2\Rcell} \;\gtrsim\; h
+  \;\Longleftrightarrow\;
+  \tau \gtrsim 2\, h\, \Rcell
+  \;\Longleftrightarrow\;
+  c \gtrsim \sqrt{2\Rcell/h} \quad\text{on the uncapped branch.}
+  \label{eq:freeze}
+\end{equation}
+The implementation reports the same criterion without the factor $2$ (it was
+written with the Gaussian displacement $\tau\kappa$):
+\code{c\_lo\_hmean} $= \sqrt{\Rcell/\hmean}$ and
+\code{c\_lo\_hmax\_local} $= \sqrt{\Rcell/\hmax}$. The factor shifts the threshold
+by $\sqrt2$, inside the margin the constants were chosen with (the frozen
+$c = 2$ / converged $c = 4$ pair is the NC3-CAL control of
+\codefile{testing/test\_mbo\_auction.py}; report~08 \S3 cites
+\cite{vangennip2014mean} for the freeze regime); it is noted, not corrected, because the ratio is a
+diagnostic and every measured run quotes the reported value. Both are
+order-of-magnitude statements: the expansion behind
+Proposition~\ref{prop:displacement} assumes $h \ll \sqrt\tau \ll \Rcell$, and at
+the coarsest levels neither inequality is strong. The rigorous statement in this
+direction is for graphs: \cite[Theorem~4.2]{vangennip2014mean} proves the
+two-phase graph scheme is stationary for every initial set when
+$\tau < \log(3/2)/\rho(\Delta) \approx 0.4/\rho(\Delta)$, $\rho$ the spectral
+radius. For a mesh Laplacian $\rho(L) \sim C/h^2$, so that bound is
+$\sqrt\tau \lesssim 0.6\,h/\sqrt C$ --- a much weaker (necessary-for-motion)
+condition than \eqref{eq:freeze}, which involves $\Rcell$.
+
+\subsection{Over-merge}
+\label{sec:overmerge}
+
+On the other side, when $\sqrt\tau$ approaches $\Rcell$ a cell's own diffused
+indicator no longer dominates at its own centre. From the mixture, for a disc of
+radius $R$ the diffused indicator at the centre is
+\begin{equation}
+  y(0) \;=\; \int_0^\infty \frac{e^{-t/\tau}}{\tau}\bigl(1 - e^{-R^2/4t}\bigr)\, dt
+  \;=\; 1 - x\, K_1(x), \qquad x = \frac{R}{\sqrt\tau},
+  \label{eq:centre}
+\end{equation}
+($K_1$ the modified Bessel function; the Gaussian value is $1 - e^{-x^2/4}$).
+At the cap $\rho = 1$, $x = 1$ and $y(0) = 1 - K_1(1) = 0.398$: the cell's own
+signal at its core is below $\tfrac12$, i.e.\ the \emph{sum} of its neighbours'
+diffused indicators already exceeds it there. The argmax compares against the
+\emph{largest} neighbour, so this does not by itself imply core loss; it marks
+the scale at which core loss becomes possible. At $x = 2$ and $4$, $y(0) = 0.720$ and $0.950$.
+This is why $\rho = 1$ is called the \emph{loosest defensible} cap: it is the
+point at which the diffusion has spread over the whole cell, and anything
+tighter is a preference. Assignment quality cannot see over-merging --- the
+balanced threshold hits its area target by construction whatever the geometry ---
+so the over-merge instruments are geometric (\S\ref{sec:instruments}).
+
+\subsection{The reported ratios, and anisotropy}
+\label{sec:ratios}
+
+\code{tau\_diagnostics} reports $\sqrt\tau/\hmean$, $\sqrt\tau/\hmax$,
+$\sqrt\tau/\Rcell$, the two freeze constants, \code{cap\_active}, and the
+\emph{freeze ratio}
+\begin{equation}
+  \frac{\sqrt\tau/\hmax}{\sqrt{\Rcell/\hmax}} \;=\; \sqrt{\frac{\tau}{\Rcell\, \hmax}}
+  \;=\;
+  \begin{cases}
+    c\,\hmean/\sqrt{\Rcell \hmax} & \text{uncapped},\\[2pt]
+    \sqrt{\Rcell/\hmax} & \text{capped},
+  \end{cases}
+  \label{eq:freeze-ratio}
+\end{equation}
+which is the quantity \codefile{CLAUDE.md} calls the $\tau$ freeze ratio. Two
+consequences follow from \eqref{eq:freeze-ratio} and are borne out by the runs.
+On the capped branch the ratio \emph{falls} as cells shrink relative to the mesh
+($\Rcell \propto N^{-1/2}$), which is why the standard $100 \times 96$ base level
+drops below $1$ at $N = 750$ and $1000$; on the uncapped branch it falls as cells
+\emph{grow} relative to the mesh, which is why a well-resolved low-$N$
+configuration runs at $0.5$--$0.6$ and passes every gate --- the ratio is not a
+defect indicator on its own, and the measured band is the reference. The mesh is
+anisotropic ($\hmax/\hmean = 1.81$ on the torus ladder), so a mean-based figure
+flatters the coarse band: the rule is on $\hmean$ and the freeze ratio is on
+$\hmax$, deliberately.
+
+\subsection{The continuation probe}
+\label{sec:probe}
+
+$\Etau$ depends on the labels alone once $\tau$ is fixed, so a level that froze
+and a level that converged both show a flat energy tail. The probe
+\code{tau\_continuation\_probe} re-runs one balanced threshold with
+$\tau' = f\tau$, $f \in \{2, 4\}$, and evaluates the resulting labels at the
+\emph{level's} $\tau$: if a wider blur reaches a labelling with materially lower
+$\Etau$ and moves a material fraction of vertices, the level was pinned. Because
+a wider blur always re-tiebreaks some boundary vertices and shaves some energy,
+the verdict needs calibrated thresholds (\code{nc3\_K}, \code{nc3\_f\_min}), and
+until they are pinned by the NC3-CAL control the probe records and reports
+\code{pinned = None} rather than a verdict. A pinned level would be annealed
+($\tau \leftarrow 1.5\tau$, at most three times) and re-run. With the shipped
+defaults \code{nc3\_K = nc3\_f\_min = None} the verdict is always \code{None}, so
+the anneal branch is unreachable and every measured run reports
+\code{n\_anneals = 0} vacuously --- the probe records, it does not yet decide.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: the window}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{tau\_diagnostics(mesh, n\_cells, cfg, tau\_override)}
+implements \eqref{eq:tau-rule} and reports every ratio of \S\ref{sec:ratios};
+\code{tau\_continuation\_probe} is \S\ref{sec:probe}; \code{MBOConfig.tau\_c},
+\code{rho}, \code{anneal\_factor}, \code{max\_anneals}, \code{probe\_factors},
+\code{nc3\_K}, \code{nc3\_f\_min}. Only \code{tau\_c}, \code{rho} and
+\code{max\_iters} are config-reachable (\code{mbo:} block); the rest define the
+measurement protocol.
+\end{tcolorbox}
+
+\section{Initialisation}
+\label{sec:init}
+
+The first labelling is one balanced assignment of geodesic scores:
+\begin{enumerate}[itemsep=1pt]
+  \item $N$ sites by greedy farthest-point sampling in the \emph{ambient}
+    Euclidean metric of $\mathbb{R}^3$ (first site from the seeded RNG, each
+    next site the vertex farthest from the current set) ---
+    \code{farthest\_point\_sampling}, shared with the PGD seeded init so both
+    start from the same site layout;
+  \item $d_{ik}$ = shortest-path distance from site $k$ to vertex $i$ on the
+    edge graph of the mesh, edge weights the Euclidean edge lengths, by $N$
+    single-source Dijkstra searches returning the full $V \times N$ matrix
+    (\code{dijkstra} with \code{indices=sites}) --- a graph metric that \emph{over}-estimates the
+    geodesic distance (paths are confined to edges) but respects the surface
+    topology, since it is built from \code{faces}; the heat method of
+    \cite{crane2013geodesics} is not what is implemented;
+  \item scores $s_{ik} = -d_{ik}^2$ and one full-budget balanced assignment.
+\end{enumerate}
+With $-d^2$ scores, \eqref{eq:shifted-argmax} is a \emph{power diagram} of the
+graph metric with weights $\psi$ (doc~09, \S8; \cite{aurenhammer1998minkowski}):
+the capacity-constrained Voronoi diagram that \cite{bogosel2021longest} also use
+as an initialisation, computed here by the transportation dual rather than by
+their gradient method, and on a surface. It is also, by construction, step~0 of
+approach~C (capacity-constrained geodesic Lloyd), which is what makes the
+attribution control of report~08 possible: running the init alone on the finest
+mesh isolates what the dynamics add.
+
+The balanced start is a \textbf{hard requirement}, measured rather than argued:
+from a cold unbalanced Voronoi labelling the first balanced threshold leaves a
+worst cell at $68.16\%$ area deviation, from the balanced one at $1.97\%$
+(\codefile{docs/plans/PHASE1\_BC\_REPLACEMENT\_PLAN.md}, Phase~A, and the module
+docstring; report~08 does not carry these two numbers).
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: initialisation}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{geodesic\_balanced\_init(mesh, n\_cells, seed)};
+\code{edge\_graph(mesh)}; \codefile{src/optimization/initialization.py}:
+\code{farthest\_point\_sampling(vertices, n\_seeds, seed)};
+\code{scipy.sparse.csgraph.dijkstra}.
+\end{tcolorbox}
+
+\section{The mesh ladder}
+\label{sec:ladder}
+
+Levels are the same mesh ladder Phase~1 uses. Within a level, steps repeat until
+the fraction of vertices that change label is below \code{churn\_tol} $= 10^{-4}$
+for \code{patience} $= 3$ consecutive steps, or \code{max\_iters} $= 200$ is hit
+(never, in the measured runs: the most any level took is 66). Between levels the
+labelling is carried by \emph{nearest embedded vertex}: each fine vertex takes
+the label of the nearest coarse vertex in $\mathbb{R}^3$ (\code{cKDTree}).
+Labels are interpolated rather than densities, because a hard partition has no
+density to interpolate and the nearest-vertex map of a labelling is itself a
+labelling. What the transfer preserves: each cell's territory up to a band of
+width $O(h_{\text{coarse}})$ along its boundary, hence its area up to
+$O(h_{\text{coarse}} \cdot \operatorname{Per}(\Omega_k))$ --- the first balanced
+threshold on the fine level removes that error. What it does not preserve:
+connectivity is not guaranteed across the transfer (a thin neck can be cut), and
+$\tau$ is recomputed from \eqref{eq:tau-rule} on the new mesh, so the effective
+diffusion length shrinks with $h$ on the uncapped branch. Report~08 records
+fragmented cells born at one level and healed at the next; the ladder is what
+heals them.
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: ladder}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{run\_mbo\_ladder(meshes, n\_cells, cfg, init\_only)},
+\code{mbo\_level(mesh, labels, n\_cells, cfg, level, run\_probe)},
+\code{\_run\_steps}, \code{interpolate\_labels(old\_vertices, new\_vertices, labels)}.
+\end{tcolorbox}
+
+\section{Instruments}
+\label{sec:instruments}
+
+None of these is a gate on the dynamics; they are what the reports quote.
+\begin{itemize}[itemsep=1pt]
+  \item \textbf{Energies.} $E^{\Dlump}_\tau$ (\code{E\_lumped}, primary because
+    its linearisation differs from the assignment objective only by the skew
+    term of \S\ref{sec:outside}) and $E^M_\tau$ (\code{E\_consistent}),
+    both by \eqref{eq:E-consistent} with the respective weight, and both
+    $\to \tfrac12 \sum_k \operatorname{Per}(\Omega_k)$ by
+    Proposition~\ref{prop:constant}. Descriptive trends only (\S\ref{sec:outside}).
+  \item \textbf{Label boundary length.} The midpoint-cut construction: a
+    triangle with two labels contributes the segment joining the midpoints of
+    its two bi-labelled edges, one with three labels contributes three segments
+    from those midpoints to the centroid (\code{label\_boundary\_length},
+    \codefile{src/partition/balanced\_readout.py}). It counts each interface
+    once; the Phase~2 perimeter counts each twice, and the measured ratio between
+    them on an unoptimised labelling is $1.999$ (\codefile{CLAUDE.md}).
+  \item \textbf{Compactness.} $Q_k = P_k^2 / (4\pi A_k)$ with $P_k$ the
+    per-cell boundary length (same construction, each segment credited to both
+    cells) and $A_k = T_k$; $Q = 1$ is a disc. Over-merging raises $Q$.
+  \item \textbf{Core loss.} The number of cells whose own diffused-score peak
+    vertex, $\argmax_i y_{ik}$, is not in their territory: the most direct
+    over-merge symptom, since it says the cell's signal was swamped before the
+    threshold was taken.
+  \item \textbf{The three Phase~1 gates}, run on every level's labels through
+    the same harness path as the final labels (\code{run\_gates}). For one-hot
+    labels the dormant gate is vacuous and the area gate is the solver check of
+    \S\ref{sec:inexact}; only connectivity has content, because nothing in
+    \S\ref{sec:assignment} enforces it.
+\end{itemize}
+
+\begin{tcolorbox}[colback=blue!4!white, colframe=blue!40!black,
+                  title={Code: instruments}, fontupper=\small]
+\codefile{src/partition/mbo\_auction.py}: \code{lyapunov\_energy},
+\code{per\_cell\_boundary\_lengths}, \code{compactness}, \code{core\_loss};
+\codefile{src/partition/balanced\_readout.py}: \code{label\_boundary\_length};
+\codefile{src/partition/arm\_harness.py}: \code{run\_gates}, \code{labels\_to\_one\_hot}.
+\end{tcolorbox}
+
+\section*{Summary table}
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.0cm}p{4.3cm}p{5.8cm}@{}}
+\toprule
+Quantity & Status & Implementation \\
+\midrule
+Diffusion step $(M + \tau K) y_k = M\chi_k$ & derived (backward Euler of the P1 heat equation) & \code{make\_diffusion\_solver}, \code{diffuse\_indicators} \\
+Mixture representation \eqref{eq:mixture} & proved & --- (analysis) \\
+$\sum_k y_k = \mathbf 1$; $M\Atau$ SPD; no discrete positivity & proved & --- \\
+Continuum kernel $\tfrac{1}{2\pi\tau}K_0(r/\sqrt\tau)$, marginal \eqref{eq:marginal} & derived & --- \\
+Interface constant $c_{\Ktau} = \tfrac12$ (Gaussian $1/\sqrt\pi$) & proved; $\Gamma$-limit cited \cite{esedoglu2017kernels} (flat) & \code{lyapunov\_energy} approximates $\tfrac12 \sum_k \mathrm{Per}(\Omega_k)$ \\
+Per-step displacement $\tau\kappa/2$ & proved (leading order); exact disc solution \eqref{eq:disc-exact}; mesh at 0.91--0.97 of it and 0.48--0.54 of the Gaussian, placement-averaged & \S\ref{sec:check} \\
+Balanced threshold $\argmax_k(y_{ik} + \psi_k)$ & derived (transportation dual, doc~09); $N{=}2$ case is Ruuth--Wetton & \code{balanced\_assign} $\to$ \code{solve\_dual\_offsets} \\
+Dissipation with exact assignment & theorem (cited); the implemented step is the exact MM step for $E^{\Dlump}_\tau$ up to a $\lesssim 10^{-3}$ skew term and the inexact dual & --- \\
+Descent inequality \eqref{eq:survives} & proved for any argmax labelling & \code{descent\_slack}; gate G4 \\
+Lumped--lumped pairing restores the theorem & stated; \textbf{not implemented} & --- \\
+$\tau$ rule \eqref{eq:tau-rule}; freeze \eqref{eq:freeze}; over-merge \eqref{eq:centre} & derived (order of magnitude; $y(0) = 1 - xK_1(x)$ exact for the continuum kernel) & \code{tau\_diagnostics} \\
+Freeze ratio \eqref{eq:freeze-ratio} and its two regimes & derived & \code{tau\_diagnostics} \\
+Continuation probe & protocol; verdict uncalibrated until NC3-CAL & \code{tau\_continuation\_probe} \\
+Init as power diagram of the graph metric & derived & \code{geodesic\_balanced\_init} \\
+Ladder transfer error $O(h\,\mathrm{Per})$ & stated & \code{interpolate\_labels} \\
+$\Etau$, boundary length, $Q_k$, core loss & instruments & \S\ref{sec:instruments} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Related documents}
+\begin{itemize}[itemsep=1pt]
+  \item Measurements, pre-registration and the negative controls:\\
+    \codefile{docs/experiments/08-mbo-auction-dynamics/} and\\
+    \codefile{docs/plans/PHASE1\_BC\_REPLACEMENT\_PLAN.md} (Phase~A).
+  \item The transportation dual and the readout it was built for:\\
+    \codefile{docs/math/09-balanced-readout/}.
+  \item The P1 discretisation and the Phase~1 energy this replaces:\\
+    \codefile{docs/math/06-phase1-energy-discretization/}.
+  \item Taxonomy of the high-$N$ approaches:\\
+    \codefile{docs/reference/PHASE1\_HIGHN\_APPROACHES\_ABCDE.md}.
+  \item Held copies of every cited paper: \codefile{docs/papers/README.md}.
+\end{itemize}
+
+\bibliographystyle{plain}
+\bibliography{../shared/references}
+
+\end{document}

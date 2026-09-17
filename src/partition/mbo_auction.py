@@ -11,16 +11,27 @@ readout can diverge from what was constrained, which is the gap
    ``solve_dual_offsets`` -- the shared semi-discrete OT dual that approach A
    already ships.
 
-Provenance: threshold dynamics is Merriman-Bence-Osher; the multiphase variational
-footing is Esedoglu-Otto; the volume-constrained "auction dynamics" variant is
-Jacobs-Merkurjev-Esedoglu (JCP 2018), and Hu-Liu-Wang 2024 (arXiv 2405.16040) apply
-thresholding + auction to minimal-length partitions. **Every published
-implementation of this machinery convolves on a uniform Cartesian grid via FFT, on
-a flat domain, at small N, for Polya's *outer* problem.** This is the *inner*
-problem on a closed genus-1 surface with an unstructured FEM discretization at N in
-the hundreds, so the diffusion operator above is a different object with different
-failure modes -- mesh pinning (van Gennip et al.) is ours to manage, and no
-grid-derived tau heuristic is imported.
+Provenance: threshold dynamics is Merriman-Bence-Osher (1992/1994); the multiphase
+variational footing is Esedoglu-Otto (2015); the volume-constrained "auction
+dynamics" variant is Jacobs-Merkurjev-Esedoglu (JCP 2018), whose Sec. 4.2 already
+computes EQUAL-AREA minimal-perimeter tessellations of the FLAT 2-torus at N=64
+(and area-preserving flow at N=160) with an exact auction on a uniform grid; the
+implicit-Euler diffusion below is the graph-MBO step of Garcia-Cardona et al.
+(2014) transplanted to surface FEM; Merriman-Ruuth (2007) run multiphase MBO on
+a CURVED torus (5 regions) and 175 regions on the sphere (unconstrained,
+closest-point method). An earlier version of this docstring claimed all prior
+implementations were "flat, small N, outer problem" -- JME 2018 falsifies the
+last two and Merriman-Ruuth the first. What
+the held literature does not contain, stated as "not aware of": the scheme on a
+curved embedded surface with an unstructured triangle mesh and a surface-FEM
+backward-Euler step, equal-area constraints at N = 400-1000, an inexact
+transportation dual in place of the auction, and the multilevel ladder. The
+derivation, the prior-art table and every citation are in
+``docs/math/10-mbo-auction-dynamics/``. Two consequences of the FEM operator
+that matter here: it is the RESOLVENT (I - tau*Laplacian)^-1, not the Gaussian,
+so one step is mean-curvature flow over time tau/2 (not tau) and E_tau tends to
+1/2 * sum_k Per(cell_k) (not 1/sqrt(pi) *); and mesh pinning (van Gennip et al.
+2014) is ours to manage, no grid-derived tau heuristic being imported.
 
 Two design points that are measurements, not preferences; see
 ``docs/plans/PHASE1_BC_REPLACEMENT_PLAN.md`` Phase A:
@@ -262,9 +273,12 @@ def lyapunov_energy(
     """Threshold-dynamics energy, in both discretizations.
 
     ``E_tau = (A_total - sum_k <chi_k, W y_k>) / sqrt(tau)``. The LUMPED form
-    (``W = diag(v)``) is primary because it is what the assignment step actually
-    maximizes; the consistent form (``W = M``) is recorded alongside. Neither is a
-    gate -- see ``descent_slack``.
+    (``W = diag(v)``) is primary because the assignment step maximizes the lumped
+    pairing ``sum_k <chi'_k, D y_k>``, which differs from this energy's exact
+    linearization only by the skew part of ``D (M + tau K)^-1 M`` (Frobenius
+    ratio 1e-3 to 2e-3 on the torus meshes, ~1e-5 at an actual labelling pair;
+    docs/math/10-mbo-auction-dynamics Sec. 7.2 and its numerics.yaml). The consistent form
+    (``W = M``) is recorded alongside. Neither is a gate -- see ``descent_slack``.
 
     E_tau depends on the LABELS ALONE (given tau), which is what makes the
     tau-continuation probe well posed.
@@ -313,8 +327,9 @@ def descent_slack(
     ``y_{i,omega'(i)} + psi_{omega'(i)} >= y_{i,omega(i)} + psi_{omega(i)}``;
     multiply by ``v_i > 0`` and sum. The right-hand side is exactly the slack that
     inexactness costs: it vanishes at perfect balance, recovering the textbook
-    monotone step, and otherwise scales like ``||psi|| x area error`` -- measured
-    at 1.7e-4 to 1.5e-3 relative on this problem, i.e. five to seven orders of
+    monotone step, and otherwise scales like ``||psi|| x area error`` -- the
+    per-level maxima in report 08's data.yaml run from 1.3e-4 (N=100) to 2.8e-2
+    (N=1000 on V=114,144, level 1) relative, i.e. five to seven orders of
     magnitude above any 1e-9 tolerance. So a *violation* of the inequality beyond
     floating point is a genuine bug (labels not the argmax at the returned psi, or
     a psi/label unit mismatch), which is what makes it worth gating on.

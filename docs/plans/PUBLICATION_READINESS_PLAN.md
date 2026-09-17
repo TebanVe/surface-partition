@@ -216,6 +216,18 @@ closed surfaces? has the winner-take-all readout gap been reported for
 this under different vocabulary? **Phrase any result as "we are not aware of",
 never "first", and name the corpus and how it was enumerated.**
 
+**Partly answered 2026-09-17** (`docs/math/10-mbo-auction-dynamics/` §2, from
+the papers now held in `docs/papers/`): Jacobs–Merkurjev–Esedoğlu 2018 §4.2
+already computes equal-area minimal-perimeter tessellations of the **flat**
+2-torus at N=64 and area-preserving flow at N=160 (exact auction, uniform grid);
+Merriman–Ruuth 2007 run multiphase MBO on a **curved** torus (5 regions,
+unconstrained, closest-point method); Wang–Osting 2019 do diffusion-generated
+*Dirichlet* partitions of the sphere (k ≤ 20); grain-growth MBO runs at 10⁵
+grains. So "MBO on a surface" and "large N" are each established separately, and
+the combination above is what remains unreported *in that corpus* — which is
+twenty-odd papers read at the cited sections, not a systematic search, and the
+graphics/remeshing question is still open.
+
 ## Phase 3 — Scaling to N = 500 and N = 1000
 **Status:** **N=400, N=500 and N=750 done** (exploratory `--config` mode, all
 valid, all exported and finalised, 2026-08-20/23); **N=1000 Not Started.** This is

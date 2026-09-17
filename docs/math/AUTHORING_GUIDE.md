@@ -17,7 +17,9 @@ docs/math/
 └── NN-topic-slug/              ← one subdirectory per document
     ├── main.tex                ← LaTeX source (the only file you edit)
     ├── Makefile                ← per-document build (copy from any sibling)
-    └── main.pdf                ← compiled output (produced by `make`)
+    ├── main.pdf                ← compiled output (produced by `make`)
+    ├── check_numerics.py       ← ONLY if the document quotes computed numbers (§8b)
+    └── numerics.yaml           ← its committed output; the document quotes from here
 ```
 
 Each document is entirely self-contained in its own numbered subdirectory.
@@ -69,6 +71,11 @@ The number controls the ordering in file browsers and in the master `Makefile`
 6. **Add bibliography entries** to `docs/math/shared/references.bib` if your
    document cites new sources.
 
+7. **If any number in the document comes from running code**, commit the
+   script that regenerates it and its `numerics.yaml` output beside `main.tex`,
+   and add the provenance block — see Section 8b. No exceptions for "quick
+   checks".
+
 ---
 
 ## 4. `main.tex` template
@@ -107,6 +114,10 @@ of the codebase they belong to, and which are analytical vs.\ FD.
 \section{Overview}
 % State the optimization problem or mathematical context.
 % Cross-reference related documents if applicable.
+% If the document quotes ANY number produced by running code, add a provenance
+% tcolorbox here (date, script, numerics.yaml, versions, seeds, and which
+% numbers are cited rather than computed) -- see Section 8b of this guide and
+% 10-mbo-auction-dynamics/main.tex for the model.
 
 \section{Notation and Setup}
 % Always include this section.  Start from the lambda convention.
@@ -287,6 +298,46 @@ a forward-looking design document.
 
 ---
 
+## 8b. Computed numbers must be reproducible (mandatory since 2026-09-17)
+
+A math document derives; it does not measure. But a derivation is often
+*checked* by running code — a constant evaluated numerically, an identity tested
+on a mesh, an operator's eigenvalues, a one-step displacement on the production
+mesh. **Every such number is subject to the same provenance rule as
+`docs/experiments/`** (`docs/experiments/README.md`, "Provenance is mandatory"):
+
+1. **A committed script beside `main.tex`** — conventionally `check_numerics.py`
+   — regenerates *every* number in the document that was produced by running
+   code, into a **committed `numerics.yaml`** beside it. The document quotes
+   numbers from that file and nowhere else. A number that the script does not
+   produce is either derived by hand in the text or cited from a report/paper
+   with its source named.
+2. **Determinism.** Every random element uses a fixed seed and a stated draw
+   order; mesh parameters, N, τ rules and tolerances are constants in the
+   script, not command-line arguments.
+3. **A provenance block** near the top of the document (a `tcolorbox`, as in the
+   experiments reports) stating the date, the script, the output file, the
+   versions (Python, numpy, scipy), the seed(s), and which numbers in the
+   document are *cited* (with their sources) rather than computed.
+4. **Reviewer-supplied numbers are not admissible.** If an adversarial review
+   reports a figure the document should carry, the script is extended to
+   reproduce it and the document quotes the script's value. A figure that lives
+   only in a reviewer's scratch script is not auditable once the session ends.
+5. **Inline session Python is not a source.** Numbers typed into the document
+   from an interactive check that was never saved are exactly what this rule
+   forbids.
+
+The per-document `Makefile` should document how to regenerate the numbers (a
+`numerics` target or a comment), mirroring the experiments folder's figure
+targets.
+
+Why this exists: `10-mbo-auction-dynamics/` was first written with its §5.3,
+§5.6 and §7.2 numbers computed in inline Python during the authoring session,
+and two figures taken from an adversarial reviewer's scratch script. None of it
+could be re-run by anyone, and the §5.6 jittered statistics depended on an
+unrecorded seed and parametrisation — two independent runs disagreed at the
+±0.03 level. Both reviews had to recompute everything from scratch to check it.
+
 ## 9. Existing documents
 
 | Directory | Topic | Status |
@@ -300,5 +351,6 @@ a forward-looking design document.
 | `07-phase1-wta-balance/` | Winner-take-all balance term: soft territory, balance penalty + gradient, discrete-area trim, six structural properties, Γ-consistency, γ calibration | Complete — derivation sound, but the mechanism was **not adopted**: measured a net regression at N=200 (~20× slower; 14/200 fragmented cells). The failure came from the trim reaching the field through the *nonlocal* projection, which none of the six propositions addressed. Superseded by the balanced readout (`src/partition/balanced_readout.py`); see `docs/reference/winner_take_all_partition_gap.md` §4b/§9b. |
 | `08-dual-newton-projection/` | Phase 1 exact constraint projection via the concave dual: QP dual, per-vertex cap-free simplex solve, outer Jacobian J=−∇²q (sym. PSD, structural kernel span{1}), L-BFGS + semismooth-Newton polish, exactness/idempotency | Complete — derivation sound, but the method was **not adopted**: measured slower than the incumbent iterative projection (`docs/reference/phase1_dual_projection_negative_result.md`, `docs/experiments/03-dual-projection-verification/`). Implementation retained on branch `feat/newton-projection`. |
 | `09-balanced-readout/` | The readout correction that ships: exact territory–mass identity `T_k − Ā = gain_k − lost_k`; band fraction `f_b ~ √(N/V)` with the constant checked; why disconnection is admissible; the transportation-LP dual whose subgradient **is** the implemented ψ update; nested monotone growth (locality) and what it does not give; non-integrality ⇒ exact balance generically unattainable | Complete — corrected after adversarial review: an earlier draft claimed the vertex mass was a *lower bound* on attainable imbalance (false, counterexample in the text) and that the offsets never manufacture splits (falsified by the N=300 run's own metadata, 2→4 components before repair) |
+| `10-mbo-auction-dynamics/` | Approach B (auction-dynamics MBO) on surface FEM meshes: provenance table read from the held papers (JME 2018 already does equal-area flat-torus tessellation at N=64; Merriman–Ruuth 2007 multiphase MBO on a curved torus; grain growth at 10⁵), and the corrected novelty statement; backward-Euler diffusion as an **exponential mixture of heat kernels**, from which the interface constant (½ vs 1/√π) and the per-step displacement (τκ/2 vs τκ) follow and are checked on the production mesh; balanced threshold as the transportation dual (N=2 case = Ruuth–Wetton shifted level); why Esedoğlu–Otto dissipation does **not** apply to the lumped/consistent pairing with an inexact dual, the inequality that survives (gate G4), and the lumped–lumped pairing that would restore it (**not implemented**); the two-sided τ window with over-merge quantified as $1-xK_1(x)$ at the cell centre; init as a power diagram of the graph metric; ladder transfer | Complete — companion to `docs/experiments/08-mbo-auction-dynamics/` (measurements). Twice adversarially reviewed. Every computed number regenerated by its `check_numerics.py` → `numerics.yaml` (the model for §8b) |
 
 When you create a new document, add a row to this table.

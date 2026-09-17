@@ -28,3 +28,5 @@
 # Re-include document figures (the repo-root .gitignore has a broad *.png
 # rule; doc figures/ images are sources the PDF needs to build).
 !**/figures/*.png
+# partial numerics runs (check_numerics.py --quick) never replace the committed numerics.yaml
+numerics_quick.yaml

@@ -59,7 +59,10 @@ with a provenance block** stating:
   beside the report);
 - **versions** (Python, numpy, scipy, matplotlib) and any seed.
 
-A report whose numbers cannot be regenerated from that block is incomplete. When
+A report whose numbers cannot be regenerated from that block is incomplete.
+The same rule applies to a **math** document that checks a derivation by
+running code: see `docs/math/AUTHORING_GUIDE.md` §8b (`check_numerics.py` →
+committed `numerics.yaml` → `main.tex`). When
 practical, include a numerical **anchor** — a value that must be reproduced (e.g.
 the Phase 2 iteration-0 constraint violation) so a reader can confirm the
 reconstruction is correct.

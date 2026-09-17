@@ -377,8 +377,8 @@
   year    = {2024},
   month   = may,
   note    = {Auction dynamics + threshold dynamics for the OUTER (P\'olya) problem;
-             Gaussian convolution on $128\times128$ and $256\times256$ Cartesian
-             grids, 2D and 3D. Authors verified against the title page of
+             Gaussian convolution on a $256^2$ grid in 2D and a $128^3$ grid in
+             3D, $n \le 9$ cells. Authors verified against the title page of
              \texttt{docs/papers/2405.16040v1.pdf}; zero occurrences of
              manifold/Riemannian/torus in the full text.}
 }
@@ -435,4 +435,245 @@
                \texttt{docs/math/09-balanced-readout}). Publisher and authors
                verified from the copy held; year 1993 is the standard edition and
                was not read off the title page.}
+}
+
+% ============================================================================
+% Added 2026-09-17 for docs/math/10-mbo-auction-dynamics. Every entry below was
+% checked against the copy held in docs/papers/ (title page and, where stated,
+% the pages read), EXCEPT the two marked SECOND-HAND. Existing entries that this
+% document also cites (merriman1994motion, esedoglu2015threshold,
+% jacobs2018auction, bertsekas1988auction, vangennip2014mean) are now likewise
+% held and were re-checked on the same day: all five agree with their copies.
+% ============================================================================
+
+@techreport{merriman1992diffusion,
+  author      = {Merriman, Barry and Bence, James and Osher, Stanley},
+  title       = {Diffusion Generated Motion by Mean Curvature},
+  institution = {Department of Mathematics, University of California, Los Angeles},
+  type        = {CAM Report},
+  number      = {92-18},
+  month       = apr,
+  year        = {1992},
+  note        = {The original two-phase threshold-dynamics (MBO) scheme. Held as
+                 \texttt{docs/papers/cam92-18.pdf}, fetched from the UCLA CAM
+                 repository; title page verified. Usually cited via its
+                 proceedings version in J.~Taylor (ed.), \emph{Computational
+                 Crystal Growers Workshop}, AMS Selected Lectures in Mathematics,
+                 pp.~73--83, 1992 --- that version is NOT held and its page range
+                 is not verified here.}
+}
+
+@article{evans1993convergence,
+  author  = {Evans, Lawrence C.},
+  title   = {Convergence of an Algorithm for Mean Curvature Motion},
+  journal = {Indiana University Mathematics Journal},
+  volume  = {42},
+  number  = {2},
+  pages   = {533--557},
+  year    = {1993},
+  note    = {Rigorous convergence of the two-phase MBO scheme to mean-curvature
+             flow. Held; JSTOR header verified.}
+}
+
+@article{laux2016convergence,
+  author  = {Laux, Tim and Otto, Felix},
+  title   = {Convergence of the Thresholding Scheme for Multi-Phase
+             Mean-Curvature Flow},
+  journal = {Calculus of Variations and Partial Differential Equations},
+  volume  = {55},
+  pages   = {129},
+  doi     = {10.1007/s00526-016-1053-0},
+  year    = {2016},
+  note    = {Article number 129. Conditional convergence of multiphase
+             thresholding in the BV framework, via the Esedo\=glu--Otto
+             minimising-movements interpretation. Held; header verified.}
+}
+
+@article{laux2017bulk,
+  author  = {Laux, Tim and Swartz, Drew},
+  title   = {Convergence of Thresholding Schemes Incorporating Bulk Effects},
+  journal = {arXiv preprint arXiv:1601.02467v2},
+  year    = {2016},
+  month   = dec,
+  note    = {Proves convergence of the Ruuth--Wetton volume-preserving
+             thresholding scheme (first of its three schemes). Held as the arXiv
+             v2 copy (1 Dec 2016). Believed published in Interfaces and Free
+             Boundaries 19(2):273--304, 2017 --- journal details NOT verified
+             from the copy.}
+}
+
+@article{ruuth1998multiphase,
+  author  = {Ruuth, Steven J.},
+  title   = {A Diffusion-Generated Approach to Multiphase Motion},
+  journal = {Journal of Computational Physics},
+  volume  = {145},
+  pages   = {166--192},
+  year    = {1998},
+  note    = {Multiphase threshold dynamics with prescribed junction angles.
+             Held; header verified.}
+}
+
+@article{ruuth2003volume,
+  author  = {Ruuth, Steven J. and Wetton, Brian T. R.},
+  title   = {A Simple Scheme for Volume-Preserving Motion by Mean Curvature},
+  journal = {Journal of Scientific Computing},
+  volume  = {19},
+  number  = {1},
+  pages   = {373--384},
+  doi     = {10.1023/A:1025368328471},
+  year    = {2003},
+  note    = {SECOND-HAND. The two-phase volume-preserving threshold scheme (shift
+             the threshold level until the volume is met). NOT held --- paywalled.
+             Volume, pages, year and DOI are from the publisher's listing (Springer
+             Link, checked 2026-09-17); the content is taken from the descriptions
+             in \texttt{jacobs2018auction} \S2 and \texttt{laux2017bulk}.
+             Issue number 1 and the author form ``S.J. Ruuth, B. Wetton'' are
+             from JME's reference [41]; the second author's middle initials are
+             from memory and unverified.}
+}
+
+@article{esedoglu2017kernels,
+  author  = {Esedo\=glu, Selim and Jacobs, Matt},
+  title   = {Convolution Kernels and Stability of Threshold Dynamics Methods},
+  journal = {SIAM Journal on Numerical Analysis},
+  volume  = {55},
+  number  = {5},
+  pages   = {2123--2150},
+  doi     = {10.1137/16M1087552},
+  year    = {2017},
+  note    = {Theorem 5.1: Gamma-convergence of the threshold-dynamics energy for
+             nonnegative, symmetric kernels in $L^1$ with finite first moment and
+             positive near the origin --- the class the backward-Euler resolvent
+             kernel belongs to. Held as the author's preprint
+             \texttt{docs/papers/esedoglu\_jacobs.pdf} (dated 2 August 2016,
+             fetched from the first author's page); authors and title verified
+             from it, theorem numbering is the PREPRINT's. Journal, volume,
+             pages and DOI are from the publisher's listing, not the copy.}
+}
+
+@article{garcia2014multiclass,
+  author  = {Garcia-Cardona, Cristina and Merkurjev, Ekaterina and
+             Bertozzi, Andrea L. and Flenner, Arjuna and Percus, Allon G.},
+  title   = {Multiclass Data Segmentation Using Diffuse Interface Methods on
+             Graphs},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume  = {36},
+  number  = {8},
+  pages   = {1600--1613},
+  year    = {2014},
+  note    = {Multiclass graph MBO whose diffusion step is IMPLICIT Euler,
+             $U^{n+1/2} = B^{-1}[U^n - \delta t\,\mu(U^n - \hat U)]$ with
+             $B = I + \delta t\, L_s$ (eqs.~27--28; eq.~29 is $B$ in a truncated
+             eigenbasis; eqs.~19--23 are the separate Ginzburg--Landau scheme)
+             --- the same resolvent operator this project uses on the surface
+             FEM mesh. Held; first and last page numbers
+             read off the copy (the last page is 1613, not the 1614 some
+             indexes give).}
+}
+
+@article{merriman2007surfaces,
+  author  = {Merriman, Barry and Ruuth, Steven J.},
+  title   = {Diffusion Generated Motion of Curves on Surfaces},
+  journal = {Journal of Computational Physics},
+  volume  = {225},
+  pages   = {2267--2282},
+  doi     = {10.1016/j.jcp.2007.03.034},
+  year    = {2007},
+  note    = {MBO for curves with junctions on a curved surface via closest-point
+             extension to a Cartesian grid in $\mathbb{R}^3$; \S8.3 evolves five
+             regions on an embedded torus. Prior art for multiphase threshold
+             dynamics on a curved torus (unconstrained). Held; header verified.}
+}
+
+@article{wang2019dirichlet,
+  author  = {Wang, Dong and Osting, Braxton},
+  title   = {A Diffusion Generated Method for Computing {D}irichlet Partitions},
+  journal = {Journal of Computational and Applied Mathematics},
+  volume  = {351},
+  pages   = {302--316},
+  doi     = {10.1016/j.cam.2018.11.015},
+  year    = {2019},
+  note    = {Diffusion-generated Dirichlet (eigenvalue-sum, not perimeter)
+             partitions of flat tori and the sphere, by FFT and spherical
+             harmonic transform, $k \le 20$. Held; header verified.}
+}
+
+@incollection{dziuk1988beltrami,
+  author    = {Dziuk, Gerhard},
+  title     = {Finite Elements for the {B}eltrami Operator on Arbitrary Surfaces},
+  booktitle = {Partial Differential Equations and Calculus of Variations},
+  editor    = {Hildebrandt, Stefan and Leis, Rolf},
+  series    = {Lecture Notes in Mathematics},
+  volume    = {1357},
+  publisher = {Springer},
+  address   = {Berlin},
+  pages     = {142--155},
+  year      = {1988},
+  note      = {The P1 surface finite-element method. Held as the full LNM~1357
+               volume \texttt{docs/papers/BFb0082859.pdf}; page range read from
+               the volume's table of contents (Dziuk 142, next chapter 156).}
+}
+
+@article{dziuk2013surfacefem,
+  author  = {Dziuk, Gerhard and Elliott, Charles M.},
+  title   = {Finite Element Methods for Surface {PDE}s},
+  journal = {Acta Numerica},
+  volume  = {22},
+  pages   = {289--396},
+  doi     = {10.1017/S0962492913000056},
+  year    = {2013},
+  note    = {Surface FEM, including the semi-discrete heat equation
+             $M\dot y + Ky = 0$ (\S6). Does NOT discuss mass lumping --- do not
+             cite it for that. Held; header verified.}
+}
+
+@article{elsey2009grain,
+  author  = {Elsey, Matt and Esedo\=glu, Selim and Smereka, Peter},
+  title   = {Diffusion Generated Motion for Grain Growth in Two and Three
+             Dimensions},
+  journal = {Journal of Computational Physics},
+  volume  = {228},
+  pages   = {8015--8033},
+  year    = {2009},
+  note    = {Signed-distance variant of diffusion-generated motion; 166,927
+             grains in 2D on a $4096^2$ grid. Establishes that ``large $N$'' is
+             not new for the machinery (unconstrained). Held; header verified.}
+}
+
+@article{elsey2011large,
+  author  = {Elsey, Matt and Esedo\=glu, Selim and Smereka, Peter},
+  title   = {Large-Scale Simulation of Normal Grain Growth via
+             Diffusion-Generated Motion},
+  journal = {Proceedings of the Royal Society A},
+  volume  = {467},
+  pages   = {381--401},
+  doi     = {10.1098/rspa.2010.0194},
+  year    = {2011},
+  note    = {133,110 grains in 3D on a $512^3$ grid. Held; header verified.}
+}
+
+@article{wang2017thresholding,
+  author  = {Wang, Dong and Li, Haohan and Wei, Xiaoyu and Wang, Xiao-Ping},
+  title   = {An Efficient Iterative Thresholding Method for Image Segmentation},
+  journal = {Journal of Computational Physics},
+  volume  = {350},
+  pages   = {657--667},
+  year    = {2017},
+  note    = {Iterative convolution--thresholding for piecewise-constant
+             Mumford--Shah with a handful of phases; the lineage
+             \texttt{hu2024iterative} builds on. Held; header verified.}
+}
+
+@article{alberti1998nonlocal,
+  author  = {Alberti, Giovanni and Bellettini, Giovanni},
+  title   = {A Nonlocal Anisotropic Model for Phase Transitions. {P}art {I}:
+             The Optimal Profile Problem},
+  journal = {Mathematische Annalen},
+  volume  = {310},
+  pages   = {527--560},
+  year    = {1998},
+  note    = {Nonlocal phase-transition energies with general kernels; Part I
+             (optimal profile). The Gamma-convergence of the rescaled energies is
+             in the companion paper (European J. Appl. Math. 9, 1998), which is
+             NOT held. Held; header verified.}
 }
