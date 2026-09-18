@@ -782,6 +782,46 @@ with \code{BalancedReadoutConfig(normalize\_scores=True, dual\_early\_stop\_rel=
 \code{vertex\_granularity}.
 \end{tcolorbox}
 
+\begin{remark}[Why an inexact standard solver, and what may be claimed for it]
+\label{rem:solver-choice}
+Nothing in \S\ref{sec:assignment} is a new method for the transportation dual.
+Subgradient ascent on that dual --- grow the cells that are too small --- is
+the standard solver for this class of problem
+\cite{aurenhammer1998minkowski, merigot2011multiscale, peyre2019computational},
+and doc~09 (its Proposition~6.1) proves that the implemented update \emph{is}
+that subgradient. What is specific to this work is the \emph{decision} to use it
+inside the threshold step in place of the exact auction of
+\cite{jacobs2018auction}, and the reasons are these, each on record:
+\begin{enumerate}[itemsep=1pt]
+  \item the adaptation was forced by the mesh regardless of solver --- the
+    auction of \cite{jacobs2018auction} is stated for unit-volume points, and
+    with real lumped masses the problem is a transportation problem whose
+    optimum is generically fractional (\S\ref{sec:assignment}, doc~09 \S6.5), so
+    a granularity bar is the correct stopping rule for \emph{any} solver;
+  \item a validated primitive already existed: the routine was built for the
+    balanced readout and qualified through the Phase~0 harness
+    (\codefile{docs/experiments/07-phase0-shared-harness/}), which reproduces the
+    reference Phase~2 perimeter bitwise;
+  \item inexactness is safe \emph{because the scheme is iterated}: report~07
+    records that the solver looked inadequate only on a cold-start fixture that
+    no iterated method faces, and that from the first step every assignment
+    starts from an already-balanced partition and converges under the bar ---
+    a conditional judgment, checked rather than assumed;
+  \item the cost is bounded, not waived: the dissipation theorem is lost
+    (\S\ref{sec:outside}), the inequality that replaces it holds for any priced
+    labelling (Proposition~\ref{prop:survives}) and its slack is measured on
+    every run (\S\ref{sec:survives}).
+\end{enumerate}
+The limit of the claim: the choice \emph{sufficed}, and its price is known. It
+is \textbf{not} established that it is better, faster or more accurate than the
+auction, because no auction was implemented or measured on this problem; the
+one alternative that was measured, entropic (Sinkhorn) regularisation
+\cite{cuturi2013sinkhorn}, lost to the incumbent on five of six score matrices
+(report~07). This remark exists so that the mathematical record carries the
+reasoning behind the choice and the disclaimer with it, not only the
+consequences.
+\end{remark}
+
 \section{Energy dissipation: what transfers and what does not}
 \label{sec:monotonicity}
 
