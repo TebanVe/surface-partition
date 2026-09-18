@@ -326,15 +326,16 @@ cluster/
 
 ### Documentation (`docs/`)
 
-The `docs/` tree is version-controlled and has five parts:
+The `docs/` tree is version-controlled and has six parts:
 
 ```
 docs/
-├── math/        ← LaTeX derivations of the quantities computed in the code
-├── guides/      ← LaTeX user guides and professional documents (compiled PDFs)
-├── experiments/ ← LaTeX measured studies (question→method→measurement→conclusion)
-├── plans/       ← design plans for not-yet-implemented work
-└── reference/   ← permanent explanatory docs (methodology, known issues, primers)
+├── math/          ← LaTeX derivations of the quantities computed in the code
+├── guides/        ← LaTeX user guides and professional documents (compiled PDFs)
+├── experiments/   ← LaTeX measured studies (question→method→measurement→conclusion)
+├── plans/         ← design plans for not-yet-implemented work
+├── reference/     ← permanent explanatory docs (methodology, known issues, primers)
+└── explanations/  ← plain-language explanations (speaker prep, "explain it simply")
 ```
 
 **`docs/math/`** — mathematical derivations written as LaTeX, compiled to PDF:
@@ -503,6 +504,36 @@ Note the 1.69%/2.26% figures are Phase 1's *discrete* imbalance and do **not**
 survive into the export; Phase 2 equalises the geometric areas.
 
 **`docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`** specifies the **general-surface export schema (`schema_version` 2.0)** — how a partition on a non-torus surface is stored and how a consumer discovers which surface it holds. Written because export is now the **only** torus-only stage left (Phase 1, Phase 2, all three gates, the readout and both viewers are surface-agnostic). Key facts it records: all **nine datasets** in an exported file are already general and exactly **four attributes** are torus-specific (`R`, `r`, `grid_shape`, `vertex_order`); the version namespace is **forked, not bumped** — torus stays on 1.1 byte-identical so the downstream reader (which validates `schema_version == "1.1"` *and* `surface == "torus"`) cannot be affected; `implicit_expr` + `params` is the true generalisation of `R`/`r`, since `f` and `∇f` give the on-surface check, exact normals and projection alike; and `structured` is the load-bearing flag, **true only for the torus** — a marching-cubes resolution pair is a *sampling grid* (a real double-torus solution carries 200×150=30,000 against V=56,700), so there is no per-vertex `(u,v)` and no analytic geodesic distance. Genus is **measured** from the exported meshes via `χ = V − E + F`: torus 1 (the method's own check), **double torus 2, Banchoff-Chmutov order 4 genus 5**. Implementation steps: `docs/plans/GENERAL_SURFACE_EXPORT_PLAN.md`, whose acceptance gate is that re-exporting an existing torus deliverable is **byte-identical**.
+
+**`docs/explanations/`** — plain-language explanations written to be *said*, not
+cited: the simplest-terms account of a mechanism the reference docs treat
+rigorously. Markdown, one file per topic, each opening with a one-paragraph note
+on what it was written for and which run(s) any number comes from. Currently `two_methods_explained.md` — the
+Γ-relaxation (A) versus threshold dynamics (B) from zero, for someone who has
+not studied either: what each holds while it searches (fuzzy paint vs hard
+labels), why blur-then-threshold shortens boundaries (motion by curvature), why
+A's readout gap is *absent* in B by construction, a side-by-side table (cost,
+validity, largest valid n, perimeter at equal Phase 2 budget), **what is ours
+and what is not** (neither method; JME 2018 already tiled the flat torus at
+n = 64), the ranked list of what is reportable as new work (diagnosis of A's
+failure; the pipeline at n = 400–1000 on a curved triangulated surface with
+FEM diffusion; the head-to-head comparison; the τ window and cost rules; two
+small FEM observations), how to position the paper (computational, "we are not
+aware of", never "first"; keep comparison and existence results separate), and
+a reading order. Its §2b separates **whose problem / whose solver** in the
+priced threshold: the assignment-with-multipliers structure is JME 2018's (and
+Ruuth–Wetton's for two phases); the exact auction is theirs; the inexact
+subgradient solve of the transportation dual with real vertex masses is ours
+(built for the readout repair) — and it is **not** a new approach to the dual
+transportation problem (that solver is standard: Aurenhammer et al., Mérigot,
+Peyré–Cuturi §5), only a substitution whose cost — the lost dissipation theorem,
+the surviving inequality, the granularity bar, non-integrality — is worked out.
+Reportable as an implementation choice with analysis, never as a method: the
+contribution is the *judgment* (the mesh forces a transportation problem; a
+validated primitive existed; inexactness is safe because the scheme is
+iterated; the cost is bounded by G4), and the limit is that "sufficed" can be
+claimed but "better than the auction" cannot — no auction was ever measured.
+Written after the doc-10 reviews.
 
 **`docs/reference/`** — permanent explanatory documents: topology-switch
 methodology, scalability analysis, the optimization-methods primer, and
