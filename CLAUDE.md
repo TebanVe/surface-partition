@@ -326,7 +326,7 @@ cluster/
 
 ### Documentation (`docs/`)
 
-The `docs/` tree is version-controlled and has six parts:
+The `docs/` tree is version-controlled and has seven parts:
 
 ```
 docs/
@@ -335,6 +335,7 @@ docs/
 ├── experiments/   ← LaTeX measured studies (question→method→measurement→conclusion)
 ├── plans/         ← design plans for not-yet-implemented work
 ├── reference/     ← permanent explanatory docs (methodology, known issues, primers)
+├── presentations/ ← slide decks that PRESENT established results to collaborators
 └── explanations/  ← plain-language explanations (speaker prep, "explain it simply")
 ```
 
@@ -504,6 +505,43 @@ Note the 1.69%/2.26% figures are Phase 1's *discrete* imbalance and do **not**
 survive into the export; Phase 2 equalises the geometric areas.
 
 **`docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`** specifies the **general-surface export schema (`schema_version` 2.0)** — how a partition on a non-torus surface is stored and how a consumer discovers which surface it holds. Written because export is now the **only** torus-only stage left (Phase 1, Phase 2, all three gates, the readout and both viewers are surface-agnostic). Key facts it records: all **nine datasets** in an exported file are already general and exactly **four attributes** are torus-specific (`R`, `r`, `grid_shape`, `vertex_order`); the version namespace is **forked, not bumped** — torus stays on 1.1 byte-identical so the downstream reader (which validates `schema_version == "1.1"` *and* `surface == "torus"`) cannot be affected; `implicit_expr` + `params` is the true generalisation of `R`/`r`, since `f` and `∇f` give the on-surface check, exact normals and projection alike; and `structured` is the load-bearing flag, **true only for the torus** — a marching-cubes resolution pair is a *sampling grid* (a real double-torus solution carries 200×150=30,000 against V=56,700), so there is no per-vertex `(u,v)` and no analytic geodesic distance. Genus is **measured** from the exported meshes via `χ = V − E + F`: torus 1 (the method's own check), **double torus 2, Banchoff-Chmutov order 4 genus 5**. Implementation steps: `docs/plans/GENERAL_SURFACE_EXPORT_PLAN.md`, whose acceptance gate is that re-exporting an existing torus deliverable is **byte-identical**.
+
+**`docs/presentations/`** — slide decks and talk material for sharing results
+with collaborators or structuring a discussion (added 2026-09-16). **A
+presentation presents; it does not establish**: every number on a slide must
+trace to a report under `docs/experiments/`, a reference doc, a deliverable
+table, or a run under `results/`, and decks reuse the reports' own status
+labels and caveats rather than upgrading hedged findings into headlines.
+**Format: Marp Markdown + the neobeam theme** (a modern beamer look) through
+`shared/surface-partition.css`, chosen because the deliverable tables are
+already GFM tables and paste in verbatim, and the source diffs like any other
+doc. One `NN-topic-slug/` directory per deck: `README.md` as the provenance
+block (audience, occasion, sources, status), `main.md`, a one-line `Makefile`
+(`include ../shared/deck.mk`), a committed `make_figures.py` producing every
+`fig_*.png`/`fig_*.svg` (PyVista renders via `render_partition_screenshots()`;
+plots as SVG — **Marp cannot embed the reports' `fig_*.pdf`**), and the tracked
+rendered `main.pdf`. `shared/` holds the vendored theme (pinned commit in
+`NOTICE.md`, never edited), the extension CSS (divider slide, two-column grid,
+compact tables, un-capped tables and images), `deck.mk` (`make` / `make png` /
+`make html` / `make preview`; marp-cli via `npx` at a pinned version — needs
+only node + Chrome, plus network for Google Fonts) and `template.md`, which
+exercises every construct and was built to verify them. Three things found
+while setting it up: Marp's `![bg right]` split layout **breaks neobeam's
+header/footer** (use the columns grid); frame titles are the `<!-- header: -->`
+directive, not a heading; and marp-cli hangs under `make` unless stdin is
+redirected from `/dev/null` (`deck.mk` does). See `docs/presentations/README.md`.
+Decks: **`01-pgd-status-brief/`** — a 13-slide collaborator briefing on the PGD
+pipeline up to n = 300, in the **paper's notation** (`n` cells, `N` vertices,
+`φ^i`, `F_ε`, readout 5.1): relaxed functional, the FEM terms with their
+gradients as the code computes them, winner-take-all readout, where PGD works
+and what it costs, the three artefacts and why, the balanced readout that
+reaches n = 300; deliberately says nothing about approach B or n > 300, and
+carries no run IDs or source lines on the slides (provenance is in its README). Its
+`make_figures.py` renders the N = 100/200 deliverables and the N = 300
+raw-vs-readout pair (highlighted imbalanced/fragmented cells) through the fast
+viewer's exact-geometry region builder, and plots Phase 1 wall and per-cell
+territory from the run files; its `README.md` maps every slide claim to its
+source.
 
 **`docs/explanations/`** — plain-language explanations written to be *said*, not
 cited: the simplest-terms account of a mechanism the reference docs treat

@@ -1,0 +1,32 @@
+# LaTeX / BibTeX build products (sources: *.tex *.bib *.py Makefile *.md remain tracked)
+*.aux
+*.bbl
+*.blg
+*.bcf
+*.fdb_latexmk
+*.fls
+*.run.xml
+*.synctex.gz
+*.synctex.gz(busy)
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+*-blx.bib
+
+# Marp build products other than the tracked main.pdf: the HTML export and the
+# per-slide PNGs from `make png` / `make html` (review aids, regenerated at will).
+main.html
+main.[0-9][0-9][0-9].png
+
+# Re-include rendered decks and figures. The repo-root .gitignore has broad
+# *.pdf and *.png rules; without these exceptions a deck's main.pdf and its
+# figures would be silently ignored. Marp cannot embed PDF figures, so deck
+# figures are PNG (renders) or SVG (plots); fig_*.pdf is kept for parity with
+# docs/experiments/ in case a report figure is copied across.
+!main.pdf
+!fig_*.png
+!fig_*.svg
+!fig_*.pdf

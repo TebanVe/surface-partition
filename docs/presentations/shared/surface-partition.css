@@ -1,0 +1,112 @@
+/*!
+ * surface-partition — project extension of the neobeam Marp theme
+ *
+ * @theme surface-partition
+ * @auto-scaling fittingHeader,code
+ * @size 16:9 1920px 1080px
+ * @size 4:3 960px 720px
+ *
+ * Selected by every deck via `theme: surface-partition`. Adds the two layouts
+ * neobeam lacks (a section-divider slide and a two-column grid) and the tweaks
+ * a results-heavy deck needs. Build with both files on --theme-set; see deck.mk.
+ */
+
+@import "neobeam";
+
+:root {
+    /* Keep neobeam's default blue; override --primary here to recolour every deck. */
+    --font-size: 22px;
+}
+
+/* Marp's default theme gives tables `display:block; overflow:auto`, and every
+ * slide body is a flex column, so when a slide overflows, its tables and
+ * definition blocks silently SHRINK (rows disappear) instead of the overflow
+ * showing. Make overflow visible so a too-full slide is caught in review. */
+section > * { flex-shrink: 0; }
+table { overflow: visible; }
+
+/* neobeam's 1.75 list leading is generous for a results deck. */
+ul, ol { line-height: 1.45; }
+li + li { margin-top: 0.15em; }
+
+/* Math is excluded from @auto-scaling above: a display equation placed first
+ * on a slide was being fitted to a sliver. Display math at body size instead. */
+.katex-display { margin: 0.4em 0 0.6em; width: 100%; }
+
+/* ---------------------------------------------------------------------------
+ * Section divider: `<!-- _class: divider -->` with a single `#` heading.
+ * Solid primary background, centred, no header bar.
+ * ------------------------------------------------------------------------- */
+section.divider {
+    justify-content: center;
+    align-items: center;
+    background: var(--primary);
+}
+
+section.divider > h1,
+section.divider > h2,
+section.divider > p {
+    color: var(--text-color-negative-lightest);
+    text-align: center;
+}
+
+section.divider > h1 { font-size: 2.2rem; }
+section.divider > h2 { font-size: 1.3rem; font-weight: 400; }
+
+section.divider header { display: none; }
+
+/* ---------------------------------------------------------------------------
+ * Two columns: wrap the slide body in `<div class="columns"> … </div>` with
+ * two child `<div>`s (needs HTML enabled — deck.mk passes --html). Use
+ * `columns-wide-left` / `columns-wide-right` for a 3:2 split, e.g. figure
+ * beside a narrow table.
+ * ------------------------------------------------------------------------- */
+.columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.2rem;
+    width: 100%;
+    align-items: start;
+}
+
+.columns-wide-left  { grid-template-columns: 3fr 2fr; }
+.columns-wide-right { grid-template-columns: 2fr 3fr; }
+
+.columns > div > :first-child { margin-top: 0; }
+
+/* ---------------------------------------------------------------------------
+ * Tables: neobeam's decorated table at 24 px overflows past ~8 rows.
+ * `<!-- _class: compact -->` shrinks tables and lists on that slide (not
+ * paragraphs, so it cannot override .source below at equal specificity).
+ * ------------------------------------------------------------------------- */
+table { max-width: 100%; }  /* neobeam caps blockquote/pre/table at 60% — keep it for the other two */
+
+section.compact table { font-size: 0.8rem; }
+section.compact ul, section.compact ol { font-size: 0.9rem; }
+section.compact td, section.compact th { padding: 0.15em 0.5em; }
+
+/* Right-aligned numeric columns read better in result tables. */
+table td[align="right"], table th[align="right"] { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------------------
+ * Figures. neobeam caps every image at max-width: 50% and rounds its corners,
+ * which is wrong for plots and renders (clipped tick labels, half-width
+ * figures in a column). Let `![width:…]` / `![height:…]` and the column
+ * decide instead. Captions use neobeam's own idiom: a `######` heading on the
+ * line right after the image.
+ * ------------------------------------------------------------------------- */
+img {
+    max-width: 100%;
+    border-radius: 0;
+}
+
+img[alt*="left"], img[alt*="right"] { max-width: 50%; }
+
+:has(img) + h6 { text-align: center; }
+
+/* Provenance line: small, muted, bottom-left of the body. */
+.source {
+    font-size: 0.6rem;
+    color: var(--text-color-lightest);
+    margin-top: auto;
+}
