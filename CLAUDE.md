@@ -544,9 +544,24 @@ territory from the run files; its `README.md` maps every slide claim to its
 source.
 
 **`docs/explanations/`** — plain-language explanations written to be *said*, not
-cited: the simplest-terms account of a mechanism the reference docs treat
-rigorously. Markdown, one file per topic, each opening with a one-paragraph note
-on what it was written for and which run(s) any number comes from. Currently `two_methods_explained.md` — the
+cited (added 2026-09-17): the simplest-terms account of a mechanism the reference
+docs treat rigorously, typically prepared for a talk. Markdown, one file per
+topic, each opening with a one-paragraph note on what it was written for and
+which run(s) any number comes from. Currently
+`three_artefacts_of_the_readout.md` — the paint-vs-territory account of the
+empty / runt / split cells, why refinement shrinks runts but not splits, and the
+measurement behind it: on the two n = 300 meshes the split cells are the **same
+two cells** (274, 290) and their islands **grew** (11 % → 24 % and 4 % → 17 % of
+a cell) while cell 290's runt was repaired — balance bought with disconnection.
+Pairs with `docs/reference/winner_take_all_partition_gap.md`. And
+`balanced_readout_explained.md` — the readout fix from zero: the per-cell
+handicap `argmax[log u_i + ψ_i]` and why it is local (it can only overturn
+near-ties, i.e. a cell's own border), the thermostat loop that sets ψ, the
+one-vertex granularity, why the shifts *multiply* existing islands (2 → 4 pieces
+per split cell at n = 300, so repair is necessary), island absorption, the
+single-vertex rebalance rules, the density-swap hand-off, and the n = 300
+numbers at every stage (ψ ∈ [−0.75, 3.46]; 6 islands; 1,485 moves / 38 sweeps /
+1 blocked; +1.9 % boundary). And `two_methods_explained.md` — the
 Γ-relaxation (A) versus threshold dynamics (B) from zero, for someone who has
 not studied either: what each holds while it searches (fuzzy paint vs hard
 labels), why blur-then-threshold shortens boundaries (motion by curvature), why
