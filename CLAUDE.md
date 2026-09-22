@@ -586,7 +586,23 @@ contribution is the *judgment* (the mesh forces a transportation problem; a
 validated primitive existed; inexactness is safe because the scheme is
 iterated; the cost is bounded by G4), and the limit is that "sufficed" can be
 claimed but "better than the auction" cannot — no auction was ever measured.
-Written after the doc-10 reviews.
+Written after the doc-10 reviews. And `reading_path_for_a_collaborator.md`
+(2026-09-21, first draft to iterate on) — the held papers ordered as a
+**discovery path** for a collaborator who is not told the answer: stage 0
+Bogosel–Oudet 2017 (plant the readout question), stage 1 MBO 1992 → MBO 1994 →
+Esedoğlu–Otto 2015 (evolve hard labels; still perimeter descent), stage 2
+Jacobs–Merkurjev–Esedoğlu 2018 §1–3 + §4.2 (the constraint; flat torus at 64),
+stage 3 Garcia-Cardona 2014 / Dziuk–Elliott 2013 / van Gennip 2014 (grid →
+mesh; the τ window), stage 4 Bertsekas 1988 vs Peyré–Cuturi §5 (the one open
+design decision), stage 5 scale and kernels; plus a one-table comparison of Esedoğlu–Otto 2015
+(the theory of the unconstrained step: heat-content energy, threshold =
+linearisation minimiser, dissipation, Γ-limit) against JME 2018 (the same
+linearisation minimised under volume constraints = an assignment problem whose
+multipliers shift the thresholds) — "E–O explain the step; JME constrain it".
+Names the sections to read, the
+one paper on the path not held (Aurenhammer et al. 1998; Ruuth–Wetton 2003 was
+obtained and verified 2026-09-22), and how to frame the ask ("read stages 0–2 and tell me what you would
+build").
 
 **`docs/reference/`** — permanent explanatory documents: topology-switch
 methodology, scalability analysis, the optimization-methods primer, and

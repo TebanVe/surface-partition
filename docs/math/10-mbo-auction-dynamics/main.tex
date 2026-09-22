@@ -133,7 +133,7 @@ on paper (\S\ref{sec:lumped-pairing}) it is stated and marked as not implemented
 
 Every reference in this section was read from the copy held in
 \codefile{docs/papers/} (title page, abstract, and the sections cited), not from a
-secondary description. The two exceptions are marked.
+secondary description.
 
 \subsection{The lineage}
 \label{sec:lineage}
@@ -165,11 +165,10 @@ and the $\Gamma$-limit itself is in its companion (European J.\ Appl.\ Math.\ 9,
 1998), which is not held.
 
 \paragraph{Volume constraints.} Ruuth and Wetton \cite{ruuth2003volume} enforce a
-prescribed volume in the two-phase scheme by shifting the threshold level away
-from $\tfrac12$ until the volume is met. \emph{(Cited second-hand: the paper is
-paywalled; its content is taken from the descriptions in \cite[\S2]{jacobs2018auction}
-and \cite{laux2017bulk}, which proves its convergence, and the bibliographic
-details from the publisher's listing.)} Jacobs, Merkurjev and Esedo\u{g}lu
+prescribed volume in the two-phase scheme by thresholding the diffused
+indicator not at $\tfrac12$ but at the level $l$ that preserves the phase volume
+(their Algorithm, step 2(b)); \cite{laux2017bulk} proves the scheme's
+convergence. Jacobs, Merkurjev and Esedo\u{g}lu
 \cite{jacobs2018auction} generalise this to $N$ phases: minimising the
 linearisation of $\Etau$ under volume constraints is a linear assignment problem,
 its Lagrange multipliers shift the thresholds (their eq.~(11), which is exactly

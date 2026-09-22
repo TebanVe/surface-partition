@@ -37,13 +37,13 @@ if a file is missing, it was never committed and must be re-fetched.
 | `BFb0082859.pdf` | `dziuk1988beltrami` — Dziuk, *Finite Elements for the Beltrami Operator on Arbitrary Surfaces* | The whole LNM 1357 volume (Hildebrandt & Leis, eds.); Dziuk is pp. 142–155 per the volume's table of contents |
 | `finite-element-methods-for-surface-pdes.pdf` | `dziuk2013surfacefem` — Dziuk & Elliott | Acta Numerica 22, 289–396 (2013) header |
 | `s002080050159.pdf` | `alberti1998nonlocal` — Alberti & Bellettini, *A Nonlocal Anisotropic Model for Phase Transitions. Part I* | Math. Ann. 310, 527–560 (1998). **Part I only** (optimal profile); the Γ-convergence companion (EJAM 9, 1998) is not held |
+| `ruuth_wetton_2003.pdf` | `ruuth2003volume` — Ruuth & Wetton, *A Simple Scheme for Volume-Preserving Motion by Mean Curvature* | J. Sci. Comput. 19(1–3), 373–384, December 2003; both authors' full names read from the first page (Steven J. Ruuth, Brian T. R. Wetton). **Read for content**: §2–3, the threshold level $l$ chosen to preserve the phase volume (the two-phase antecedent of JME's shifted thresholds). Fetched 2026-09-22 |
 | `manifolds_perimeter.pdf` | `bogosel2017partitions` (arXiv typesetting) | Same paper as the Experimental Mathematics copy above; a pre-existing copy (file dated Dec 2024) whose equation numbering differs from the journal's |
 
-**Not held, cited second-hand (marked in their `.bib` notes):** `ruuth2003volume`
-(Ruuth & Wetton 2003, J. Sci. Comput. 19, 373–384 — paywalled; content from
-JME §2 and Laux–Swartz). The proceedings version of MBO 1992 and the journal
-versions of Laux–Swartz and Esedoğlu–Jacobs are likewise unverified, as their
-rows say.
+**Not verified from a held copy:** the proceedings version of MBO 1992 and the
+journal versions of Laux–Swartz and Esedoğlu–Jacobs, as their rows say.
+(`ruuth2003volume` was cited second-hand until 2026-09-22; it is now held and
+verified.)
 
 ⚠ The remaining entries in `docs/math/shared/references.bib` carry an upstream
 note that volume and page numbers should be checked against published sources
