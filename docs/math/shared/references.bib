@@ -54,28 +54,54 @@
 }
 
 @article{modica1987gradient,
-  author    = {Luciano Modica},
-  title     = {The Gradient Theory of Phase Transitions and the Minimal
-               Interface Criterion},
-  journal   = {Archive for Rational Mechanics and Analysis},
-  volume    = {98},
-  number    = {2},
-  pages     = {123--142},
-  year      = {1987},
-  note      = {Classical $\Gamma$-convergence result for the Modica--Mortola
-               functional; source of the interface constant
-               $c_W = 2\int_0^1\sqrt{W}$ used in the Phase~1 energy.}
+  author  = {Modica, Luciano},
+  title   = {The Gradient Theory of Phase Transitions and the Minimal Interface
+             Criterion},
+  journal = {Archive for Rational Mechanics and Analysis},
+  volume  = {98},
+  number  = {2},
+  pages   = {123--142},
+  year    = {1987},
+  note    = {Classical Gamma-convergence result for the Modica--Mortola
+             functional; source of the interface constant
+             $c_W = 2\int_0^1\sqrt{W}$ used in the Phase~1 energy. Held since
+              2026-09-23; author, title and the printed page range
+             123--142 verified from the copy (received 9 June 1986). Volume 98
+             and issue 2 are from the publisher listing --- the copy's first
+             page carries no volume line.}
+}
+
+@article{dipierro2023nonlocal,
+  author  = {Dipierro, Serena and Miraglio, Pietro and Valdinoci, Enrico},
+  title   = {(Non)local $\Gamma$-convergence},
+  journal = {Bollettino dell'Unione Matematica Italiana},
+  year    = {2023},
+  note    = {SURVEY, not cited by any document in this repository. Arrived
+             2026-09-23 in place of \texttt{modica1977esempio} (both are in
+             the Bollettino UMI archive) and kept because it reviews classical
+             and nonlocal Gamma-convergence side by side --- the two limits
+             this project's two methods rely on. Held; authors and title verified from the first page. Journal, volume,
+             issue, pages and year are NOT verified --- the copy carries no
+             citation block.}
 }
 
 @article{modica1977esempio,
-  author    = {Luciano Modica and Stefano Mortola},
-  title     = {Un esempio di $\Gamma$-convergenza},
-  journal   = {Bollettino dell'Unione Matematica Italiana B (5)},
-  volume    = {14},
-  pages     = {285--299},
-  year      = {1977},
-  note      = {The original $\Gamma$-convergence example behind the Phase~1
-               relaxation energy.}
+  author  = {Modica, Luciano and Mortola, Stefano},
+  title   = {Un esempio di $\Gamma$-convergenza},
+  journal = {Bollettino dell'Unione Matematica Italiana B (5)},
+  volume  = {14},
+  pages   = {285--299},
+  year    = {1977},
+  note    = {The original Gamma-convergence example behind the Phase~1
+             relaxation energy. NOT HELD --- searched 2026-09-23 without
+             success; in Italian, and the Bollettino UMI of that period is
+             poorly digitised. Cited here for priority, not for content: the
+             result this project actually uses (the interface constant
+             $c_W = 2\int_0^1\sqrt{W}$) is proved in English in
+             \texttt{modica1987gradient}, which IS held, and the nonlocal
+             analogue in \texttt{alberti1998nonlocal}. Every field above is
+             from the standard citation, not from a copy. Do not spend more
+             time looking for it.}
 }
 
 @book{braides2002gamma,
@@ -260,7 +286,15 @@
   booktitle = {Advances in Neural Information Processing Systems},
   volume    = {26},
   pages     = {2292--2300},
-  year      = {2013}
+  year      = {2013},
+  note      = {Entropic regularisation of optimal transport. Implemented and
+               measured for this project's balanced assignment, where it lost
+               to subgradient ascent on five of six score matrices
+               (\texttt{docs/experiments/07-phase0-shared-harness/}). Held as
+               \texttt{docs/papers/cuturi\_2013\_sinkhorn\_distances.pdf}
+               since 2026-09-23 (the NeurIPS proceedings PDF); author and title
+               verified from it. Volume and page range are from the
+               proceedings listing --- the paper PDF carries no page numbers.}
 }
 
 @article{aurenhammer1998minkowski,
@@ -270,7 +304,13 @@
   volume  = {20},
   number  = {1},
   pages   = {61--76},
-  year    = {1998}
+  year    = {1998},
+  note    = {Power diagrams with weighted sites realise constrained
+             least-squares assignments with prescribed cluster sizes: the
+             capacity-constrained assignment underlying the balanced readout's
+             offsets and approach B's initialisation. Held since
+              2026-09-23; authors, title, journal, volume 20 (1998),
+             pages 61--76 verified from the first page.}
 }
 
 @article{merigot2011multiscale,
@@ -281,7 +321,14 @@
   number  = {5},
   pages   = {1583--1592},
   doi     = {10.1111/j.1467-8659.2011.02032.x},
-  year    = {2011}
+  year    = {2011},
+  note    = {Multiscale solver for semi-discrete optimal transport. Held since
+              2026-09-23 --- the HAL preprint (hal-00604684), not the
+             published version; author, title, journal, volume 30(5), year and
+             DOI verified from its citation block. PAGE RANGE DISCREPANCY: the
+             HAL block says 1584--1592, this entry and Crossref say
+             1583--1592. Not resolvable from the preprint; check the published
+             article before external distribution.}
 }
 
 @article{kitagawa2019convergence,
@@ -293,7 +340,13 @@
   number  = {9},
   pages   = {2603--2651},
   doi     = {10.4171/JEMS/889},
-  year    = {2019}
+  year    = {2019},
+  note    = {Damped Newton for the semi-discrete dual; exploits smoothness in
+             the continuous-source setting, which is why it does not transfer
+             to this project's finite-to-finite problem (see
+             \texttt{docs/math/09-balanced-readout}). Held since
+              2026-09-23 --- the HAL preprint (hal-01290496), not the
+             published version; all fields verified from its citation block.}
 }
 
 @article{lloyd1982least,
@@ -666,14 +719,21 @@
 
 @article{alberti1998nonlocal,
   author  = {Alberti, Giovanni and Bellettini, Giovanni},
-  title   = {A Nonlocal Anisotropic Model for Phase Transitions. {P}art {I}:
-             The Optimal Profile Problem},
-  journal = {Mathematische Annalen},
-  volume  = {310},
-  pages   = {527--560},
+  title   = {A Non-Local Anisotropic Model for Phase Transitions: Asymptotic
+             Behaviour of Rescaled Energies},
+  journal = {European Journal of Applied Mathematics},
+  volume  = {9},
+  number  = {3},
+  pages   = {261--284},
+  doi     = {10.1017/S0956792598003453},
   year    = {1998},
-  note    = {Nonlocal phase-transition energies with general kernels; Part I
-             (optimal profile). The Gamma-convergence of the rescaled energies is
-             in the companion paper (European J. Appl. Math. 9, 1998), which is
-             NOT held. Held; header verified.}
+  note    = {THE Gamma-convergence paper of the pair --- the nonlocal
+             perimeter approximation converging to the surface-tension model,
+             cited as [1] by \texttt{esedoglu2015threshold} for ``heat content
+             tends to perimeter''. Held since
+              2026-09-23; authors, title, journal, volume 9 (1998), pages
+             261--284 verified from the first page; issue number 3 and the DOI
+             from \texttt{esedoglu2015threshold}'s reference list. Its
+             companion Part~I (Math.\ Ann.\ 310, the optimal-profile problem)
+             is held separately.}
 }

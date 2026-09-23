@@ -38,10 +38,27 @@ if a file is missing, it was never committed and must be re-fetched.
 | `finite-element-methods-for-surface-pdes.pdf` | `dziuk2013surfacefem` — Dziuk & Elliott | Acta Numerica 22, 289–396 (2013) header |
 | `s002080050159.pdf` | `alberti1998nonlocal` — Alberti & Bellettini, *A Nonlocal Anisotropic Model for Phase Transitions. Part I* | Math. Ann. 310, 527–560 (1998). **Part I only** (optimal profile); the Γ-convergence companion (EJAM 9, 1998) is not held |
 | `ruuth_wetton_2003.pdf` | `ruuth2003volume` — Ruuth & Wetton, *A Simple Scheme for Volume-Preserving Motion by Mean Curvature* | J. Sci. Comput. 19(1–3), 373–384, December 2003; both authors' full names read from the first page (Steven J. Ruuth, Brian T. R. Wetton). **Read for content**: §2–3, the threshold level $l$ chosen to preserve the phase volume (the two-phase antecedent of JME's shifted thresholds). Fetched 2026-09-22 |
+| `aurenhammer_hoffmann_aronov_1998_minkowski_least_squares_clustering.pdf` | `aurenhammer1998minkowski` — Aurenhammer, Hoffmann & Aronov, *Minkowski-Type Theorems and Least-Squares Clustering* | Algorithmica 20(1), 61–76 (1998), from the first page. Power diagrams realise constrained least-squares assignments with prescribed cluster sizes — the capacity-constrained assignment behind the readout offsets and approach B's init. Fetched 2026-09-23 |
+| `alberti_bellettini_1998_nonlocal_anisotropic_phase_transitions_II.pdf` | `alberti1998nonlocal` — Alberti & Bellettini, *A Non-Local Anisotropic Model for Phase Transitions: Asymptotic Behaviour of Rescaled Energies* | EJAM 9, 261–284 (1998), from the first page; issue 3 and DOI from Esedoğlu–Otto's reference list. **This is the Γ-convergence paper** Esedoğlu–Otto cite as [1]; `s002080050159.pdf` is its Part I companion. Fetched 2026-09-23 |
+| `modica_1987_gradient_theory_phase_transitions.pdf` | `modica1987gradient` — Modica, *The Gradient Theory of Phase Transitions and the Minimal Interface Criterion* | Author, title and printed pages 123–142 from the copy (received 9 June 1986); volume 98 and issue 2 from the publisher listing — the copy has no volume line. Fetched 2026-09-23 |
+| `cuturi_2013_sinkhorn_distances.pdf` | `cuturi2013sinkhorn` — Cuturi, *Sinkhorn Distances: Lightspeed Computation of Optimal Transport* | Author and title from the NeurIPS proceedings PDF; volume 26 and pages 2292–2300 from the proceedings listing (the PDF has no page numbers). Fetched 2026-09-23 |
+| `merigot_2011_multiscale_optimal_transport.pdf` | `merigot2011multiscale` — Mérigot, *A Multiscale Approach to Optimal Transport* | **HAL preprint** (hal-00604684), not the published version; author, title, CGF 30(5), 2011 and DOI from its citation block. ⚠ That block says pages **1584**–1592 while Crossref and our entry say **1583**–1592 — unresolved |
+| `kitagawa_merigot_thibert_2019_newton_semidiscrete_ot.pdf` | `kitagawa2019convergence` — Kitagawa, Mérigot & Thibert, *Convergence of a Newton Algorithm for Semi-Discrete Optimal Transport* | **HAL preprint** (hal-01290496), not the published version; JEMS 21(9), 2603–2651, 2019 and DOI from its citation block. Fetched 2026-09-23 |
+| `dipierro_miraglio_valdinoci_nonlocal_gamma_convergence.pdf` | `dipierro2023nonlocal` — Dipierro, Miraglio & Valdinoci, *(Non)local Γ-convergence* | Authors and title from the first page; **no citation block in the copy**, so journal/volume/pages/year are unverified. A survey, cited by nothing here — it arrived in place of Modica–Mortola 1977 and was kept as background. Fetched 2026-09-23 |
 | `manifolds_perimeter.pdf` | `bogosel2017partitions` (arXiv typesetting) | Same paper as the Experimental Mathematics copy above; a pre-existing copy (file dated Dec 2024) whose equation numbering differs from the journal's |
 
-**Not verified from a held copy:** the proceedings version of MBO 1992 and the
-journal versions of Laux–Swartz and Esedoğlu–Jacobs, as their rows say.
+**Not verified from a held copy:** the proceedings version of MBO 1992, the
+journal versions of Laux–Swartz, Esedoğlu–Jacobs, Mérigot 2011 and
+Kitagawa–Mérigot–Thibert 2019 (the last two are held as HAL preprints), as
+their rows say.
+
+**Looked for and not found:** `modica1977esempio` (Modica & Mortola, *Un
+esempio di Γ-convergenza*, Boll. Un. Mat. Ital. B (5) **14**, 285–299, 1977).
+Searched 2026-09-23 without success — it is in Italian and the Bollettino UMI
+of that period is poorly digitised. **Do not spend more time on it:** it is
+cited for priority, and the result this project uses is proved in English in
+`modica_1987_gradient_theory_phase_transitions.pdf`, which is held. Its fields
+in the `.bib` come from the standard citation, not from a copy.
 (`ruuth2003volume` was cited second-hand until 2026-09-22; it is now held and
 verified.)
 
