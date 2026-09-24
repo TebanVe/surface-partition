@@ -46,13 +46,21 @@ labels with 0 fragmented: double torus 12,448 verts, worst cell 0.0468%, **7 s**
 Banchoff-Chmutov 26,928 verts, worst 0.0169%, **17 s**. Configs:
 `parameters/{double_torus,banchoff_chmutov}_10part_seeded.yaml`.
 
-⚠ `scripts/export_partition.py` is **still torus-only** — it writes the
-link-list-torus schema, reads `config["surface"]["torus"]`, and asserts
-`n_theta*n_phi == V`, which no marching-cubes mesh satisfies. Phase 1, Phase 2,
-all three gates and the balanced readout work unchanged; only the export does
-not. The general schema is specified in
-`docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`; the implementation steps in
-`docs/plans/GENERAL_SURFACE_EXPORT_PLAN.md`.
+**Export is surface-agnostic since `0035dde` (2026-09-08).**
+`scripts/export_partition.py` resolves the surface through
+`surface_name_from_config()` and `src/export/writer.py` writes a self-describing
+`/surface` group. The version namespace is **forked, not bumped**: the torus
+keeps writing `schema_version` **1.1** byte-identically, so the downstream reader
+(which validates `1.1` *and* `surface == "torus"`) cannot be affected; every other
+surface writes **2.0** with `implicit_expr` + `params` in place of `R`/`r`. Both
+general-surface deliverables exist — `double_torus_partition_n10_V12448.h5` and
+`banchoff_chmutov_partition_n10_V26928.h5`. Schema:
+`docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`.
+
+`structured` is the load-bearing flag and is **true only for the torus** — a
+marching-cubes resolution pair is a *sampling grid*, not a parametrisation (a real
+double-torus solution carries 200x150 = 30,000 against V=56,700), so there is no
+per-vertex `(u,v)` and no analytic geodesic distance.
 
 ## Choose a marching-cubes grid by STIFFNESS CONDITIONING, not vertex count
 

@@ -1,0 +1,323 @@
+# Exported partitions — the record of every file downstream repos consume.
+#
+# THIS FILE IS THE RECORD; the .h5 files are the artefacts. Verify one against
+# the other with:
+#
+#     python scripts/check_deliverables.py
+#
+# and regenerate the rows from disk with `--emit`. `results/` is gitignored and
+# each git worktree holds its own runs, so a row whose file is absent in a given
+# checkout is reported and skipped, never deleted.
+#
+# Every field below is read straight off the exported file. Phase 1 quality
+# figures (worst-cell discrete imbalance, fragmentation) are deliberately NOT
+# here: they belong to the run, not the deliverable, and live in the run's
+# `arm_report.yaml` (approach B) or `solution/metadata.yaml` (PGD).
+#
+# `finalised: true` is what downstream gates on. Every high-N export needed
+# `--force-finalised`, because the Phase 2 migration-cycling plateau leaves
+# `pending_migration=True` on the best iterate.
+#
+# ⚠ Perimeter is `sum_k Per(cell_k)`, so every interface is counted TWICE. A
+# consumer wanting total interface length must halve it.
+#
+# GROUPS
+#   common-mesh      torus, V=114,144 — USE THESE for any cross-N study
+#   finer-mesh       torus, better partitions but NOT cross-comparable
+#   mc-study         the downstream Monte-Carlo set (groups A/B/C)
+#   implicit-surface schema 2.0, general-surface exporter (0035dde)
+#   legacy-smoke     finalised=false; not deliverables
+#
+# ⚠ Choosing the common mesh costs two measured things, both small: a coarser
+# mesh UNDER-measures perimeter (N=1000 reads 583.1417 against 583.2558 on its
+# own finer mesh, -0.020%, because a boundary of fewer longer segments is a
+# shorter approximation), and exported equal-area accuracy is looser (0.0272% at
+# N=750, 0.0127% at N=1000, against 0.0014-0.0023% at N=400/500).
+
+deliverables:
+- n: 50
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 19
+  perimeter: 130.102
+  finalised: true
+  seed: 84172851
+  source_run_id: run_20260625_113015_surftorus_npart50_v1nt100-348_incr62_v2np96-328_incr58_lam2.1_seed84172851
+  file: results/run_20260625_113015_surftorus_npart50_v1nt100-348_incr62_v2np96-328_incr58_lam2.1_seed84172851/partition/torus_partition_run_20260625_113015_surftorus_npart50_v1nt100-348_incr62_v2np96-328_incr58_lam2.1_seed84172851.h5
+  group: common-mesh
+- n: 100
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 20
+  perimeter: 185.2546
+  finalised: true
+  seed: 84172851
+  source_run_id: run_20260709_081548_surftorus_npart100_v1nt100-348_incr62_v2np96-328_incr58_lam5.1_seed84172851
+  file: results/run_20260709_081548_surftorus_npart100_v1nt100-348_incr62_v2np96-328_incr58_lam5.1_seed84172851/partition/torus_partition_run_20260709_081548_surftorus_npart100_v1nt100-348_incr62_v2np96-328_incr58_lam5.1_seed84172851.h5
+  group: common-mesh
+- n: 150
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 20
+  perimeter: 228.1566
+  finalised: true
+  seed: 84172851
+  source_run_id: run_20260711_165615_surftorus_npart150_v1nt100-348_incr62_v2np96-328_incr58_lam6.0_seed84172851
+  file: results/run_20260711_165615_surftorus_npart150_v1nt100-348_incr62_v2np96-328_incr58_lam6.0_seed84172851/partition/torus_partition_run_20260711_165615_surftorus_npart150_v1nt100-348_incr62_v2np96-328_incr58_lam6.0_seed84172851.h5
+  group: common-mesh
+- n: 200
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 16
+  perimeter: 262.1096
+  finalised: true
+  seed: 61803399
+  source_run_id: run_20260722_175451_surftorus_npart200_v1nt100-348_incr62_v2np96-328_incr58_lam11.0_seed61803399
+  file: results/run_20260722_175451_surftorus_npart200_v1nt100-348_incr62_v2np96-328_incr58_lam11.0_seed61803399/partition/torus_partition_n200_s61803399.h5
+  group: common-mesh
+- n: 300
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 19
+  perimeter: 322.9622
+  finalised: true
+  seed: 61803399
+  source_run_id: run_20260808_191030_surftorus_npart300_v1nt100-348_incr62_v2np96-328_incr58_lam11.5_seed61803399
+  file: results/run_20260808_191030_surftorus_npart300_v1nt100-348_incr62_v2np96-328_incr58_lam11.5_seed61803399/readout/dualshift_gate0.05_repair/partition/torus_partition_n300_s61803399_5lvl.h5
+  group: common-mesh
+- n: 400
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 19
+  perimeter: 368.6603
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260820_133709_npart400_V114144_seed84172851
+  file: results/arm_mbo_20260820_133709_npart400_V114144_seed84172851/partition/torus_partition_n400_s84172851.h5
+  group: common-mesh
+- n: 500
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 10
+  perimeter: 412.1138
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260822_120646_npart500_V114144_seed84172851
+  file: results/arm_mbo_20260822_120646_npart500_V114144_seed84172851/partition/torus_partition_n500_s84172851.h5
+  group: common-mesh
+- n: 750
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 9
+  perimeter: 504.1626
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260827_114016_npart750_V114144_seed84172851
+  file: results/arm_mbo_20260827_114016_npart750_V114144_seed84172851/partition/torus_partition_n750_V114144.h5
+  group: common-mesh
+- n: 1000
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 16
+  perimeter: 583.1417
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260827_095843_npart1000_V114144_seed84172851
+  file: results/arm_mbo_20260827_095843_npart1000_V114144_seed84172851/partition/torus_partition_n1000_V114144.h5
+  group: common-mesh
+- n: 100
+  mesh_vertices: 47488
+  surface: torus
+  schema_version: '1.1'
+  iteration: 10
+  perimeter: 185.0787
+  finalised: true
+  seed: 84172851
+  source_run_id: run_20260708_094925_surftorus_npart100_v1nt100-224_incr62_v2np96-212_incr58_lam5.1_seed84172851
+  file: results/run_20260708_094925_surftorus_npart100_v1nt100-224_incr62_v2np96-212_incr58_lam5.1_seed84172851/partition/torus_partition_run_20260708_094925_surftorus_npart100_v1nt100-224_incr62_v2np96-212_incr58_lam5.1_seed84172851.h5
+  group: finer-mesh
+- n: 300
+  mesh_vertices: 47488
+  surface: torus
+  schema_version: '1.1'
+  iteration: 18
+  perimeter: 323.3192
+  finalised: true
+  seed: 61803399
+  source_run_id: dualshift_gate0.05_repair
+  file: results/run_20260806_123326_surftorus_npart300_v1nt100-224_incr62_v2np96-212_incr58_lam11.5_seed61803399/readout/dualshift_gate0.05_repair/partition/torus_partition_run_20260806_123326_npart300_lam11.5_seed61803399_balanced.h5
+  group: finer-mesh
+- n: 750
+  mesh_vertices: 158260
+  surface: torus
+  schema_version: '1.1'
+  iteration: 14
+  perimeter: 504.9214
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260822_182903_npart750_V158260_seed84172851
+  file: results/arm_mbo_20260822_182903_npart750_V158260_seed84172851/partition/torus_partition_n750_s84172851.h5
+  group: finer-mesh
+- n: 1000
+  mesh_vertices: 209568
+  surface: torus
+  schema_version: '1.1'
+  iteration: 15
+  perimeter: 583.2558
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260823_235918_npart1000_V209568_seed84172851
+  file: results/arm_mbo_20260823_235918_npart1000_V209568_seed84172851/partition/torus_partition_n1000_s84172851.h5
+  group: finer-mesh
+- n: 25
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 20
+  perimeter: 92.5422
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_111218_npart25_V114144_seed84172851
+  file: results/mc_study/arm_mbo_20260902_111218_npart25_V114144_seed84172851/partition/torus_partition_n25_V114144.h5
+  group: mc-study
+- n: 50
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 20
+  perimeter: 131.561
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_120249_npart50_V114144_seed84172851
+  file: results/mc_study/arm_mbo_20260902_120249_npart50_V114144_seed84172851/partition/torus_partition_B1_n50_V114144.h5
+  group: mc-study
+- n: 50
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 17
+  perimeter: 131.1035
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_160135_npart50_V114144_seed84172851
+  file: results/mc_study/arm_mbo_20260902_160135_npart50_V114144_seed84172851/partition/torus_partition_B3_n50_V114144.h5
+  group: mc-study
+- n: 100
+  mesh_vertices: 228288
+  surface: torus
+  schema_version: '1.1'
+  iteration: 19
+  perimeter: 260.6483
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_184402_npart100_V228288_seed84172851
+  file: results/mc_study/arm_mbo_20260902_184402_npart100_V228288_seed84172851/partition/torus_partition_A1_n100_V228288.h5
+  group: mc-study
+- n: 200
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 19
+  perimeter: 261.7953
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_162132_npart200_V114144_seed84172851
+  file: results/mc_study/arm_mbo_20260902_162132_npart200_V114144_seed84172851/partition/torus_partition_B2_n200_V114144.h5
+  group: mc-study
+- n: 200
+  mesh_vertices: 114144
+  surface: torus
+  schema_version: '1.1'
+  iteration: 17
+  perimeter: 260.7572
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260902_173246_npart200_V114144_seed84172851
+  file: results/mc_study/arm_mbo_20260902_173246_npart200_V114144_seed84172851/partition/torus_partition_B4_n200_V114144.h5
+  group: mc-study
+- n: 200
+  mesh_vertices: 456576
+  surface: torus
+  schema_version: '1.1'
+  iteration: 20
+  perimeter: 522.8047
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260903_161341_npart200_V456576_seed84172851
+  file: results/mc_study/arm_mbo_20260903_161341_npart200_V456576_seed84172851/partition/torus_partition_A3_n200_V456576.h5
+  group: mc-study
+- n: 400
+  mesh_vertices: 228288
+  surface: torus
+  schema_version: '1.1'
+  iteration: 18
+  perimeter: 521.7155
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260903_113540_npart400_V228288_seed84172851
+  file: results/mc_study/arm_mbo_20260903_113540_npart400_V228288_seed84172851/partition/torus_partition_A2_n400_V228288.h5
+  group: mc-study
+- n: 800
+  mesh_vertices: 456576
+  surface: torus
+  schema_version: '1.1'
+  iteration: 16
+  perimeter: 1043.0808
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260907_103904_npart800_V456576_seed84172851
+  file: results/mc_study/arm_mbo_20260907_103904_npart800_V456576_seed84172851/partition/torus_partition_A4_n800_V456576.h5
+  group: mc-study
+- n: 10
+  mesh_vertices: 12448
+  surface: double_torus
+  schema_version: '2.0'
+  iteration: 15
+  perimeter: 25.4919
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260907_164351_npart10_V12448_seed84172851
+  file: results/other_surfaces/arm_mbo_20260907_164351_npart10_V12448_seed84172851/partition/double_torus_partition_n10_V12448.h5
+  group: implicit-surface
+- n: 10
+  mesh_vertices: 26928
+  surface: banchoff_chmutov
+  schema_version: '2.0'
+  iteration: 20
+  perimeter: 61.4492
+  finalised: true
+  seed: 84172851
+  source_run_id: arm_mbo_20260907_164358_npart10_V26928_seed84172851
+  file: results/other_surfaces/arm_mbo_20260907_164358_npart10_V26928_seed84172851/partition/banchoff_chmutov_partition_n10_V26928.h5
+  group: implicit-surface
+- n: 10
+  mesh_vertices: 242608
+  surface: torus
+  schema_version: '1.1'
+  iteration: 10
+  perimeter: 57.0507
+  finalised: false
+  seed: 84172851
+  source_run_id: run_20260515_233244_surftorus_npart10_v1nt80-514_incr62_v2np66-472_incr58_lam3.2_seed84172851
+  file: results/torus_npart10/run_20260515_233244_surftorus_npart10_v1nt80-514_incr62_v2np66-472_incr58_lam3.2_seed84172851/partition/torus_partition_run_20260515_233244_surftorus_npart10_v1nt80-514_incr62_v2np66-472_incr58_lam3.2_seed84172851.h5
+  group: legacy-smoke
+- n: 30
+  mesh_vertices: 107484
+  surface: torus
+  schema_version: '1.1'
+  iteration: 18
+  perimeter: 101.4233
+  finalised: false
+  seed: 84172851
+  source_run_id: run_20260618_224329_surftorus_npart30_v1nt90-338_incr62_v2np86-318_incr58_lam2.1_seed84172851
+  file: results/torus_npart30/run_20260618_224329_surftorus_npart30_v1nt90-338_incr62_v2np86-318_incr58_lam2.1_seed84172851/partition/torus_partition_run_20260618_224329_surftorus_npart30_v1nt90-338_incr62_v2np86-318_incr58_lam2.1_seed84172851.h5
+  group: legacy-smoke

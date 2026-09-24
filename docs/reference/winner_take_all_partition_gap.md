@@ -441,6 +441,16 @@ not answered. The naive test is not the one to run:
 `parameters/torus_300part_rebased_ladder.yaml` lifts level 0 only to 51 verts/cell,
 still inside the dying regime.
 
+What the test *would* need is a level 0 at roughly the resolution where a cold
+level is observed to run rather than die — ~92 verts/cell, i.e. V0 ~ 27,600, a
+base near 176x164. ⚠ That target inherits the very number it is built on: the
+"~90 verts/cell" boundary is a **rough prior, not a measured constant** (it is
+refuted as stated above -- `run_20260629_141012` is 96 v/cell and dies at onset
+32, its lambda being out of window). So the dismissal of the 51-verts/cell
+config as "still inside the dying regime" is weaker than it reads, and so is the
+176x164 target. Both are stated here so the arithmetic does not have to be
+re-derived, not because either is established.
+
 **The code is gone; the result is not (2026-08-10).** The territory-aware machinery —
 the WTA balance term, the discrete-area trim, the P2 reduced-gradient step/acceptance/
 trigger fix, and the adaptive `wta_schedule` — was **removed from `main`**, since a
