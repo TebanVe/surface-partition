@@ -36,7 +36,8 @@ Campaign names come from `build_campaign_name()`: `{method}_btol{boundary_tol}`
 plus non-default IPOPT extras (`_lbfgs{N}`, `_hess`, `_bestiter`, `_partial`) and
 distance (`_midpoint` / `_dist{value}`).
 
-**Per-level checkpoints are what make a multi-day run survivable.** Writes go to
+**Per-level checkpoints (`checkpoint_per_level`, default `True`) are what make a
+multi-day run survivable.** Writes go to
 a `.tmp` and are moved into place, so a kill mid-write leaves the previous
 checkpoint intact. `completed_levels` is the *absolute* ladder position, so
 resuming a resumed run works.

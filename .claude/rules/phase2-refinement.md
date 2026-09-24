@@ -20,8 +20,12 @@ paths:
 # Phase 2 — perimeter refinement
 
 `PerimeterOptimizer` minimizes total perimeter (regular + Steiner) subject to
-equal cell areas, delegating to `PerimeterCalculator`, `AreaCalculator` and
-`SteinerHandler` (or their vectorized counterparts). To change the objective or
+equal cell areas. ⚠ `PerimeterCalculator.compute_total_perimeter` returns the
+**sum of all cell perimeters** `sum_k Per(cell_k)`, so every interface is counted
+**twice**; `label_boundary_length` counts each once. Measured ratio 1.999 on both
+implicit surfaces before Phase 2 does anything. It delegates to
+`PerimeterCalculator`, `AreaCalculator` and `SteinerHandler` (or their
+vectorized counterparts). To change the objective or
 constraints, modify those calculators. `PartitionArrays` pre-computes the sparse
 Jacobian/Hessian patterns for IPOPT.
 
