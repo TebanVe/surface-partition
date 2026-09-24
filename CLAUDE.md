@@ -133,6 +133,7 @@ Four to know by name:
 | `docs/reference/PHASE1_HIGHN_APPROACHES_ABCDE.md` | The standing taxonomy A/A2/B/C/D/E — **read before proposing anything in this space** |
 | `docs/experiments/08-mbo-auction-dynamics/` | Approach B's measured results |
 | `docs/reference/deliverables.yaml` | Every exported partition, verified by script |
+| `docs/reference/DOWNSTREAM_CONSUMERS.md` | Who consumes the exports and what must not change |
 
 To create a document, use the **`/new-doc`** skill. To write one, see
 `.claude/rules/docs-authoring.md`.
@@ -215,6 +216,9 @@ the larger. λ within `boundary_tol` of 0 or 1 triggers a Type 1 migration.
 - **`run_time_seconds` and `summary.total_wall_s` are not wall times.** Both
   under-report by 3–19×. See `.claude/rules/run-layouts.md` before quoting any
   timing.
+- **Exported partitions are consumed by external repos.** Never change the
+  export schema, rename a deliverable or delete its run without checking
+  `docs/reference/DOWNSTREAM_CONSUMERS.md` first.
 - **`results/` is gitignored and per-worktree** — enumerate every working
   directory before claiming a run does not exist.
 - **A high-N export needs `--force-finalised`**, because the Phase 2 plateau

@@ -33,6 +33,50 @@
 # own finer mesh, -0.020%, because a boundary of fewer longer segments is a
 # shorter approximation), and exported equal-area accuracy is looser (0.0272% at
 # N=750, 0.0127% at N=1000, against 0.0014-0.0023% at N=400/500).
+#
+# WHO CONSUMES THESE. Exported partitions leave this repo: see the `consumers`
+# block below, and `docs/reference/DOWNSTREAM_CONSUMERS.md` for each contract.
+# Changing the export schema, renaming a deliverable or deleting its run is an
+# externally visible act -- check there first.
+
+consumers:
+
+  link-list-torus:
+    repo: https://github.com/TebanVe/link-list-torus
+    role: >-
+      Monte Carlo, Brownian dynamics and molecular dynamics of particles on the
+      partitioned torus. The active consumer.
+    reader: src/lnk_list_torus/partition/reader.py
+    requires:
+      - surface == "torus"        # HARD -- the reader raises on anything else
+      - finalised == True         # what it gates on
+      - schema_version in (1.0, 1.1)
+    notes: >-
+      An unrecognised schema_version only WARNS ("attempting to read anyway");
+      the check that raises is the surface check. Mesh quality (check 8) warns
+      and does not raise.
+
+  link-list-general-surface:
+    repo: https://github.com/TebanVe/link-list-general-surface
+    role: >-
+      The general-surface successor. An independent repository, not a worktree
+      of link-list-torus: it was cloned from that lineage (shared root commit
+      ad19abd) and has diverged since.
+    reader: NOT BUILT YET -- no schema 2.0 partition reader exists
+    requires:
+      - schema_version == 2.0
+    notes: >-
+      Hand-off is still open. See PARTITION_EXPORT_SCHEMA_GENERAL.md section 1b.
+
+# Which consumer takes each group. A new export inherits its group's consumer,
+# so this needs no per-row maintenance; a row may override with its own
+# `consumer:` key if it ever needs to.
+group_consumers:
+  common-mesh:       link-list-torus
+  finer-mesh:        link-list-torus
+  mc-study:          link-list-torus
+  implicit-surface:  link-list-general-surface
+  legacy-smoke:      null            # internal smoke tests, not handed to anyone
 
 deliverables:
 - n: 50

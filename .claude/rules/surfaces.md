@@ -51,8 +51,10 @@ Banchoff-Chmutov 26,928 verts, worst 0.0169%, **17 s**. Configs:
 `surface_name_from_config()` and `src/export/writer.py` writes a self-describing
 `/surface` group. The version namespace is **forked, not bumped**: the torus
 keeps writing `schema_version` **1.1** byte-identically, so the downstream reader
-(which validates `1.1` *and* `surface == "torus"`) cannot be affected; every other
-surface writes **2.0** with `implicit_expr` + `params` in place of `R`/`r`. Both
+cannot be affected; every other surface writes **2.0** with `implicit_expr` +
+`params` in place of `R`/`r`. ⚠ What protects that reader is its **surface**
+check (`surface != "torus"` raises), not its version check — an unrecognised
+`schema_version` only warns there. See `docs/reference/DOWNSTREAM_CONSUMERS.md`. Both
 general-surface deliverables exist — `double_torus_partition_n10_V12448.h5` and
 `banchoff_chmutov_partition_n10_V26928.h5`. Schema:
 `docs/reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`.

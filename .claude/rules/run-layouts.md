@@ -104,6 +104,12 @@ landed on the readout campaign name.
 The record of what has been exported is `docs/reference/deliverables.yaml`,
 verified by `python scripts/check_deliverables.py`.
 
+⚠ **Exports leave this repo.** Before exporting for a consumer, or changing
+anything about the export, read `docs/reference/DOWNSTREAM_CONSUMERS.md`: it
+records which group each consumer takes and what their readers enforce. The
+acceptance gate for any writer change is that **re-exporting an existing torus
+deliverable is byte-identical** — a diff means the change is wrong.
+
 ## Measuring a run: four traps
 
 1. **`run_time_seconds` in `solution/metadata.yaml` is NOT the run's wall time.**

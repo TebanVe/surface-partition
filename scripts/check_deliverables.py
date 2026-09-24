@@ -63,6 +63,9 @@ def emit() -> int:
         d["perimeter"] = round(d["perimeter"], 4)
         rows.append(d)
     rows.sort(key=lambda r: (r["mesh_vertices"], r["n"]))
+    print("# Derived rows only -- the header comment, `consumers` and")
+    print("# `group_consumers` blocks are DECLARED and are not regenerated here.")
+    print("# Splice these rows in under `deliverables:`; do not overwrite the file.")
     print(yaml.safe_dump({"deliverables": rows}, sort_keys=False, width=100))
     return 0
 
@@ -81,6 +84,32 @@ def main() -> int:
 
     checked = absent = 0
     problems: list[str] = []
+
+    # The consumer wiring is DECLARED, not read off the files, so it is checked
+    # for internal consistency instead: every group must map to a consumer (or
+    # to null, meaning internal), and every name used must be declared.
+    consumers = record.get("consumers", {})
+    group_consumers = record.get("group_consumers", {})
+    for group in sorted({r["group"] for r in rows}):
+        if group not in group_consumers:
+            problems.append(f"group {group!r} has no entry in group_consumers")
+    for group, name in group_consumers.items():
+        if name is not None and name not in consumers:
+            problems.append(f"group_consumers[{group!r}] = {name!r} is not declared "
+                            f"in `consumers` (declared: {sorted(consumers)})")
+    for row in rows:
+        name = row.get("consumer")
+        if name is not None and name not in consumers:
+            problems.append(f"{row['file']}: consumer {name!r} is not declared")
+    if problems:
+        print("CONSUMER WIRING:")
+        for p in problems:
+            print(f"  - {p}")
+        print()
+    else:
+        wired = {g: n for g, n in group_consumers.items() if n}
+        print(f"consumer wiring ok: {len(consumers)} declared, "
+              f"{len(wired)} of {len(group_consumers)} groups handed downstream\n")
 
     for row in rows:
         path = REPO / row["file"]

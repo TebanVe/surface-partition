@@ -25,10 +25,20 @@ contract"*, and its reader validates `schema_version == "1.1"` **and**
 - **General surfaces write `schema_version = "2.0"`.**
 
 The version namespace is *forked*, not bumped. The consequence is the property we
-want: the existing torus reader cannot be affected even by accident, because it
-refuses a 2.0 file at its first check with a clear message. That refusal is
-correct behaviour, not breakage — a reader built for analytic-torus ground truth
-genuinely cannot consume a genus-5 surface.
+want: the existing torus reader cannot be affected even by accident, because a
+2.0 file is always a non-torus file and its reader rejects those. That rejection
+is correct behaviour, not breakage — a reader built for analytic-torus ground
+truth genuinely cannot consume a genus-5 surface.
+
+⚠ **Which check does the rejecting matters.** An earlier version of this
+paragraph said the reader "refuses a 2.0 file at its first check". It does not.
+Read against the consumer's `src/lnk_list_torus/partition/reader.py`:
+`SUPPORTED_SCHEMA_VERSIONS = ("1.0", "1.1")`, and an unrecognised version only
+**logs a warning** — *"Attempting to read anyway"*. The check that **raises** is
+`_check_surface`, on `surface != "torus"`. So the version attribute is advisory
+there and the surface attribute is the gate. The fork is safe, but not for the
+reason previously stated — and a 2.0 *torus* file, if one were ever written,
+would be attempted rather than refused.
 
 A shared `1.2` with optional fields was considered and rejected: it would require
 editing the stable reader to relax checks it currently relies on.
