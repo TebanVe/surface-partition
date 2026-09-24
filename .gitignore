@@ -13,7 +13,12 @@ venv/
 # IDE
 .vscode/
 .idea/
-.claude/
+
+# Claude Code: share rules, skills, hooks and project settings; keep personal
+# settings and worktrees out. See CLAUDE.md "Maintaining this file".
+.claude/settings.local.json
+.claude/worktrees/
+.claude/RESUME.md
 
 # OS
 .DS_Store
