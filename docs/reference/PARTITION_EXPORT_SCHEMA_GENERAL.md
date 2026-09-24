@@ -10,8 +10,8 @@ four attributes and in four reader-side checks, while the partition payload
 itself is already entirely surface-agnostic. This document defines the smallest
 change that admits other surfaces **without altering the torus contract at all**.
 
-**Status:** specification, not yet implemented. The implementation steps are in
-`docs/plans/GENERAL_SURFACE_EXPORT_PLAN.md`.
+**Status:** specification, **implemented** in `0035dde` (2026-09-08). See §1b for
+what was built and what is still open.
 
 ## 1. The governing constraint: the torus path does not move
 
@@ -19,8 +19,9 @@ change that admits other surfaces **without altering the torus contract at all**
 contract"*, and its reader validates `schema_version == "1.1"` **and**
 `surface == "torus"`. Therefore:
 
-- **Torus exports keep writing `schema_version = "1.1"`, byte-identical, indefinitely.**
-  Nothing in this document changes what a torus run produces.
+- **Torus exports keep writing `schema_version = "1.1"`, byte-identical**, until
+  both repos agree to move. Nothing in this document changes what a torus run
+  produces.
 - **General surfaces write `schema_version = "2.0"`.**
 
 The version namespace is *forked*, not bumped. The consequence is the property we
@@ -31,6 +32,37 @@ genuinely cannot consume a genus-5 surface.
 
 A shared `1.2` with optional fields was considered and rejected: it would require
 editing the stable reader to relax checks it currently relies on.
+
+### 1a. The end state is one schema — decided 2026-09-07, not yet acted on
+
+Carrying two versions forever is not the intent. The **end state is a single
+schema for all surfaces**; both `1.1` and `2.0` are written and supported only
+until the general-surface work is proven, and a reader should accept either.
+
+That convergence needs no redesign, because this document already gives the
+torus's 1.1-only attributes their 2.0 spelling: `R`/`r` become `/surface/params`,
+and `grid_shape`/`vertex_order` become `resolution` / `resolution_labels`. So
+migration is a **move, not a reformat**. The torus migrates when both repos are
+ready and nothing is forced before then — which is what keeps the downstream
+contract intact in the meantime.
+
+### 1b. Implementation status
+
+Implemented in **`0035dde`** (2026-09-08): `src/export/writer.py` branches on the
+surface via `src/surfaces/factory.py`, computes genus and Euler characteristic
+from the exported mesh rather than hardcoding them, and skips the
+`n_theta * n_phi == V` assertion off the torus. Both fixtures are exported and
+recorded in `docs/reference/deliverables.yaml` (group `implicit-surface`).
+
+**The acceptance gate was, and remains, that re-exporting an existing torus
+deliverable is byte-identical** — the same regression pattern that verified the
+surface-agnostic MBO driver in `386b7a7`. If a re-export is not byte-identical,
+the change is wrong; do not rationalise a diff.
+
+Still open: **Phase 3 hand-off.** The downstream general-surface worktree has not
+yet been given the spec and the two fixture files. Both questions that were open
+when the work started are answered above — the residual tolerance in §5.1, mesh
+quality in §6.3 — so the hand-off delivers answers, not questions.
 
 ## 2. What is already general (do not redesign it)
 
@@ -208,7 +240,6 @@ special handling; it is noted only so a consumer does not expect a `run_*` prefi
 
 ## Related documents
 
-- `docs/plans/GENERAL_SURFACE_EXPORT_PLAN.md` — the implementation steps for this spec.
 - `docs/plans/MESH_DEGENERACY_AND_NEEDLE_TRIANGLES.md` — why marching-cubes mesh quality is what it is, and the unimplemented cleanup tool that would improve it.
 - `docs/reference/MD_SIMULATION_EXPORT_NOTES.md` — what the downstream simulation needs from an exported partition.
 - `../link-list-torus/docs/reference/PARTITION_FILE_FORMAT.md` — the 1.1 contract this extends. **Not ours to edit.**
