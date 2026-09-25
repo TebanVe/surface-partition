@@ -108,32 +108,83 @@ imminent.
 
 ---
 
-## Open: an upstream request we have not answered
+## Collapsed faces in the subdivided mesh — decided 2026-09-25: do not clean the export
+
+### The report
 
 `link-list-general-surface/docs/upstream/surface-partition-collapsed-faces.md`
 is a drafted-but-never-filed issue against this repository: the Rep-3 subdivided
-mesh contains **collapsed (exactly zero-area) faces and coincident vertices**,
-which break point-in-triangle classification. Its evidence is an N=10
-`finalised=False` checkpoint from 2026-05-27 (`643eb3f`).
+mesh (`/partition/sub_faces`) contains **exactly-zero-area faces and coincident
+vertices**, which break point-in-triangle classification. Its evidence is an N=10
+`finalised=False` checkpoint from 2026-05-27 (`643eb3f`): 4 zero-area faces and
+3 coincident vertices out of 499,154 faces, plus a few hundred sub-`1e-12 x
+median` slivers.
 
-Both of its questions can be answered from work done since:
+It requests any one of: (1) drop/merge the degenerate faces and dedupe the
+vertices, reindexing accordingly; (2) record a degenerate-face mask in the file;
+(3) at minimum, document that they occur.
 
-- *"Are finalised exports guaranteed free of collapsed faces?"* — **No.** The
+### Its two questions, answered
+
+- *"Are **finalised** exports guaranteed free of collapsed faces?"* — **No.** The
   shipped n=25 / n=50 / n=200 finalised torus partitions read `min_rel_area`
   exactly 0.0 and `min_interior_angle` 0.0 deg, with 4 of 248,826 and 2 of
-  269,832 sub-triangles exactly degenerate (§6.3 of the schema spec). The defect
-  is not confined to intermediate checkpoints.
+  269,832 sub-triangles exactly degenerate (schema spec §6.3). The defect is not
+  confined to intermediate checkpoints.
 - *"Is `pending_migration` expected to remove these?"* — **No.** That flag marks
-  the Phase 2 migration-cycling plateau and has nothing to do with subdivision
+  the Phase 2 migration-cycling plateau and is unrelated to subdivision
   degeneracy. The draft's own guess at the origin is right: a variable point
   landing on a mesh vertex yields a zero-area sub-triangle, so this is a property
-  of Rep-3 subdivision.
+  of Rep-3 subdivision and will recur in any export.
 
-The consumer has already hardened against it (it excludes zero-area and
-non-finite-barycentric faces from its triangle lookup), so nothing is broken.
-What is outstanding is a **decision**, not a fix: drop/merge degenerate faces in
-the exporter, record a degenerate-face mask in the file, or stand on documenting
-it. Changing the exporter is gated on the byte-identical re-export rule above.
+### Decision: option 3. The exporter is not changed.
+
+Consumers already handle this, and **better than a fix here could**.
+`FaceLabeledMesh.degenerate_face_mask` is a `cached_property` computed from the
+mesh, not read from our file:
+
+```python
+_DEGENERATE_AREA_REL = 1e-10
+return areas <= _DEGENERATE_AREA_REL * float(np.median(positive))
+```
+
+It is **relative**, so it is invariant to surface size and mesh resolution, and
+it catches the whole sliver continuum rather than only the exactly-zero faces.
+It is load-bearing in four subsystems, identical code in both consumer repos:
+`mesh/lookup.py` (degenerate candidates pushed to `-inf`, never returned),
+`mesh/face_labeled_mesh.py` (guards the `triangle_normals` division; the
+classifier tests split strict and weak centroid-identity invariants on it),
+`observables/per_cell_stats.py` (degenerate faces read back as zero density),
+and `simulation/mesh_moves.py` (particle initialisation draws only from
+non-degenerate faces; `_assert_off_sliver` is a hard precondition, with math doc
+06 `prop:cone` / `rem:sliver` behind it). Degenerate faces are **modelled**
+downstream, not merely tolerated.
+
+**Option 1 is the dangerous one, and it fails silently.** Every simulation
+checkpoint persists `tri`, an `int32` face index per particle
+(`io/checkpoint.py`), and `rebuild_state()` reattaches `(tri, bary)` to a live
+mesh **with no validation**. Reindexing `face_labels` would therefore place every
+particle of every saved run on a different triangle — no crash, no warning, just
+wrong answers. `_assert_off_sliver` would not fire either, since there would be
+no slivers left to sit on. Option 1 also fails this repo's own acceptance gate by
+construction: re-exporting an existing torus deliverable must be byte-identical.
+
+**Option 2 is safe but creates a second source of truth.** A mask we shipped
+would mean "exactly zero area"; theirs means "<= 1e-10 x median". Two definitions
+disagreeing about which faces are usable is worse than one, and theirs is the
+better definition.
+
+The draft's remaining argument — *"other consumers may not guard for them"* —
+carries little weight while there are exactly two consumers, from the same
+lineage, both carrying the mask.
+
+**Still to do:** reply to the draft with the two answers above so it can be
+updated or closed. That is a message, not a code change.
+
+**Revisit trigger:** a third consumer that does *not* compute its own degeneracy
+mask, or a moment when every existing simulation checkpoint is being regenerated
+anyway (which would remove the reindexing hazard). Absent either, do not reopen
+this.
 
 ---
 

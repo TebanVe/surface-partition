@@ -232,6 +232,12 @@ tolerance these meshes miss narrowly; it is the wrong kind of test for them.
    calibrated for a base mesh rather than a subdivided one; recalibrating them is
    a downstream cosmetic matter, not a blocker.
 
+   **Decided 2026-09-25: the export is deliberately not cleaned.** Consumers
+   compute their own relative degeneracy mask, which is stricter than anything
+   we could ship, and reindexing faces would silently invalidate every saved
+   simulation checkpoint. Reasoning and revisit trigger:
+   [`DOWNSTREAM_CONSUMERS.md`](DOWNSTREAM_CONSUMERS.md).
+
 4. **Genus is not 1.** Anything assuming a single handle, or two periodic
    directions, is torus-specific. The exported surfaces are genus 2 and genus 5.
 5. **`final_perimeter` counts every interface twice.** It is
@@ -250,6 +256,7 @@ special handling; it is noted only so a consumer does not expect a `run_*` prefi
 
 ## Related documents
 
+- `docs/reference/DOWNSTREAM_CONSUMERS.md` — who reads these files, what their readers enforce, and the collapsed-faces decision.
 - `docs/plans/MESH_DEGENERACY_AND_NEEDLE_TRIANGLES.md` — why marching-cubes mesh quality is what it is, and the unimplemented cleanup tool that would improve it.
 - `docs/reference/MD_SIMULATION_EXPORT_NOTES.md` — what the downstream simulation needs from an exported partition.
 - `../link-list-torus/docs/reference/PARTITION_FILE_FORMAT.md` — the 1.1 contract this extends. **Not ours to edit.**

@@ -22,6 +22,6 @@ cross-link.
 | [`PARTITION_EXPORT_SCHEMA_GENERAL.md`](PARTITION_EXPORT_SCHEMA_GENERAL.md) | The general-surface export schema (`schema_version` 2.0). The namespace is **forked, not bumped** — torus stays on 1.1 byte-identical |
 | [`MD_SIMULATION_EXPORT_NOTES.md`](MD_SIMULATION_EXPORT_NOTES.md) | Exporting the partition for molecular simulations |
 | [`DOCUMENTATION_SYNC_RULE.md`](DOCUMENTATION_SYNC_RULE.md) | How the doc-sync rule actually triggers, the one case it misses, and the decision to accept that gap |
-| [`DOWNSTREAM_CONSUMERS.md`](DOWNSTREAM_CONSUMERS.md) | **Who consumes the exported partitions**, what each reader enforces, and what must therefore not change |
+| [`DOWNSTREAM_CONSUMERS.md`](DOWNSTREAM_CONSUMERS.md) | **Who consumes the exported partitions**, what each reader enforces, and what must therefore not change. Holds the collapsed-faces decision (2026-09-25: do not clean the export) |
 | [`deliverables.yaml`](deliverables.yaml) | The record of every exported partition. Verify with `python scripts/check_deliverables.py` |
 | [`figures/`](figures/) | Shared figures referenced by the documents above |
