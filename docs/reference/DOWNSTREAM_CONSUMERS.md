@@ -95,6 +95,46 @@ and travel with the spec — the residual tolerance in
 [`PARTITION_EXPORT_SCHEMA_GENERAL.md`](PARTITION_EXPORT_SCHEMA_GENERAL.md) §5.1
 and mesh quality in §6.3 — so the hand-off delivers answers, not questions.
 
+⚠ **It is not waiting on us.** That repository is *project 3 of three*, split
+from `link-list-torus` on 2026-09-21, and its active thread is the self-approach
+study (`docs/experiments/09-self-approach/`), not partition reading. Its
+`partition/reader.py` is still **byte-identical** to `link-list-torus`'s — the
+torus-only 1.1 reader, inherited at the split. A 2.0 reader is planned, not
+imminent.
+
+**Transferring the fixtures is a physical copy.** Both 2.0 files live under
+`results/`, which is gitignored here, and the consumer gitignores
+`data/partitions/*.h5`. Cloning gets neither. They are 1.4 MB and 3.0 MB.
+
+---
+
+## Open: an upstream request we have not answered
+
+`link-list-general-surface/docs/upstream/surface-partition-collapsed-faces.md`
+is a drafted-but-never-filed issue against this repository: the Rep-3 subdivided
+mesh contains **collapsed (exactly zero-area) faces and coincident vertices**,
+which break point-in-triangle classification. Its evidence is an N=10
+`finalised=False` checkpoint from 2026-05-27 (`643eb3f`).
+
+Both of its questions can be answered from work done since:
+
+- *"Are finalised exports guaranteed free of collapsed faces?"* — **No.** The
+  shipped n=25 / n=50 / n=200 finalised torus partitions read `min_rel_area`
+  exactly 0.0 and `min_interior_angle` 0.0 deg, with 4 of 248,826 and 2 of
+  269,832 sub-triangles exactly degenerate (§6.3 of the schema spec). The defect
+  is not confined to intermediate checkpoints.
+- *"Is `pending_migration` expected to remove these?"* — **No.** That flag marks
+  the Phase 2 migration-cycling plateau and has nothing to do with subdivision
+  degeneracy. The draft's own guess at the origin is right: a variable point
+  landing on a mesh vertex yields a zero-area sub-triangle, so this is a property
+  of Rep-3 subdivision.
+
+The consumer has already hardened against it (it excludes zero-area and
+non-finite-barycentric faces from its triangle lookup), so nothing is broken.
+What is outstanding is a **decision**, not a fix: drop/merge degenerate faces in
+the exporter, record a degenerate-face mask in the file, or stand on documenting
+it. Changing the exporter is gated on the byte-identical re-export rule above.
+
 ---
 
 ## Not consumers
