@@ -1,6 +1,6 @@
 # `docs/` — what lives where
 
-Eight folders, each a distinct genre. Getting the genre right is the point of
+Nine folders, each a distinct genre. Getting the genre right is the point of
 the split: a derivation, a measurement and a standing explanation age
 differently and are checked differently.
 
@@ -14,6 +14,7 @@ differently and are checked differently.
 | [`presentations/`](presentations/) | Slide decks presenting established results | Marp | [`README.md`](presentations/README.md) |
 | [`guides/`](guides/) | User guides and onboarding documents | LaTeX | — |
 | [`papers/`](papers/) | Third-party PDFs (gitignored) + a verified index | — | [`README.md`](papers/README.md) |
+| [`downstream/`](downstream/) | Replies and hand-off material for the repos that consume our exports | Markdown | [`README.md`](downstream/README.md) |
 
 `math/`, `experiments/`, `guides/` and `presentations/` use `NN-topic-slug/`
 directories, each holding its source and its tracked compiled output. How to

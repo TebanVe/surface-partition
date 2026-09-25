@@ -223,9 +223,16 @@ tolerance these meshes miss narrowly; it is the wrong kind of test for them.
    quality on `/partition`. Warn (don't raise)"), and *the currently accepted
    torus deliverables already breach both thresholds*: measured on the Rep-3
    subdivided mesh, `min_rel_area` is **exactly 0.0** and `min_interior_angle`
-   **0.0 deg** for the shipped n=25, n=50 and n=200 torus partitions (4 of 248,826
-   and 2 of 269,832 sub-triangles are exactly degenerate), against thresholds of
-   `1e-6` and `1.0 deg`. This is a property of Rep-3 subdivision — a variable
+   **0.0 deg** wherever an exactly-degenerate sub-triangle exists — **15 of the 24
+   finalised exports**, up to 32 of them (n=50 `B3`), against thresholds of `1e-6`
+   and `1.0 deg`. Named examples: 8 of 243,342 in n=25 `C1`, 4 of 248,826 in n=50
+   `B1`, 2 of 269,832 in n=200 `B2`. ⚠ The exact-zero count is **not** the
+   quantity that matters — a relative mask (`area <= 1e-10 * median`) catches 2-3
+   orders of magnitude more in every file, including 1,050 in the N=100 flagship
+   whose exact-zero count is **0**. Regenerate with
+   `python scripts/check_degenerate_faces.py`; the record is
+   `docs/downstream/degenerate_faces.yaml`. This is a property of Rep-3
+   subdivision — a variable
    point sitting on a mesh vertex yields a zero-area sub-triangle — not of the
    surface. So mesh quality is **not a barrier** for general surfaces: they are no
    worse than production torus files on this measure. The thresholds appear

@@ -112,13 +112,19 @@ imminent.
 
 ### The report
 
-`link-list-general-surface/docs/upstream/surface-partition-collapsed-faces.md`
-is a drafted-but-never-filed issue against this repository: the Rep-3 subdivided
-mesh (`/partition/sub_faces`) contains **exactly-zero-area faces and coincident
+Filed as **[surface-partition#4](https://github.com/TebanVe/surface-partition/issues/4)**
+on 2026-06-01 and still open with no comments: the Rep-3 subdivided mesh
+(`/partition/sub_faces`) contains **exactly-zero-area faces and coincident
 vertices**, which break point-in-triangle classification. Its evidence is an N=10
 `finalised=False` checkpoint from 2026-05-27 (`643eb3f`): 4 zero-area faces and
 3 coincident vertices out of 499,154 faces, plus a few hundred sub-`1e-12 x
 median` slivers.
+
+The reporter's draft lives at
+`link-list-general-surface/docs/upstream/surface-partition-collapsed-faces.md`
+and still says *"Draft to be filed"* — it was filed. The prepared reply is
+[`../downstream/issue-4-collapsed-faces-reply.md`](../downstream/issue-4-collapsed-faces-reply.md),
+with its measurement in `../downstream/degenerate_faces.yaml`.
 
 It requests any one of: (1) drop/merge the degenerate faces and dedupe the
 vertices, reindexing accordingly; (2) record a degenerate-face mask in the file;
@@ -126,11 +132,10 @@ vertices, reindexing accordingly; (2) record a degenerate-face mask in the file;
 
 ### Its two questions, answered
 
-- *"Are **finalised** exports guaranteed free of collapsed faces?"* — **No.** The
-  shipped n=25 / n=50 / n=200 finalised torus partitions read `min_rel_area`
-  exactly 0.0 and `min_interior_angle` 0.0 deg, with 4 of 248,826 and 2 of
-  269,832 sub-triangles exactly degenerate (schema spec §6.3). The defect is not
-  confined to intermediate checkpoints.
+- *"Are **finalised** exports guaranteed free of collapsed faces?"* — **No.**
+  **15 of the 24 finalised exports** contain at least one, up to 32 (n=50 `B3`).
+  Nine contain none, so a consumer can rely on neither their presence nor their
+  absence. The defect is not confined to intermediate checkpoints.
 - *"Is `pending_migration` expected to remove these?"* — **No.** That flag marks
   the Phase 2 migration-cycling plateau and is unrelated to subdivision
   degeneracy. The draft's own guess at the origin is right: a variable point
@@ -149,7 +154,11 @@ return areas <= _DEGENERATE_AREA_REL * float(np.median(positive))
 ```
 
 It is **relative**, so it is invariant to surface size and mesh resolution, and
-it catches the whole sliver continuum rather than only the exactly-zero faces.
+it catches the whole sliver continuum rather than only the exactly-zero faces —
+**2-3 orders of magnitude more faces in every one of the 26 exports**, including
+1,050 in the N=100 flagship whose exact-zero count is 0. So a fix that dropped
+only exactly-zero faces would remove *none* of what the consumer already handles
+there. Measured by `scripts/check_degenerate_faces.py`.
 It is load-bearing in four subsystems, identical code in both consumer repos:
 `mesh/lookup.py` (degenerate candidates pushed to `-inf`, never returned),
 `mesh/face_labeled_mesh.py` (guards the `triangle_normals` division; the

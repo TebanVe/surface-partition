@@ -13,8 +13,13 @@ Classification, in one line each: not-yet-implemented work -> `plans/`;
 permanent explanation -> `reference/`; derivation of something the code computes
 -> `math/` (LaTeX); a measured study -> `experiments/` (LaTeX); a deck ->
 `presentations/` (Marp); plain-language speaker prep -> `explanations/`
-(Markdown). Full rules and the templates: `docs/math/AUTHORING_GUIDE.md` and
-`docs/experiments/README.md`.
+(Markdown); a reply or hand-off to a repo that consumes our exports ->
+`downstream/` (Markdown). Full rules and the templates:
+`docs/math/AUTHORING_GUIDE.md` and `docs/experiments/README.md`.
+
+⚠ **A reply in `downstream/` is held to the reporting standard**, not to the
+standard of a chat message: it will be quoted back at us, so every number in it
+needs a committed script and committed output, exactly as a math doc does.
 
 ## Computed numbers must be regenerable by a committed script
 
