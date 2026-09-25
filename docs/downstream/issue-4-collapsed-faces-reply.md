@@ -13,9 +13,16 @@ updating there so it does not read as outstanding.
 `python scripts/check_degenerate_faces.py`, whose output is committed as
 [`degenerate_faces.yaml`](degenerate_faces.yaml). Deterministic, no seeds.
 
-**Recommended action:** post the body below as a comment on #4, then close it as
-*answered, no change* — the decision and its revisit trigger are recorded in
+**Status: SENT.** Posted as
+[issuecomment-5836499659](https://github.com/TebanVe/surface-partition/issues/4#issuecomment-5836499659)
+and the issue closed `COMPLETED` on 2026-09-25 — answered, no change to the
+exporter. The decision and its revisit trigger are recorded in
 `docs/reference/DOWNSTREAM_CONSUMERS.md`.
+
+**Still open on the consumer side:** the reporter's draft file (in *three*
+working copies — `link-list-general-surface`, `link-list-torus` `main`, and
+`link-list-torus-research`; absent from `dev/mesh-framework`) still reads
+*"Draft to be filed"*. Updating it is a change in those repos, not this one.
 
 ---
 

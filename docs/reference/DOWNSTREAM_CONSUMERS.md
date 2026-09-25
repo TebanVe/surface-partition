@@ -187,8 +187,12 @@ The draft's remaining argument â€” *"other consumers may not guard for them"* â€
 carries little weight while there are exactly two consumers, from the same
 lineage, both carrying the mask.
 
-**Still to do:** reply to the draft with the two answers above so it can be
-updated or closed. That is a message, not a code change.
+**Answered and closed 2026-09-25.** The reply was posted on #4
+([comment](https://github.com/TebanVe/surface-partition/issues/4#issuecomment-5836499659))
+and the issue closed `COMPLETED`; the text is
+[`../downstream/issue-4-collapsed-faces-reply.md`](../downstream/issue-4-collapsed-faces-reply.md).
+The only thing left is on the consumer side: their draft file still says
+*"Draft to be filed"* in three working copies.
 
 **Revisit trigger:** a third consumer that does *not* compute its own degeneracy
 mask, or a moment when every existing simulation checkpoint is being regenerated
