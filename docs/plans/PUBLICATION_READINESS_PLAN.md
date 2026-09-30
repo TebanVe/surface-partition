@@ -1,12 +1,18 @@
 # Publication Readiness — the high-N partition pipeline as an independent project
 
-**Status:** Mostly Not Started. This document is an **assessment and a proposed
-programme**. Two items have since been done: **Phase 3's N=400 and N=500 points** (run
-2026-08-20 and 2026-08-22, both verified and exported), and **Phase 4 is
-partially measured — its original premise turned out to be wrong.** Everything else — S1/S2/S3, the
-literature search, N=500/1000, the Phase 2 profile, the breadth work — is
-unstarted. Per-phase status lines below are authoritative.
-**Date:** 2026-08-20.
+**Status:** assessment and proposed programme, **partly executed.** Per-phase
+status lines below are authoritative; this summary is a pointer, not a record.
+
+| Phase | State |
+|---|---|
+| 1 — S1/S2/S3, three cheap studies | **Not Started** — still the highest value per unit compute |
+| 2 — literature search | **Partly answered** (2026-09-17/23): 35 papers held, doc 10 §2's prior-art table, the collaborator reading path. Not a systematic search |
+| 3 — scaling | **DONE through N=1000**, on two meshes, both exported and finalised |
+| 4 — Phase 2 is the bottleneck | **Measured; its original premise refuted** at four values of N |
+| 5 — breadth | **Partly done** — geometry breadth exists (three aspect ratios, three sizes, two implicit surfaces); seeds and a second machine do not |
+| 6 — split forensics | **Not Started** |
+
+**Date:** 2026-08-20; revised 2026-09-30.
 **Audience:** future agents/developers, and the author deciding whether this is a
 paper.
 
@@ -56,8 +62,8 @@ paper *does* discuss it, naming a triple-point void and zigzag contour length as
 difficulties. Its reported "Area tol." of 2–5×10⁻⁷ is the residual of the
 *continuous* constraint, not of the extracted territory. **The reason our artifacts
 do not appear there is range:** the method is demonstrated at **n ∈ [2, 11] on the
-torus with exactly our R=1, r=0.6**, and n ≤ 32 on the sphere. We work at N = 100–400
-— **10–36× beyond it**. So the honest claim is a *scaling* result, not an oversight,
+torus with exactly our R=1, r=0.6**, and n ≤ 32 on the sphere. We work at
+N = 100–1000 — **9–91× beyond it**. So the honest claim is a *scaling* result, not an oversight,
 and any manuscript must say "beyond the demonstrated range", never "unnoticed".
 
 The divergence is exact, not statistical:
@@ -84,6 +90,76 @@ three validity gates. At N=400 the honest claim is existence and validity, which
 is stronger than a margin because nothing on the other side survives to compare
 against.
 
+## The scope of the paper — settled 2026-09-17/23
+
+Added after the provenance work (`docs/math/10-mbo-auction-dynamics/` §2, read
+from the papers now held in `docs/papers/`) and written up in plain language in
+`docs/explanations/two_methods_explained.md` §4–§5. **Neither method is ours,
+and the manuscript must say so in its first paragraph.**
+
+- **Method A** is Bogosel & Oudet 2017, implemented faithfully.
+- **Method B** is Merriman–Bence–Osher (1992/1994) with the Esedoğlu–Otto
+  variational reading (2015) and Jacobs–Merkurjev–Esedoğlu's volume constraints
+  (2018) — and JME **already tiled the flat 2-torus into 64 equal cells with
+  it**. The implicit-Euler blur is the graph-MBO step. Merriman–Ruuth ran the
+  multiphase scheme on a *curved* torus in 2007, unconstrained.
+
+⚠ An earlier novelty sentence in this repository ("uniform Cartesian grid via
+FFT, flat domain, small N, outer problem") was **wrong on three of four
+clauses** and is corrected in the docstring, report 08 §2 and doc 10 §2.2. The
+defensible claim is **combination, surface and scale** — never any single
+ingredient.
+
+### What is reportable as new, ranked
+
+1. **A diagnosis** — why the Γ-relaxation stops producing valid partitions at
+   large N: the readout gap, its exact identity, and the measured artefacts. Not
+   found reported for Γ-convergence partition methods, and it concerns anyone
+   using them beyond a few dozen cells.
+2. **A working pipeline at a scale nobody has shown** — equal-area
+   minimal-perimeter partitions of a *curved, triangulated* surface with the
+   diffusion done by surface finite elements, at N = 400–1000, coupled to exact
+   contour refinement and three validity gates. The held literature has the flat
+   torus at 64 cells, the curved torus at 5 unconstrained regions, and grain
+   growth at 10⁵ unconstrained grains. Nobody has the combination.
+3. **A head-to-head comparison on identical meshes at equal downstream budget** —
+   cost, validity and final perimeter — with an attribution control (+2.8% over
+   its own initialisation) and negative controls. The papers that proposed B
+   never compared it with the Γ-relaxation.
+4. **An implementation choice with its price quantified** — the exact auction
+   replaced by an inexact transportation-dual solve with real vertex masses, and
+   the consequences worked out: no dissipation theorem, a surviving inequality
+   (gate G4), a granularity bar, non-integrality. **The contribution is the
+   judgment, not the solver** — why this solver here, what it required, what it
+   cost, how we know it sufficed. A paragraph and a proposition, not a
+   contribution to optimal transport, and **never "better than the auction"**,
+   which was never measured.
+5. **Practical knowledge that transfers** — the τ window and what freezing and
+   over-merging look like; that cost is governed by verts-per-cell, not by
+   V × N; how to build the mesh ladder; and that once Phase 1 is fixed, Phase 2
+   becomes the bottleneck.
+6. **Two small mathematical observations** about doing this with finite elements
+   rather than an FFT: the backward-Euler blur moves interfaces at **half** the
+   speed the Gaussian would (interface constant ½ against 1/√π), and the
+   discrete energy is not guaranteed to decrease. Modest, new, and checked —
+   doc 10 §5 and §7, with a committed script regenerating every number.
+
+### How to position it
+
+A **computational** paper, not a methods paper: *we needed partitions with a
+thousand equal cells; the standard method fails, for a reason we can name and
+measure; an existing scheme from another community does it in minutes; here is
+the evidence, the comparison and the recipe.*
+
+Two rules, both learned the hard way:
+
+- **Never write "first."** Write "we are not aware of", and name the corpus that
+  was searched — doc 10 §2 lists it.
+- **Keep the comparison and the existence results in separate sections.** At
+  N = 100/300 there is a baseline and a margin. Above N = 300 there is no method-A
+  baseline *because method A stopped producing valid partitions*, and that
+  absence is the finding, not a gap in the experiment.
+
 ## What is ESTABLISHED
 
 Each item is measured and reproducible in this repository.
@@ -106,6 +182,9 @@ Each item is measured and reproducible in this repository.
 | Phase 2 scales superlinearly in variable points | 0.250 / 0.270 / 0.389 / 0.479 s per VP at N=400/500/750/1000; exponents 1.69, 2.00, **1.74**. ⚠ An earlier row said "steepening" — the fourth point **refutes** that; 2.00 was an excursion. Read as *superlinear, ≈1.7–2.0, no evident trend*. First **fixed-mesh** pair (N=750→1000 at V=114,144) gives **2.36**, suggesting mesh effects confounded the mixed-mesh figures |
 | A sub-threshold τ ladder rung is survivable under B | freeze ratio 0.964 (N=750) and 0.897 (N=1000) on the standard 100×96 base: both pass all three gates. The level captures 18%/26% of its available improvement vs 55–89% for healthy levels, and manufactures 2/3 fragmented cells that the ladder heals completely (`2→0…`, `3→2→1→0…`). Contrast PGD, where a starved level 0 leaves a *permanent* runt (report 06) |
 | Worst cell saturates at ≈1.61× the granularity floor on a fixed mesh | V=114,144: 1.386 / 1.568 / 1.610 / 1.609 at N=400/500/750/1000 |
+| B produces a valid N=1000 partition | **on two meshes.** V=209,568: 7,776 s Phase 1, worst cell 1.3473%, 0 fragmented, Phase 2 **583.2558** at iterate 15/20. Mesh-matched V=114,144: 3,803 s, worst 2.2560% (bar 2.8035%), 0 fragmented, Phase 2 **583.1417** at 16/20. Both exported and finalised |
+| B is valid across **three torus aspect ratios and three surface sizes** | the nine-run mc-study set: R/r ∈ {1.400, 1.667, 2.500} at constant area, and Rr ∈ {0.600, 1.200, 2.400} at fixed shape. All nine valid and exported (`docs/reference/deliverables.yaml`, group `mc-study`) |
+| B is valid on **two non-torus closed surfaces** | double torus (genus 2, V=12,448) and Banchoff-Chmutov order 4 (genus 5, V=26,928), N=10, all three gates on raw labels, 0 fragmented, 7 s and 17 s of Phase 1; both exported under schema 2.0. ⚠ N=10 only — this is breadth of *surface*, not of N |
 | All nine N=50–1000 deliverables share one exported mesh | 114,144 verts / 228,288 faces, all `finalised=True`, equal-area to 0.0014–0.0272% |
 | Phase 2's cost is **not** the solver | N=500: IPOPT 459 s of an 8,829 s campaign = **5.2%**; 201 solver iters per topology iteration, i.e. capped every time |
 | The WTA gap has an exact accounting identity | `docs/math/07-phase1-wta-balance/`, Prop. 1 |
@@ -138,8 +217,12 @@ Each item is measured and reproducible in this repository.
 - **Over-merging.** A three-part instrument (fragmentation, isoperimetric ratio,
   core loss) detected nothing across a 9× span of √τ/R_cell. Not excluded — merely
   undetected.
-- **Anything beyond the torus at r/R = 0.6.** The other surface providers are
-  unmaintained and unverified since the energy fix.
+- **~~Anything beyond the torus at r/R = 0.6.~~** ✅ **Closed for B** (2026-09-02/07):
+  three aspect ratios and three sizes on the torus, plus the double torus and
+  Banchoff-Chmutov. What remains unknown is **PGD** off the r/R = 0.6 torus — its
+  results on the other providers are *invalid*, not merely unverified (all 21
+  archived runs fail the gates), so no cross-surface comparison exists. And B's
+  non-torus evidence is **N=10 only**.
 
 ## What CANNOT be claimed, and why
 
@@ -200,7 +283,10 @@ measurement, and shows directly whether the worst cell is a tail event or a
 systematic one. **Cost: minutes.**
 
 ## Phase 2 — A real literature search
-**Status:** Not Started. Cheap insurance; do it before any novelty claim.
+**Status:** **Partly answered** — 35 papers held and read at the cited sections,
+which settled the prior-art table but is **not** a systematic search. The
+graphics / remeshing question is still open, and it is the one that gates any
+novelty sentence.
 
 Threshold dynamics on graphs and surfaces is an active area (van Gennip et al. on
 graphs; MBO on point clouds and in data clustering), and auction dynamics itself
@@ -216,8 +302,12 @@ closed surfaces? has the winner-take-all readout gap been reported for
 this under different vocabulary? **Phrase any result as "we are not aware of",
 never "first", and name the corpus and how it was enumerated.**
 
-**Partly answered 2026-09-17** (`docs/math/10-mbo-auction-dynamics/` §2, from
-the papers now held in `docs/papers/`): Jacobs–Merkurjev–Esedoğlu 2018 §4.2
+**Partly answered 2026-09-17/23.** The corpus is now **35 held PDFs**, each row
+of `docs/papers/README.md` recording what was verified *from the copy*; the
+prior-art table is `docs/math/10-mbo-auction-dynamics/` §2; and
+`docs/explanations/reading_path_for_a_collaborator.md` orders the papers as a
+discovery path, which doubles as the enumeration a manuscript must name. From
+that reading: Jacobs–Merkurjev–Esedoğlu 2018 §4.2
 already computes equal-area minimal-perimeter tessellations of the **flat**
 2-torus at N=64 and area-preserving flow at N=160 (exact auction, uniform grid);
 Merriman–Ruuth 2007 run multiphase MBO on a **curved** torus (5 regions,
@@ -225,15 +315,42 @@ unconstrained, closest-point method); Wang–Osting 2019 do diffusion-generated
 *Dirichlet* partitions of the sphere (k ≤ 20); grain-growth MBO runs at 10⁵
 grains. So "MBO on a surface" and "large N" are each established separately, and
 the combination above is what remains unreported *in that corpus* — which is
-twenty-odd papers read at the cited sections, not a systematic search, and the
-graphics/remeshing question is still open.
+**thirty-odd papers read at the cited sections, not a systematic search**, and
+the graphics/remeshing question is **still open**. That open question is the one
+thing standing between the current state and a defensible novelty sentence, and
+it cannot be closed by reading more of the same corpus.
 
-## Phase 3 — Scaling to N = 500 and N = 1000
-**Status:** **N=400, N=500 and N=750 done** (exploratory `--config` mode, all
-valid, all exported and finalised, 2026-08-20/23); **N=1000 Not Started.** This is
-the practical headline and the original goal.
+## Phase 3 — Scaling to N = 1000
+**Status:** ✅ **DONE.** N=400, 500, 750 and **1000** all run in exploratory
+`--config` mode, all valid on raw labels, all exported and finalised
+(2026-08-20 → 08-27). N=750 and N=1000 were each run **twice** — once on a
+re-based ladder for partition quality, once on the standard ladder so the whole
+N=50→1000 series shares one exported mesh. This was the practical headline and
+the original goal, and it is met.
 
-**Two things N=750 settled that change how N=1000 should be approached.**
+| N | mesh V | Phase 1 | worst cell (bar) | fragmented | Phase 2 |
+|---|---:|---:|---|---:|---:|
+| 400 | 114,144 | 920 s | 0.7773% (1.1214%) | 0 | 368.6603 |
+| 500 | 114,144 | 1,322 s | 1.0993% (1.4017%) | 0 | 412.1138 |
+| 750 | 158,260 | 3,614 s | 1.2569% (1.5165%) | 0 | 504.9214 |
+| 750 | 114,144 | 2,502 s | 1.6928% (2.1026%) | 0 | 504.1626 |
+| 1000 | 209,568 | 7,776 s | 1.3473% | 0 | 583.2558 |
+| 1000 | 114,144 | 3,803 s | 2.2560% (2.8035%) | 0 | 583.1417 |
+
+**What N=1000 settled.** Phase 1 stayed in the **hours, not days** — 2.16 h on
+the finer mesh, 1.06 h mesh-matched — against a PGD incumbent that needed 57.3 h
+for an *invalid* N=300 on a coarser mesh. And the **sub-threshold ladder rung
+was survivable**: the mesh-matched run's level 0 sits at freeze ratio 0.897 with
+9.6 v/cell, below 1.0, and still passed every gate, healing its 3 fragmented
+cells across the ladder (`3→2→1→0→0`).
+
+⚠ **The two N=1000 runs are not interchangeable.** The finer mesh gives the
+better partition (worst cell 1.35% vs 2.26%); the common mesh gives the only
+cross-N comparability. A coarser mesh also *under-measures* perimeter — 583.1417
+against 583.2558, −0.020% — because a boundary of fewer longer segments is a
+shorter approximation.
+
+**Two things N=750 settled, both since confirmed at N=1000.**
 
 1. **The ladder must be re-based as N grows, and the τ diagnostics say when.** At
    N=750 the standard `100x96` base gives 12.8 v/cell and a freeze ratio of
@@ -245,16 +362,20 @@ the practical headline and the original goal.
 2. **Phase 1 is no longer the constraint; Phase 2 is, and steeply.** See Phase 4.
 
 A curve of wall time and validity versus N, out to where PGD cannot follow, is a
-stronger argument than any perimeter margin. Use the exploratory `--config` mode
-(no anchor exists at these N). Extrapolating measured B ladders (N=300: 248 s;
-N=400: 920 s at 5 levels), the Phase 1 replacement should stay in the tens of
-minutes; verify rather than assume.
+stronger argument than any perimeter margin — **and that curve now exists**, six
+points from N=400 to N=1000 across two meshes, with the incumbent unable to
+produce a valid partition anywhere on it.
 
-Watch for: the τ over-merge cap binding on more levels as cells shrink relative to
-the coarse mesh (it bound on 0 levels at N=100, 1 at N=300, 2 at N=400); the
-vertex-granularity floor rising (0.56% at N=400/V=114,144) until the finest mesh
-must grow; and peak memory, which is the dense `V × N` score matrix plus two
-same-size transients inside the assignment solver (~1.5 GB at N=400).
+The three things this phase said to watch all materialised as predicted: the τ
+over-merge cap binds on more levels as cells shrink (0 at N=100, 1 at N=300, 2 at
+N=400); the vertex-granularity floor rises until the finest mesh must grow
+(0.56% at N=400/V=114,144 → 1.40% at N=1000 on the same mesh, which is why the
+worst cell reaches 2.26% there); and peak memory — the dense `V × N` score matrix
+plus two same-size transients in the assignment solver — reached **~5.0 GB at
+N=1000** against ~1.5 GB at N=400.
+
+**The remaining scaling question is no longer Phase 1.** Going past N=1000 is a
+Phase 2 problem (below), not a Phase 1 one.
 
 ## Phase 4 — Phase 2 is the bottleneck, and the solver is not why
 **Status:** **Partially measured — and this phase's original premise is REFUTED,
@@ -266,8 +387,14 @@ N=300, **122 min at N=400** (29,244 variable points). It scales worse than
 linearly in variable points, and B has already made Phase 1 only **11%** of
 end-to-end cost at N=400.
 
-At N=1000 this plausibly dominates completely. **This reverses the project's
-standing assumption that Phase 1 is the expensive stage.**
+**At N=1000 it does dominate, as predicted.** This phase's estimate of "roughly
+7–9 h of Phase 2 at N=1000" was written before the run; measured from the
+campaign log it came in at **8.80 h** on the finer mesh (V=209,568) and **5.36 h**
+mesh-matched (V=114,144) — the finer-mesh figure landing inside the predicted
+band, near its top. Against Phase 1's 2.16 h and 1.06 h, **Phase 2 is 80% and
+83% of end-to-end**. **This reverses the project's standing assumption that Phase
+1 is the expensive stage**, and the reversal is now measured at every N from 400
+up, not inferred.
 
 **What the profile actually showed, and it is not what this phase assumed.** This
 section used to say: profile Phase 2 and "decide whether the next target is the
@@ -293,12 +420,18 @@ constraint on N:**
 |---|---|---|---|---|
 | N=400 | 29,287 | 7,326 s | 0.250 | — |
 | N=500 | 32,704 | 8,829 s | 0.270 | 1.69 |
-| N=750 | 47,088 | 18,323 s | 0.389 | **2.00** |
+| N=750 | 47,088 | 18,323 s | 0.389 | 2.00 |
+| **N=1000** | **62,472** | **31,670 s** | **0.479** | **1.74** |
 
-Three points cannot fit a law and the two exponents differ, so the defensible
-statement is **superlinear and steepening**, not "quadratic". Either way,
-extrapolating to N=1000 gives a Phase 2 of roughly **7–9 h** against a Phase 1
-still under an hour. **Any N=1000 attempt should budget Phase 2 first.**
+⚠ **The fourth point refutes "steepening"**, which the three-point version of
+this table asserted. The exponents go 1.69 → 2.00 → **1.74**, so 2.00 was an
+excursion, not a trend. The defensible statement is **superlinear, ≈1.7–2.0, with
+no evident trend** — never "quadratic" and never "steepening". Note also that
+these four points span *different meshes*; the first **fixed-mesh** pair
+(N=750→1000 at V=114,144) gives **2.36**, which suggests mesh effects were
+confounding the mixed-mesh figures and that a same-mesh series is the one to
+trust. This is the second time a premise in this phase has been overturned by
+the next data point.
 
 ⚠ **What is established is the solver's share, not the composition of the other
 95%.** The candidates are contour rebuild, Steiner setup, migration detection, and
@@ -314,16 +447,35 @@ iterate timestamps. Any prior reasoning that used this field as campaign wall
 should be re-checked.
 
 ## Phase 5 — Breadth of the evidence base
-**Status:** Not Started. Required for a paper, not for a decision.
+**Status:** **Partly done.** Geometry breadth exists; seed breadth does not, and
+it is now the binding gap for a paper.
 
-- **Seeds.** At minimum 3 seeds per configuration for B; and — separately —
-  measure **PGD's** own seed variance at the anchor configurations, without which
-  "B beats PGD by more than PGD's own seed lottery" cannot be written.
-- **A second surface.** The torus at r/R = 0.6 is the only validated geometry. The
-  ellipsoid / double-torus / Banchoff-Chmutov providers exist but are unmaintained
-  and unverified since the energy fix (`6ff71a0`). Reviving one is a real cost and
-  should be scoped before being promised.
+- **Seeds — the real gap, and unchanged.** At minimum 3 seeds per configuration
+  for B; and — separately — measure **PGD's** own seed variance at the anchor
+  configurations, without which "B beats PGD by more than PGD's own seed lottery"
+  cannot be written. Every N=100 PGD run across both worktrees is seed 84172851
+  and every N=300 λ=11.5 run is seed 61803399, so each anchor is still a single
+  trajectory. **This is the cheapest remaining item that changes what may be
+  claimed.**
+- **~~A second surface.~~** ✅ **Done for B** (2026-09-02/07), further than this
+  bullet asked:
+  - **Torus geometry**, nine runs: aspect ratio R/r ∈ {1.400, 1.667, 2.500} at
+    constant area, and size Rr ∈ {0.600, 1.200, 2.400} at fixed shape. All valid,
+    all exported (`deliverables.yaml`, group `mc-study`).
+  - **Two non-torus closed surfaces**: double torus (genus 2) and
+    Banchoff-Chmutov order 4 (genus 5), N=10, all gates passing on raw labels,
+    0 fragmented, 7 s and 17 s of Phase 1.
+
+  ⚠ Two limits on that. The non-torus runs are **N=10 only**, so they show the
+  method transfers to a surface, not that it transfers *at scale*. And there is
+  **no PGD comparison available on them at all** — all 21 archived non-torus PGD
+  runs fail the gates — so these are existence results, never margins.
+  The practical lesson, worth a paragraph in any manuscript: on a marching-cubes
+  mesh the ladder must be chosen by **stiffness conditioning** rather than vertex
+  count, and λ cannot be calibrated from ‖g‖∞ there at all — which is itself an
+  argument for B, since B has no λ.
 - **A second machine**, to separate hardware from method in the timing claims.
+  **Not done.** All timings in this document are one Mac mini.
 
 ## Phase 6 — Split forensics
 **Status:** Not Started. Lower priority; interesting rather than load-bearing.
@@ -343,11 +495,20 @@ convert the locality criterion from a 3-for-3 heuristic into a measured mechanis
 | S2 shows B's basin is *higher* energy | Not fatal — it changes the story from "better descent" to "energy traded for validity", which is still publishable, but the framing must follow the result, not precede it |
 | The paper is computational, with no new theorem | Acceptable, but the bar becomes reproducibility and thoroughness — where this repo is unusually strong (pre-registration, negative controls, six documented measurement artefacts, figures regenerable from committed data) |
 | Over-claiming, again | This project's headline claims have been corrected repeatedly — report 06's was refuted, report 07's corrected three times, and report 08 required correcting a false per-level claim. Assume the same rate applies to anything written here |
-| Phase 2 becomes the wall at N=1000 | Phase 4; may redirect the whole programme |
+| ~~Phase 2 becomes the wall at N=1000~~ | **Realised, and quantified:** 8.80 h against Phase 1's 2.16 h on the finer mesh — 80% of end-to-end. It did not redirect the programme, because N=1000 completed anyway; it redirects anything *past* N=1000 |
+| Geometry breadth reads as broader than it is | Three aspect ratios and two non-torus surfaces exist, but the non-torus runs are **N=10** and have no PGD counterpart. Do not let "validated on genus-2 and genus-5 surfaces" stand next to "N = 1000" without the qualifier |
 
 ## Related documents
 
 - Measured result: `docs/experiments/08-mbo-auction-dynamics/`
+- **Derivation and provenance of B: `docs/math/10-mbo-auction-dynamics/`** — §2 is
+  the prior-art table, Remark 6.1 the solver-substitution judgment
+- **Paper scope in plain language: `docs/explanations/two_methods_explained.md`**
+  §4 (what is ours) and §5 (how to position it)
+- Reading path / corpus enumeration:
+  `docs/explanations/reading_path_for_a_collaborator.md`
+- The exported partitions and who consumes them:
+  `docs/reference/deliverables.yaml`, `docs/reference/DOWNSTREAM_CONSUMERS.md`
 - Programme and full pre-registration: `docs/plans/PHASE1_BC_REPLACEMENT_PLAN.md`
 - Standing explanation of the readout gap: `docs/reference/winner_take_all_partition_gap.md`
 - Taxonomy of approaches A–E: `docs/reference/PHASE1_HIGHN_APPROACHES_ABCDE.md`
