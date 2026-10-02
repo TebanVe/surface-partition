@@ -1,0 +1,107 @@
+\documentclass[11pt,a4paper]{report}
+
+\PassOptionsToPackage{hypertexnames=false}{hyperref}
+\input{../math/shared/macros}
+\usepackage{graphicx}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  citecolor  = green!50!black,
+  urlcolor   = blue!60!black,
+  pdftitle   = {A Study Companion to Threshold Dynamics},
+  pdfauthor  = {surface-partition project}
+}
+
+% -------------------------------------------------------------------------
+% Boxes used throughout. Each has one job, so a reader can skip by colour.
+% -------------------------------------------------------------------------
+\newtcolorbox{keyidea}[1][]{colback=yellow!6!white, colframe=orange!60!black,
+  fontupper=\small, title={Key idea}, #1}
+\newtcolorbox{physics}[1][]{colback=green!4!white, colframe=green!40!black,
+  fontupper=\small, title={Physics corner}, #1}
+\newtcolorbox{codebox}[1][]{colback=blue!4!white, colframe=blue!40!black,
+  fontupper=\small, title={In our code}, #1}
+\newtcolorbox{numbersbox}[1][]{colback=gray!6!white, colframe=gray!50!black,
+  fontupper=\small, title={Where the numbers come from}, #1}
+
+\newcommand{\R}{\mathbb{R}}
+
+\title{\textbf{A Study Companion to Threshold Dynamics}\\[0.5em]
+  \large From the heat equation to volume-constrained auction dynamics,\\
+  and how each idea appears in \codefile{src/partition/mbo\_auction.py}}
+\author{}
+\date{Started October 2026}
+
+\begin{document}
+\sloppy
+\maketitle
+
+\begin{abstract}
+A learning document, written while reading the papers behind approach~B
+(\codefile{docs/explanations/reading\_path\_for\_a\_collaborator.md}). It is aimed
+at a reader trained in physics and applied mathematics who wants the
+\emph{intuition} behind each method well enough to read the implementation, not
+the proofs. Each chapter builds one idea from what a physicist already knows,
+works the key derivation by hand, checks it with a small numerical experiment,
+and ends by mapping the idea onto our code. The rigorous account of the method
+as implemented is \codefile{docs/math/10-mbo-auction-dynamics/}; this document is
+the road to it.
+\end{abstract}
+
+\tableofcontents
+
+\chapter*{How to use this document}
+\addcontentsline{toc}{chapter}{How to use this document}
+
+\textbf{Order.} The chapters follow the reading path: the unconstrained scheme
+(threshold dynamics, Chapter~\ref{ch:mbo}), then the constraint that keeps cells
+at equal area, then how the diffusion step is done on a triangulated surface,
+then the assignment machinery. Each chapter says which pages of which paper it
+prepares you for.
+
+\begin{center}
+\small
+\begin{tabular}{@{}cp{0.47\linewidth}p{0.40\linewidth}@{}}
+\toprule
+Ch. & Topic & Papers it prepares \\
+\midrule
+1 & Diffusion-generated motion: the MBO scheme & MBO 1992, MBO 1994, Esedo\u{g}lu--Otto 2015 \S1--4 \\
+2 & Constraints and prices: Lagrange multipliers, the shifted threshold & Ruuth--Wetton 2003 \\
+3 & Auction dynamics: the equal-area step as an assignment problem & Jacobs--Merkurjev--Esedo\u{g}lu 2018, Bertsekas 1988 \\
+4 & Diffusion on a triangulated surface, and other kernels & Dziuk--Elliott 2013, Garcia-Cardona et al.\ 2014, Esedo\u{g}lu--Jacobs 2017 \\
+5 & The time step on a discrete domain & van Gennip et al.\ 2014 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Only Chapter~1 is written; the rest is the plan, and will change as reading
+suggests.
+
+\textbf{Boxes.} \emph{Key idea} boxes state the one thing to remember.
+\emph{Physics corner} boxes translate into language you already have; skip them
+if the translation is obvious. \emph{In our code} boxes say where the idea lives
+in the repository. \emph{Where the numbers come from} boxes give the script that
+regenerates every computed number and figure in the chapter.
+
+\textbf{Reproducibility.} The repository rule applies here too: any number
+produced by running code comes from a committed script under
+\codefile{docs/study/scripts/} and its committed output under
+\codefile{docs/study/data/}. Rebuild everything with \code{make -C docs/study
+figures} and then \code{make -C docs/study}.
+
+\textbf{Conventions.} The heat equation is $\partial_t u = \Delta u$ (diffusion
+constant $D = 1$; the papers sometimes keep $D$). Its kernel at time $t$ in
+$\R^d$ is
+\[
+  G_t(x) = (4\pi t)^{-d/2} e^{-|x|^2/4t},
+\]
+the density of a normal distribution with variance $2t$ in each coordinate. A
+set $\Sigma$ has indicator $\chi_\Sigma$ (1 inside, 0 outside). Curvature
+$\kappa$ is positive where a set is convex.
+
+\include{chapters/ch01_mbo}
+
+\bibliographystyle{plain}
+\bibliography{../math/shared/references,study}
+
+\end{document}

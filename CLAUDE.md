@@ -121,10 +121,11 @@ docs/       see docs/README.md
 ## Documentation
 
 `docs/README.md` is the index — the folder taxonomy and a where-to-look table.
-Nine folders: `math/` (derivations), `experiments/` (measured studies),
+Ten folders: `math/` (derivations), `experiments/` (measured studies),
 `reference/` (permanent explanations), `plans/`, `explanations/` (plain
 language), `presentations/`, `guides/`, `papers/`, `downstream/` (replies to
-the repos that consume our exports).
+the repos that consume our exports), `study/` (a learning companion to the
+papers, one LaTeX book, one chapter per topic).
 
 Four to know by name:
 

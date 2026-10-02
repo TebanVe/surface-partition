@@ -1,6 +1,6 @@
 # `docs/` — what lives where
 
-Nine folders, each a distinct genre. Getting the genre right is the point of
+Ten folders, each a distinct genre. Getting the genre right is the point of
 the split: a derivation, a measurement and a standing explanation age
 differently and are checked differently.
 
@@ -15,6 +15,7 @@ differently and are checked differently.
 | [`guides/`](guides/) | User guides and onboarding documents | LaTeX | — |
 | [`papers/`](papers/) | Third-party PDFs (gitignored) + a verified index | — | [`README.md`](papers/README.md) |
 | [`downstream/`](downstream/) | Replies and hand-off material for the repos that consume our exports | Markdown | [`README.md`](downstream/README.md) |
+| [`study/`](study/) | A learning companion to the papers behind approach B: intuition, worked derivations, small experiments, mapped onto the code | LaTeX book, one chapter per topic | [`README.md`](study/README.md) |
 
 `math/`, `experiments/`, `guides/` and `presentations/` use `NN-topic-slug/`
 directories, each holding its source and its tracked compiled output. How to
@@ -32,6 +33,7 @@ skill.
 | What does the exported file contain? | [`reference/PARTITION_EXPORT_SCHEMA_GENERAL.md`](reference/PARTITION_EXPORT_SCHEMA_GENERAL.md) |
 | Where is the time going? | [`math/04-phase1-timing-profile/`](math/04-phase1-timing-profile/) (Phase 1), [`math/02-phase2-timing-profile/`](math/02-phase2-timing-profile/) (Phase 2), [`plans/PUBLICATION_READINESS_PLAN.md`](plans/PUBLICATION_READINESS_PLAN.md) Phase 4 |
 | How do I explain this to someone from zero? | [`explanations/`](explanations/) |
+| How do I learn the methods behind approach B from the papers? | [`study/`](study/) — Chapter 1 is threshold dynamics (MBO) |
 | What is the forward plan? | [`plans/PHASE1_BC_REPLACEMENT_PLAN.md`](plans/PHASE1_BC_REPLACEMENT_PLAN.md) (active), [`plans/PUBLICATION_READINESS_PLAN.md`](plans/PUBLICATION_READINESS_PLAN.md) |
 
 ## Two standing rules

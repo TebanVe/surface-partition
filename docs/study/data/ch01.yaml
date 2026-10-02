@@ -1,0 +1,119 @@
+provenance:
+  script: docs/study/scripts/ch01_mbo.py
+  python: 3.12.13
+  numpy: 2.4.4
+  scipy: 1.17.1
+  matplotlib: 3.10.8
+  seed: 20261002
+  heat_equation: u_t = Laplace u; kernel N(0, 2 tau I)
+A_displacement:
+  description: R - r_half for a disc of radius R after one Gaussian step; ratio = displacement
+    / (kappa tau), kappa = 1/R
+  R: 0.2
+  table:
+  - sqrt_tau_over_R: 0.05
+    tau: 0.00010000000000000005
+    kappa_tau: 0.0005000000000000002
+    displacement: 0.0005010465941198694
+    ratio: 1.0020931882397384
+  - sqrt_tau_over_R: 0.1
+    tau: 0.0004000000000000002
+    kappa_tau: 0.002000000000000001
+    displacement: 0.002016988293158245
+    ratio: 1.008494146579122
+  - sqrt_tau_over_R: 0.2
+    tau: 0.0016000000000000007
+    kappa_tau: 0.008000000000000004
+    displacement: 0.00828908176851989
+    ratio: 1.036135221064986
+  - sqrt_tau_over_R: 0.4
+    tau: 0.006400000000000003
+    kappa_tau: 0.032000000000000015
+    displacement: 0.038684446582076176
+    ratio: 1.2088889556898799
+B_shrinking_disc:
+  n: 512
+  h: 0.001953125
+  R0: 0.25
+  extinction_time_theory: 0.03125
+  cases:
+    pinned:
+      tau: 2.0e-05
+      kappa0_tau_over_h: 0.04096
+      sqrt_tau_over_R0: 0.01788854381999832
+      steps_run: 1875
+      extinction_time: null
+      R2_at_half_extinction: 0.06248074914349798
+      R2_theory_at_half_extinction: 0.031259999999999996
+    in_window:
+      tau: 0.001
+      kappa0_tau_over_h: 2.048
+      sqrt_tau_over_R0: 0.12649110640673517
+      steps_run: 31
+      extinction_time: 0.031
+      R2_at_half_extinction: 0.03028354096002098
+      R2_theory_at_half_extinction: 0.0305
+    too_large:
+      tau: 0.01
+      kappa0_tau_over_h: 20.48
+      sqrt_tau_over_R0: 0.4
+      steps_run: 3
+      extinction_time: 0.03
+      R2_at_half_extinction: 0.016635305178519945
+      R2_theory_at_half_extinction: 0.0225
+C_dumbbell:
+  n: 512
+  tau: 0.0005
+  theory_rate_2pi: 6.283185307179586
+  snapshots:
+  - t: 0.0
+    steps: 0
+    area: 0.14066314697265625
+    mean_area_loss_rate: null
+  - t: 0.002
+    steps: 4
+    area: 0.12711334228515625
+    mean_area_loss_rate: 6.77490234375
+  - t: 0.008
+    steps: 16
+    area: 0.08889007568359375
+    mean_area_loss_rate: 6.4716339111328125
+  - t: 0.016
+    steps: 32
+    area: 0.036895751953125
+    mean_area_loss_rate: 6.485462188720703
+D_heat_content:
+  description: (1/sqrt tau) int_disc (1 - G_tau*chi) against 2 pi R / sqrt(pi)
+  R: 0.2
+  limit_Per_over_sqrt_pi: 0.7089815403622064
+  table:
+  - sqrt_tau_over_R: 0.4
+    E_tau: 0.6783346817883491
+    ratio_to_limit: 0.9567734040604212
+  - sqrt_tau_over_R: 0.2
+    E_tau: 0.7017795241331565
+    ratio_to_limit: 0.9898417436575704
+  - sqrt_tau_over_R: 0.1
+    E_tau: 0.7072023548483887
+    ratio_to_limit: 0.9974905051647625
+  - sqrt_tau_over_R: 0.05
+    E_tau: 0.7085380101752667
+    ratio_to_limit: 0.9993744122213492
+  - sqrt_tau_over_R: 0.025
+    E_tau: 0.7088707360125247
+    ratio_to_limit: 0.9998437133502445
+E_multiphase:
+  n: 256
+  n_cells: 16
+  tau: 0.001
+  seed: 20261002
+  steps: 400
+  E_initial: 8.457950860838467
+  E_final: 0.0
+  max_energy_increase: 0.0
+  alive_at:
+    0: 16
+    10: 12
+    100: 8
+    400: 1
+  cell_radius_initial: 0.14104739588693907

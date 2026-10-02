@@ -1,0 +1,35 @@
+# LaTeX / BibTeX build products (sources: *.tex *.bib Makefile *.md remain tracked)
+*.aux
+*.bbl
+*.blg
+*.bcf
+*.fdb_latexmk
+*.fls
+*.run.xml
+*.synctex.gz
+*.synctex.gz(busy)
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+
+# latexmk artifact
+*-blx.bib
+
+# Build logs / aux outputs remain ignored via repo-root *.log / *.out and patterns above.
+
+# Re-include compiled main.pdf outputs (the repo-root .gitignore has a
+# broad *.pdf rule; without this exception new doc subdirs' main.pdf
+# would be silently ignored).
+!main.pdf
+
+# Re-include document figures (the repo-root .gitignore has a broad *.png
+# rule; doc figures/ images are sources the PDF needs to build).
+!**/figures/*.png
+# partial numerics runs (check_numerics.py --quick) never replace the committed numerics.yaml
+numerics_quick.yaml
+
+# The study companion's figures are PDFs written by scripts/ — tracked sources.
+!figures/*.pdf
