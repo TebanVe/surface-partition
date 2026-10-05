@@ -155,9 +155,14 @@ return areas <= _DEGENERATE_AREA_REL * float(np.median(positive))
 
 It is **relative**, so it is invariant to surface size and mesh resolution, and
 it catches the whole sliver continuum rather than only the exactly-zero faces —
-**2-3 orders of magnitude more faces in every one of the 26 exports**, including
-1,050 in the N=100 flagship whose exact-zero count is 0. So a fix that dropped
-only exactly-zero faces would remove *none* of what the consumer already handles
+far more faces in every one of the 26 exports. ⚠ **Corrected 2026-10-05** — an
+earlier version of this line said "2-3 orders of magnitude" uniformly, which
+overstated it. Of the 26 exports, **17 have both counts non-zero and their ratio
+runs 17.8x to 951x (median 164x)** — one to three orders, not two to three — and
+in the other **9 the ratio is undefined** because the exact-zero count is 0,
+while the mask still catches 166 to 5,433 faces. The sharpest case is the N=100
+flagship: 0 exactly-zero against 1,050 masked, so a fix that dropped only
+exactly-zero faces would remove *none* of what the consumer already handles
 there. Measured by `scripts/check_degenerate_faces.py`.
 It is load-bearing in four subsystems, identical code in both consumer repos:
 `mesh/lookup.py` (degenerate candidates pushed to `-inf`, never returned),

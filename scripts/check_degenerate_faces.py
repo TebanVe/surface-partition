@@ -99,6 +99,21 @@ def main() -> int:
     print("the relative mask always catches more than the exact-zero count: "
           f"{all(r['relative_mask_faces'] >= r['exact_zero_faces'] for r in out)}")
 
+    # The mask/exact-zero RATIO, which is what the issue #4 reply quotes. It is
+    # undefined wherever the exact-zero count is 0 -- and those rows are the
+    # strongest case for the mask, not an absence of one, so report them apart.
+    ratios = sorted(r["relative_mask_faces"] / r["exact_zero_faces"]
+                    for r in out if r["exact_zero_faces"] > 0)
+    undef = [r for r in out if r["exact_zero_faces"] == 0]
+    if ratios:
+        mid = ratios[len(ratios) // 2]
+        print(f"mask/exact-zero ratio: {len(ratios)} of {len(out)} rows defined, "
+              f"{ratios[0]:.1f}x to {ratios[-1]:.1f}x (median {mid:.0f}x)")
+    if undef:
+        masked = sorted(r["relative_mask_faces"] for r in undef)
+        print(f"  ratio UNDEFINED in {len(undef)} rows (exact-zero count is 0); "
+              f"the mask still catches {masked[0]}-{masked[-1]} faces there")
+
     if args.emit:
         OUT.parent.mkdir(parents=True, exist_ok=True)
         OUT.write_text(yaml.safe_dump({

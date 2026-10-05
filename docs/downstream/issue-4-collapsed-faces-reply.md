@@ -74,8 +74,13 @@ property of the representation, so it will recur in any export.
 ### The exactly-zero count is the wrong target
 
 This is what decided it. Your `_DEGENERATE_AREA_REL = 1e-10` relative mask
-catches **two to three orders of magnitude more faces** than the exact-zero
-count, in every single file — the comparison held across all 26.
+catches **far more faces** than the exact-zero count, in every one of the 26
+exports. ⚠ **Corrected 2026-10-05:** the comment as posted said "two to three
+orders of magnitude", which overstates it. Of the 26, **17 have both counts
+non-zero with ratios from 17.8x to 951x (median 164x)** — one to three orders —
+and the other **9 have an undefined ratio**, their exact-zero count being 0
+while the mask still catches 166 to 5,433 faces. The conclusion is unchanged and
+if anything strengthened by those 9.
 
 The sharpest case is the N=100 flagship deliverable: **exact-zero is 0, and your
 mask still excludes 1,050 faces.** An exporter fix that dropped exactly-zero

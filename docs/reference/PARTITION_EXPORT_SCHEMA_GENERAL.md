@@ -227,9 +227,10 @@ tolerance these meshes miss narrowly; it is the wrong kind of test for them.
    finalised exports**, up to 32 of them (n=50 `B3`), against thresholds of `1e-6`
    and `1.0 deg`. Named examples: 8 of 243,342 in n=25 `C1`, 4 of 248,826 in n=50
    `B1`, 2 of 269,832 in n=200 `B2`. ⚠ The exact-zero count is **not** the
-   quantity that matters — a relative mask (`area <= 1e-10 * median`) catches 2-3
-   orders of magnitude more in every file, including 1,050 in the N=100 flagship
-   whose exact-zero count is **0**. Regenerate with
+   quantity that matters — a relative mask (`area <= 1e-10 * median`) catches far
+   more in every file: 17.8x to 951x more where both counts are non-zero (17 of
+   26, median 164x), and in the other 9 the exact-zero count is **0** while the
+   mask still catches 166-5,433, including **1,050 in the N=100 flagship**. Regenerate with
    `python scripts/check_degenerate_faces.py`; the record is
    `docs/downstream/degenerate_faces.yaml`. This is a property of Rep-3
    subdivision — a variable

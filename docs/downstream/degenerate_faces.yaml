@@ -1,5 +1,5 @@
 provenance:
-  generated: '2026-09-25T16:55:24Z'
+  generated: '2026-10-05T10:38:50Z'
   script: scripts/check_degenerate_faces.py
   python: 3.12.13
   numpy: 2.4.4
